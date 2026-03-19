@@ -1,0 +1,196 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - img "Afriserve" [ref=e6]
+    - generic [ref=e7]:
+      - generic [ref=e8]: Quick actions
+      - generic [ref=e9]:
+        - link "+ Borrower" [ref=e10] [cursor=pointer]:
+          - /url: /clients/new
+        - link "+ Loan" [ref=e11] [cursor=pointer]:
+          - /url: /loans/new
+        - link "Record payment" [ref=e12] [cursor=pointer]:
+          - /url: /collections
+    - navigation [ref=e13]:
+      - generic [ref=e14]:
+        - button "Operate" [ref=e15] [cursor=pointer]:
+          - generic [ref=e16]: Operate
+          - generic [ref=e17]: ›
+        - generic [ref=e18]:
+          - generic [ref=e19]:
+            - button "Borrowers" [ref=e20] [cursor=pointer]:
+              - generic [ref=e21]: Borrowers
+              - generic [ref=e22]: ›
+            - generic [ref=e23]:
+              - link "All borrowers" [active] [ref=e25] [cursor=pointer]:
+                - /url: /clients
+                - generic [ref=e27]: All borrowers
+              - link "Dormant" [ref=e29] [cursor=pointer]:
+                - /url: /clients/dormant
+                - generic [ref=e30]: Dormant
+          - link "Loans" [ref=e32] [cursor=pointer]:
+            - /url: /loans
+            - generic [ref=e33]: Loans
+          - link "Collections" [ref=e35] [cursor=pointer]:
+            - /url: /collections
+            - generic [ref=e36]: Collections
+          - button "Risk & collateral" [ref=e38] [cursor=pointer]:
+            - generic [ref=e39]: Risk & collateral
+            - generic [ref=e40]: ›
+      - generic [ref=e41]:
+        - button "Measure" [ref=e42] [cursor=pointer]:
+          - generic [ref=e43]: Measure
+          - generic [ref=e44]: ›
+        - generic [ref=e45]:
+          - link "Dashboard" [ref=e47] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=e48]: Dashboard
+          - link "Reports" [ref=e50] [cursor=pointer]:
+            - /url: /reports
+            - generic [ref=e51]: Reports
+      - button "Configure" [ref=e53] [cursor=pointer]:
+        - generic [ref=e54]: Configure
+        - generic [ref=e55]: ›
+    - generic [ref=e56]:
+      - generic [ref=e57]: AM
+      - generic [ref=e58]:
+        - strong [ref=e59]: alex mwangi
+        - generic [ref=e60]: Client onboarding, loan origination, and collections operations.
+        - generic [ref=e61]: MOLO
+  - generic [ref=e62]:
+    - banner [ref=e63]:
+      - generic [ref=e64]:
+        - button "Menu" [ref=e65] [cursor=pointer]
+        - generic [ref=e66]:
+          - paragraph [ref=e67]: operate
+          - generic [ref=e68]: Borrowers
+      - generic [ref=e69]:
+        - button "Open quick search" [ref=e70] [cursor=pointer]:
+          - generic [ref=e71]: Quick Find
+          - generic [ref=e72]: CTRL K
+        - link "Search Page" [ref=e73] [cursor=pointer]:
+          - /url: /search
+        - button "Notifications" [ref=e75] [cursor=pointer]
+        - button "Night mode" [ref=e76] [cursor=pointer]
+        - link "Profile" [ref=e77] [cursor=pointer]:
+          - /url: /profile
+        - generic [ref=e78]:
+          - generic [ref=e79]: AM
+          - generic [ref=e80]:
+            - strong [ref=e81]: alex mwangi
+            - generic [ref=e82]: Client onboarding, loan origination, and collections operations.
+            - generic [ref=e83]: MOLO
+        - button "Logout" [ref=e84] [cursor=pointer]
+    - main [ref=e85]:
+      - generic [ref=e87]:
+        - generic [ref=e88]:
+          - generic [ref=e89]:
+            - paragraph [ref=e90]: Borrower register
+            - heading "Clients" [level=1] [ref=e91]
+            - paragraph [ref=e92]: Branch view of borrowers, account statuses, compliance checks, and assignment coverage.
+          - generic [ref=e93]:
+            - generic [ref=e94]: Total Borrowers
+            - strong [ref=e95]: "2"
+        - generic [ref=e96]:
+          - generic [ref=e97]:
+            - generic [ref=e98]:
+              - generic [ref=e99]: Q
+              - textbox "Search by borrower name, phone, or ID..." [ref=e100]
+            - combobox [ref=e101] [cursor=pointer]:
+              - option "All KYC Status" [selected]
+              - option "Pending Review"
+              - option "In Review"
+              - option "Verified"
+              - option "Rejected"
+              - option "Suspended"
+            - combobox [ref=e102] [cursor=pointer]:
+              - option "All Onboarding" [selected]
+              - option "Registered"
+              - option "KYC Pending"
+              - option "KYC Verified"
+              - option "Complete"
+            - combobox [ref=e103] [cursor=pointer]:
+              - option "All Fees" [selected]
+              - option "Unpaid"
+              - option "Paid"
+              - option "Waived"
+            - button "Filter" [ref=e104] [cursor=pointer]
+          - link "+ New Borrower" [ref=e105] [cursor=pointer]:
+            - /url: /clients/new
+        - generic [ref=e106]:
+          - generic [ref=e107]:
+            - generic [ref=e108]:
+              - paragraph [ref=e109]: Client Profiles
+              - heading "Assigned borrower list" [level=2] [ref=e110]
+            - paragraph [ref=e111]: Showing 1 to 2 of 2
+          - generic [ref=e112]:
+            - paragraph [ref=e113]: Showing rows 1 to 2 of 2.
+            - generic [ref=e114]:
+              - paragraph [ref=e115]: Showing rows 1 to 2 of 2.
+              - generic [ref=e117]:
+                - generic [ref=e118]: Rows per page
+                - combobox "Rows per page" [ref=e119]:
+                  - option "50 / page"
+                  - option "100 / page" [selected]
+                  - option "250 / page"
+            - grid "Assigned borrower list" [ref=e121]:
+              - caption [ref=e122]: Paginated borrower register
+              - rowgroup [ref=e133]:
+                - row "Name Borrower Ref Contact Compliance Officer Branch Status Loans Actions" [ref=e134]:
+                  - columnheader "Name" [ref=e135]
+                  - columnheader "Borrower Ref" [ref=e136]
+                  - columnheader "Contact" [ref=e137]
+                  - columnheader "Compliance" [ref=e138]
+                  - columnheader "Officer" [ref=e139]
+                  - columnheader "Branch" [ref=e140]
+                  - columnheader "Status" [ref=e141]
+                  - columnheader "Loans" [ref=e142]
+                  - columnheader "Actions" [ref=e143]
+              - rowgroup [ref=e144]:
+                - row "Open borrower simon njoroge" [ref=e145] [cursor=pointer]:
+                  - gridcell "simon njoroge +2546778899" [ref=e146]:
+                    - generic [ref=e147]:
+                      - strong [ref=e148]: simon njoroge
+                      - generic [ref=e149]: "+2546778899"
+                  - gridcell "BRW-000063" [ref=e150]
+                  - gridcell "+2546778899" [ref=e151]
+                  - gridcell "verified paid" [ref=e152]:
+                    - generic [ref=e153]:
+                      - generic [ref=e154]: verified
+                      - generic [ref=e155]: paid
+                  - gridcell "alex mwangi" [ref=e156]
+                  - gridcell "MOLO" [ref=e157]
+                  - gridcell "ACTIVE" [ref=e158]
+                  - gridcell "4" [ref=e159]:
+                    - strong [ref=e160]: "4"
+                  - gridcell "View 360 Edit" [ref=e161]:
+                    - generic [ref=e162]:
+                      - link "View 360" [ref=e163]:
+                        - /url: /clients/63
+                      - link "Edit" [ref=e164]:
+                        - /url: /clients/63/edit
+                - row "Open borrower james kimani" [ref=e165] [cursor=pointer]:
+                  - gridcell "james kimani +254723448899" [ref=e166]:
+                    - generic [ref=e167]:
+                      - strong [ref=e168]: james kimani
+                      - generic [ref=e169]: "+254723448899"
+                  - gridcell "BRW-000062" [ref=e170]
+                  - gridcell "+254723448899" [ref=e171]
+                  - gridcell "verified paid" [ref=e172]:
+                    - generic [ref=e173]:
+                      - generic [ref=e174]: verified
+                      - generic [ref=e175]: paid
+                  - gridcell "alex mwangi" [ref=e176]
+                  - gridcell "MOLO" [ref=e177]
+                  - gridcell "ACTIVE" [ref=e178]
+                  - gridcell "2" [ref=e179]:
+                    - strong [ref=e180]: "2"
+                  - gridcell "View 360 Edit" [ref=e181]:
+                    - generic [ref=e182]:
+                      - link "View 360" [ref=e183]:
+                        - /url: /clients/62
+                      - link "Edit" [ref=e184]:
+                        - /url: /clients/62/edit
+```

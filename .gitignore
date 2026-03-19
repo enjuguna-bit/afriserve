@@ -1,0 +1,113 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+**/dist/
+.runtime/
+acr-build/
+webapp-staging/
+webapp-package/
+webapp-logs*/
+_verify-built/
+generated/
+generated-*/
+data/
+
+# Archives & deployment packages
+*.zip
+
+# Logs & error captures
+*.log
+*.err
+
+# Env
+.env
+.env.local
+.env.*
+!.env.example
+!frontend-next/.env.example
+
+# ── Root-level debug / scratch files ──────────────────────────────────────────
+# These are temporary build-output captures and manual test logs that
+# accumulate during development and must never be committed.
+
+# Build output captures  (build_*.txt, build_*.log)
+/build_*.txt
+/build_*.log
+
+# TSC output captures
+/tsc*.txt
+/tsc*.log
+
+# Server runtime & error logs
+/server*.txt
+/server*.log
+/server-runtime*.log
+/server-runtime*.err
+
+# Test run output
+/test_*.txt
+/test_*.log
+/test_*.js
+/test-results.json
+/fresh_test_*.txt
+/fresh_test_*.log
+/final_test*.txt
+/final_verification.txt
+/eval_test.txt
+
+# TAP output
+/tap*.txt
+/tap*.log
+
+# Gap / diff analysis files
+/gap*.txt
+/gap*.log
+
+# Error / strict-error captures
+/err*.txt
+/err*.log
+/strict_errors*.txt
+/postgres-err.txt
+/plan-err.txt
+
+# Mobile money debug
+/mobile*.txt
+/mobile*.log
+/topup_debug*.log
+
+# Loan / hierarchy debug
+/loan*.txt
+/loan*.log
+/hierarchy*.txt
+/hierarchy*.log
+
+# Reporting test output
+/reporting_test_out.txt
+
+# Diagnostic / migration logs
+/diagnostic_*.txt
+/migration_log.txt
+/recent_*.txt
+/generate.txt
+/generate.log
+
+# Auth debug
+/dev-login-debug.*
+
+# One-off JSON scratch files at root (not configuration)
+/params.json
+/policies.json
+
+# Local SQLite dev database
+/dev.db
+
+# Coverage output
+coverage/
+.c8_output/
+lcov.info
+
+# Azure publish profiles (contain credentials)
+/publishProfile.xml

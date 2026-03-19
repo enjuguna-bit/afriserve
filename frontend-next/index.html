@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/afriserve-mark.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Afriserve | Manager Portal</title>
+    <!-- Apply stored theme before any paint to prevent flash -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('ui_theme');
+          document.documentElement.setAttribute('data-theme', stored === 'light' ? 'light' : 'dark');
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

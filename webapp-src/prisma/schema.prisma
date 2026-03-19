@@ -1,0 +1,1034 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma/sqlite-client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model users {
+  id                    Int       @id @default(autoincrement())
+  full_name             String
+  email                 String    @unique
+  password_hash         String
+  role                  String
+  is_active             Int       @default(1)
+  deactivated_at        DateTime?
+  failed_login_attempts Int       @default(0)
+  locked_until          DateTime?
+  token_version         Int       @default(0)
+  branch_id             Int?
+  primary_region_id     Int?
+  created_at            DateTime
+
+  branch                         branches?                         @relation("UserBranch", fields: [branch_id], references: [id], onDelete: SetNull)
+  primary_region                 regions?                          @relation("UserPrimaryRegion", fields: [primary_region_id], references: [id], onDelete: SetNull)
+  area_assignments               area_manager_branch_assignments[]
+  hierarchy_events               hierarchy_events[]                @relation("HierarchyEventActorUser")
+  created_clients                clients[]                         @relation("ClientCreatedByUser")
+  officer_clients                clients[]                         @relation("ClientOfficerUser")
+  created_loans                  loans[]                           @relation("LoanCreatedByUser")
+  officer_loans                  loans[]                           @relation("LoanOfficerUser")
+  disbursed_loans                loans[]                           @relation("LoanDisbursedByUser")
+  disbursed_loan_tranches        loan_disbursement_tranches[]      @relation("LoanDisbursementTrancheUser")
+  approved_loans                 loans[]                           @relation("LoanApprovedByUser")
+  rejected_loans                 loans[]                           @relation("LoanRejectedByUser")
+  recorded_repayments            repayments[]                      @relation("RepaymentRecordedByUser")
+  initiated_b2c_disbursements    mobile_money_b2c_disbursements[]  @relation("B2cInitiatedByUser")
+  collection_actions             collection_actions[]              @relation("CollectionActionCreatedByUser")
+  requested_approvals            approval_requests[]               @relation("ApprovalRequestedByUser")
+  checked_approvals              approval_requests[]               @relation("ApprovalCheckerUser")
+  posted_journals                gl_journals[]                     @relation("GlJournalPostedByUser")
+  password_resets                password_resets[]
+  audit_logs                     audit_logs[]
+  created_guarantors             guarantors[]                      @relation("GuarantorCreatedByUser")
+  created_loan_guarantors        loan_guarantors[]                 @relation("LoanGuarantorCreatedByUser")
+  created_collateral_assets      collateral_assets[]               @relation("CollateralAssetCreatedByUser")
+  created_loan_collaterals       loan_collaterals[]                @relation("LoanCollateralCreatedByUser")
+  created_loan_contract_versions loan_contract_versions[]          @relation("LoanContractVersionCreatedByUser")
+  user_custom_permissions        user_custom_permissions[]         @relation("UserCustomPermissionsUser")
+  granted_custom_permissions     user_custom_permissions[]         @relation("UserCustomPermissionsGrantor")
+
+  @@index([branch_id])
+  @@index([primary_region_id])
+  @@index([role, is_active], map: "idx_users_role_active")
+  @@map("users")
+}
+
+model permissions {
+  permission_id String   @id
+  description   String
+  created_at    DateTime
+
+  role_permissions        role_permissions[]
+  user_custom_permissions user_custom_permissions[]
+
+  @@map("permissions")
+}
+
+model role_permissions {
+  role          String
+  permission_id String
+  created_at    DateTime
+
+  permission permissions @relation(fields: [permission_id], references: [permission_id], onDelete: Cascade)
+
+  @@id([role, permission_id])
+  @@index([permission_id])
+  @@map("role_permissions")
+}
+
+model user_custom_permissions {
+  user_id            Int
+  permission_id      String
+  granted_at         DateTime
+  granted_by_user_id Int?
+
+  user            users       @relation("UserCustomPermissionsUser", fields: [user_id], references: [id], onDelete: Cascade)
+  permission      permissions @relation(fields: [permission_id], references: [permission_id], onDelete: Cascade)
+  granted_by_user users?      @relation("UserCustomPermissionsGrantor", fields: [granted_by_user_id], references: [id], onDelete: SetNull)
+
+  @@id([user_id, permission_id])
+  @@index([permission_id])
+  @@index([granted_by_user_id])
+  @@map("user_custom_permissions")
+}
+
+model headquarters {
+  id            Int      @id @default(autoincrement())
+  name          String
+  code          String   @unique
+  location      String?
+  contact_phone String?
+  contact_email String?
+  created_at    DateTime
+
+  regions regions[]
+
+  @@map("headquarters")
+}
+
+model regions {
+  id         Int      @id @default(autoincrement())
+  hq_id      Int
+  name       String   @unique
+  code       String   @unique
+  is_active  Int      @default(1)
+  created_at DateTime
+
+  headquarters     headquarters       @relation(fields: [hq_id], references: [id], onDelete: Restrict)
+  branches         branches[]
+  users            users[]            @relation("UserPrimaryRegion")
+  hierarchy_events hierarchy_events[] @relation("HierarchyEventRegion")
+
+  @@index([hq_id])
+  @@map("regions")
+}
+
+model branches {
+  id               Int      @id @default(autoincrement())
+  name             String
+  code             String   @unique
+  location_address String
+  county           String
+  town             String
+  contact_phone    String?
+  contact_email    String?
+  region_id        Int
+  is_active        Int      @default(1)
+  created_at       DateTime
+  updated_at       DateTime
+
+  region             regions                           @relation(fields: [region_id], references: [id], onDelete: Restrict)
+  users              users[]                           @relation("UserBranch")
+  area_assignments   area_manager_branch_assignments[]
+  hierarchy_events   hierarchy_events[]                @relation("HierarchyEventBranch")
+  clients            clients[]                         @relation("ClientBranch")
+  loans              loans[]                           @relation("LoanBranch")
+  collection_actions collection_actions[]              @relation("CollectionActionBranch")
+  transactions       transactions[]                    @relation("TransactionBranch")
+  approval_requests  approval_requests[]               @relation("ApprovalBranch")
+  gl_journals        gl_journals[]                     @relation("GlJournalBranch")
+  guarantors         guarantors[]                      @relation("GuarantorBranch")
+  collateral_assets  collateral_assets[]               @relation("CollateralAssetBranch")
+
+  @@index([region_id])
+  @@map("branches")
+}
+
+model area_manager_branch_assignments {
+  user_id    Int
+  branch_id  Int
+  created_at DateTime
+
+  user   users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  branch branches @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, branch_id])
+  @@index([branch_id])
+  @@map("area_manager_branch_assignments")
+}
+
+model hierarchy_events {
+  id            Int      @id @default(autoincrement())
+  event_type    String
+  scope_level   String
+  region_id     Int?
+  branch_id     Int?
+  actor_user_id Int?
+  details       String?
+  created_at    DateTime
+
+  region     regions?  @relation("HierarchyEventRegion", fields: [region_id], references: [id], onDelete: SetNull)
+  branch     branches? @relation("HierarchyEventBranch", fields: [branch_id], references: [id], onDelete: SetNull)
+  actor_user users?    @relation("HierarchyEventActorUser", fields: [actor_user_id], references: [id], onDelete: SetNull)
+
+  @@index([region_id])
+  @@index([branch_id])
+  @@index([actor_user_id])
+  @@map("hierarchy_events")
+}
+
+model clients {
+  id                   Int       @id @default(autoincrement())
+  full_name            String
+  phone                String?
+  national_id          String?
+  is_active            Int       @default(1)
+  deleted_at           DateTime?
+  branch_id            Int?
+  created_by_user_id   Int?
+  kra_pin              String?
+  photo_url            String?
+  id_document_url      String?
+  kyc_status           String    @default("pending")
+  onboarding_status    String    @default("registered")
+  fee_payment_status   String    @default("unpaid")
+  fees_paid_at         DateTime?
+  next_of_kin_name     String?
+  next_of_kin_phone    String?
+  next_of_kin_relation String?
+  business_type        String?
+  business_years       Int?
+  business_location    String?
+  residential_address  String?
+  officer_id           Int?
+  created_at           DateTime
+  updated_at           DateTime?
+
+  branch            branches?           @relation("ClientBranch", fields: [branch_id], references: [id], onDelete: SetNull)
+  created_by_user   users?              @relation("ClientCreatedByUser", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+  officer           users?              @relation("ClientOfficerUser", fields: [officer_id], references: [id], onDelete: SetNull)
+  loans             loans[]
+  transactions      transactions[]
+  gl_journals       gl_journals[]
+  guarantors        guarantors[]        @relation("ClientGuarantors")
+  collateral_assets collateral_assets[] @relation("ClientCollateralAssets")
+
+  @@index([branch_id])
+  @@index([created_by_user_id])
+  @@index([officer_id], map: "idx_clients_officer_id")
+  @@index([kyc_status], map: "idx_clients_kyc_status")
+  @@index([onboarding_status], map: "idx_clients_onboarding_status")
+  @@index([fee_payment_status], map: "idx_clients_fee_payment_status")
+  @@index([branch_id, created_at], map: "idx_clients_branch_created_at")
+  @@map("clients")
+}
+
+model loan_products {
+  id                                 Int       @id @default(autoincrement())
+  name                               String
+  interest_rate                      Decimal
+  interest_accrual_method            String    @default("upfront")
+  registration_fee                   Decimal   @default(0)
+  processing_fee                     Decimal   @default(0)
+  penalty_rate_daily                 Decimal   @default(0)
+  penalty_flat_amount                Decimal   @default(0)
+  penalty_grace_days                 Int       @default(0)
+  penalty_cap_amount                 Decimal?
+  penalty_compounding_method         String    @default("simple")
+  penalty_base_amount                String    @default("installment_outstanding")
+  penalty_cap_percent_of_outstanding Decimal?
+  pricing_strategy                   String    @default("flat_rate")
+  pricing_config                     String?
+  min_principal                      Decimal   @default(1)
+  max_principal                      Decimal   @default(1000000)
+  min_term_weeks                     Int
+  max_term_weeks                     Int
+  is_active                          Int       @default(1)
+  created_at                         DateTime
+  updated_at                         DateTime?
+
+  loans loans[]
+
+  @@map("loan_products")
+}
+
+model loans {
+  id                   Int       @id @default(autoincrement())
+  client_id            Int
+  product_id           Int?
+  branch_id            Int?
+  created_by_user_id   Int?
+  principal            Decimal
+  interest_rate        Decimal
+  term_months          Int
+  term_weeks           Int?
+  registration_fee     Decimal   @default(0)
+  processing_fee       Decimal   @default(0)
+  created_at           DateTime
+  disbursed_at         DateTime?
+  status               String    @default("pending_approval")
+  officer_id           Int?
+  disbursed_by_user_id Int?
+  disbursement_note    String?
+  approved_by_user_id  Int?
+  approved_at          DateTime?
+  rejected_by_user_id  Int?
+  rejected_at          DateTime?
+  rejection_reason     String?
+  archived_at          DateTime?
+  expected_total       Decimal
+  repaid_total         Decimal   @default(0)
+  balance              Decimal
+  external_reference   String?
+
+  client                  clients                          @relation(fields: [client_id], references: [id], onDelete: Restrict)
+  product                 loan_products?                   @relation(fields: [product_id], references: [id], onDelete: SetNull)
+  branch                  branches?                        @relation("LoanBranch", fields: [branch_id], references: [id], onDelete: SetNull)
+  created_by_user         users?                           @relation("LoanCreatedByUser", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+  officer                 users?                           @relation("LoanOfficerUser", fields: [officer_id], references: [id], onDelete: SetNull)
+  disbursed_by_user       users?                           @relation("LoanDisbursedByUser", fields: [disbursed_by_user_id], references: [id], onDelete: SetNull)
+  approved_by_user        users?                           @relation("LoanApprovedByUser", fields: [approved_by_user_id], references: [id], onDelete: SetNull)
+  rejected_by_user        users?                           @relation("LoanRejectedByUser", fields: [rejected_by_user_id], references: [id], onDelete: SetNull)
+  repayments              repayments[]
+  c2b_events              mobile_money_c2b_events[]
+  b2c_disbursements       mobile_money_b2c_disbursements[]
+  installments            loan_installments[]
+  collection_actions      collection_actions[]
+  transactions            transactions[]
+  approval_requests       approval_requests[]
+  gl_journals             gl_journals[]
+  disbursement_tranches   loan_disbursement_tranches[]
+  interest_profile        loan_interest_profiles?
+  interest_accrual_events loan_interest_accrual_events[]
+  contract_versions       loan_contract_versions[]
+  underwriting_assessment loan_underwriting_assessments?
+  loan_guarantors         loan_guarantors[]
+  loan_collaterals        loan_collaterals[]
+
+  @@index([client_id])
+  @@index([product_id])
+  @@index([branch_id])
+  @@index([created_by_user_id])
+  @@index([officer_id], map: "idx_loans_officer_id")
+  @@index([disbursed_by_user_id])
+  @@index([approved_by_user_id])
+  @@index([rejected_by_user_id])
+  @@index([external_reference], map: "idx_loans_external_reference")
+  @@index([status], map: "idx_loans_status")
+  @@index([created_at], map: "idx_loans_created_at")
+  @@index([branch_id, status], map: "idx_loans_branch_status")
+  @@index([branch_id, disbursed_at], map: "idx_loans_branch_disbursed_at")
+  @@index([created_by_user_id, disbursed_at], map: "idx_loans_created_by_disbursed_at")
+  @@map("loans")
+}
+
+model repayments {
+    id                  Int      @id @default(autoincrement())
+    loan_id             Int
+    recorded_by_user_id Int?
+    amount              Decimal
+    applied_amount      Decimal   @default(0)
+    penalty_amount      Decimal   @default(0)
+    interest_amount     Decimal   @default(0)
+    principal_amount    Decimal   @default(0)
+    overpayment_amount  Decimal   @default(0)
+    paid_at             DateTime
+    note                String?
+    payment_channel     String   @default("manual")
+    payment_provider    String?
+    external_receipt    String?  @unique
+    external_reference  String?
+    payer_phone         String?
+
+    loan             loans                     @relation(fields: [loan_id], references: [id], onDelete: Restrict)
+    recorded_by_user users?                    @relation("RepaymentRecordedByUser", fields: [recorded_by_user_id], references: [id], onDelete: SetNull)
+    c2b_events       mobile_money_c2b_events[]
+
+    @@index([loan_id])
+    @@index([recorded_by_user_id], map: "idx_repayments_recorded_by_user_id")
+    @@index([external_reference], map: "idx_repayments_external_reference")
+    @@index([paid_at], map: "idx_repayments_paid_at")
+    @@index([loan_id, paid_at], map: "idx_repayments_loan_paid_at")
+    @@index([recorded_by_user_id, paid_at], map: "idx_repayments_recorded_by_paid_at")
+    @@map("repayments")
+  }
+
+model mobile_money_c2b_events {
+  id                  Int       @id @default(autoincrement())
+  provider            String
+  external_receipt    String    @unique
+  account_reference   String
+  payer_phone         String?
+  amount              Decimal
+  paid_at             DateTime
+  payload_json        String?
+  status              String    @default("received")
+  loan_id             Int?
+  repayment_id        Int?
+  reconciliation_note String?
+  reconciled_at       DateTime?
+  created_at          DateTime
+
+  loan      loans?      @relation(fields: [loan_id], references: [id], onDelete: SetNull)
+  repayment repayments? @relation(fields: [repayment_id], references: [id], onDelete: SetNull)
+
+  @@index([loan_id])
+  @@index([repayment_id])
+  @@index([status], map: "idx_mobile_money_c2b_status")
+  @@map("mobile_money_c2b_events")
+}
+
+model mobile_money_b2c_disbursements {
+  id                         Int       @id @default(autoincrement())
+  request_id                 String    @unique
+  loan_id                    Int
+  provider                   String
+  amount                     Decimal
+  phone_number               String
+  account_reference          String
+  narration                  String?
+  initiated_by_user_id       Int?
+  provider_request_id        String?
+  provider_response_json     String?
+  status                     String
+  failure_reason             String?
+  reversal_attempts          Int       @default(0)
+  reversal_last_requested_at DateTime?
+  created_at                 DateTime
+  updated_at                 DateTime
+
+  loan              loans  @relation(fields: [loan_id], references: [id], onDelete: Restrict)
+  initiated_by_user users? @relation("B2cInitiatedByUser", fields: [initiated_by_user_id], references: [id], onDelete: SetNull)
+
+  @@index([loan_id])
+  @@index([initiated_by_user_id])
+  @@map("mobile_money_b2c_disbursements")
+}
+
+model loan_disbursement_tranches {
+  id                   Int      @id @default(autoincrement())
+  loan_id              Int
+  tranche_number       Int
+  amount               Decimal
+  disbursed_at         DateTime
+  disbursed_by_user_id Int?
+  note                 String?
+  is_final             Int      @default(0)
+  created_at           DateTime
+
+  loan              loans  @relation(fields: [loan_id], references: [id], onDelete: Cascade)
+  disbursed_by_user users? @relation("LoanDisbursementTrancheUser", fields: [disbursed_by_user_id], references: [id], onDelete: SetNull)
+
+  @@unique([loan_id, tranche_number])
+  @@index([loan_id])
+  @@index([disbursed_by_user_id])
+  @@map("loan_disbursement_tranches")
+}
+
+model loan_interest_profiles {
+  loan_id                    Int       @id
+  accrual_method             String    @default("upfront")
+  accrual_basis              String    @default("flat")
+  accrual_start_at           DateTime?
+  maturity_at                DateTime?
+  total_contractual_interest Decimal   @default(0)
+  accrued_interest           Decimal   @default(0)
+  last_accrual_at            DateTime?
+  created_at                 DateTime
+  updated_at                 DateTime
+
+  loan loans @relation(fields: [loan_id], references: [id], onDelete: Cascade)
+
+  @@map("loan_interest_profiles")
+}
+
+model loan_interest_accrual_events {
+  id               Int      @id @default(autoincrement())
+  loan_id          Int
+  accrual_date     DateTime
+  amount           Decimal
+  days_accrued     Int      @default(0)
+  balance_snapshot Decimal?
+  created_at       DateTime
+
+  loan loans @relation(fields: [loan_id], references: [id], onDelete: Cascade)
+
+  @@unique([loan_id, accrual_date])
+  @@index([loan_id])
+  @@map("loan_interest_accrual_events")
+}
+
+model loan_contract_versions {
+  id                 Int      @id @default(autoincrement())
+  loan_id            Int
+  version_number     Int
+  event_type         String
+  principal          Decimal
+  interest_rate      Decimal
+  term_weeks         Int
+  expected_total     Decimal
+  repaid_total       Decimal
+  balance            Decimal
+  snapshot_json      String?
+  note               String?
+  created_by_user_id Int?
+  created_at         DateTime
+
+  loan            loans  @relation(fields: [loan_id], references: [id], onDelete: Cascade)
+  created_by_user users? @relation("LoanContractVersionCreatedByUser", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+
+  @@unique([loan_id, version_number])
+  @@index([loan_id])
+  @@index([created_by_user_id])
+  @@map("loan_contract_versions")
+}
+
+model loan_underwriting_assessments {
+  loan_id                           Int      @id
+  client_id                         Int
+  branch_id                         Int?
+  principal                         Decimal
+  expected_total                    Decimal
+  balance                           Decimal
+  term_weeks                        Int
+  guarantor_count                   Int      @default(0)
+  collateral_count                  Int      @default(0)
+  support_income_total              Decimal  @default(0)
+  estimated_weekly_installment      Decimal  @default(0)
+  estimated_monthly_installment     Decimal  @default(0)
+  repayment_to_support_income_ratio Decimal?
+  collateral_value_total            Decimal  @default(0)
+  collateral_coverage_ratio         Decimal?
+  guarantee_amount_total            Decimal  @default(0)
+  guarantee_coverage_ratio          Decimal?
+  business_years                    Int?
+  kyc_status                        String   @default("pending")
+  risk_band                         String   @default("medium")
+  policy_decision                   String   @default("manual_review")
+  flags_json                        String?
+  assessment_json                   String?
+  override_decision                 String?
+  override_reason                   String?
+  assessed_at                       DateTime
+  updated_at                        DateTime
+
+  loan loans @relation(fields: [loan_id], references: [id], onDelete: Cascade)
+
+  @@index([client_id])
+  @@index([branch_id])
+  @@map("loan_underwriting_assessments")
+}
+
+model loan_installments {
+  id                                 Int       @id @default(autoincrement())
+  loan_id                            Int
+  installment_number                 Int
+  due_date                           DateTime
+  amount_due                         Decimal
+  amount_paid                        Decimal   @default(0)
+  penalty_amount_accrued             Decimal   @default(0)
+  penalty_last_applied_at            DateTime?
+  penalty_rate_daily                 Decimal?
+  penalty_flat_amount                Decimal?
+  penalty_grace_days                 Int?
+  penalty_cap_amount                 Decimal?
+  penalty_compounding_method         String?
+  penalty_base_amount                String?
+  penalty_cap_percent_of_outstanding Decimal?
+  status                             String    @default("pending")
+  paid_at                            DateTime?
+  created_at                         DateTime
+
+  loan               loans                @relation(fields: [loan_id], references: [id], onDelete: Restrict)
+  collection_actions collection_actions[]
+
+  @@index([loan_id])
+  @@index([loan_id, status, due_date], map: "idx_installments_loan_status_due_date")
+  @@index([due_date, status, loan_id], map: "idx_installments_due_status_loan_id")
+  @@map("loan_installments")
+}
+
+model collection_actions {
+  id                  Int       @id @default(autoincrement())
+  loan_id             Int
+  branch_id           Int?
+  installment_id      Int?
+  action_type         String
+  action_note         String?
+  promise_date        DateTime?
+  next_follow_up_date DateTime?
+  action_status       String    @default("open")
+  created_by_user_id  Int?
+  created_at          DateTime
+
+  loan            loans              @relation(fields: [loan_id], references: [id], onDelete: Restrict)
+  branch          branches?          @relation("CollectionActionBranch", fields: [branch_id], references: [id], onDelete: SetNull)
+  installment     loan_installments? @relation(fields: [installment_id], references: [id], onDelete: SetNull)
+  created_by_user users?             @relation("CollectionActionCreatedByUser", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+
+  @@index([loan_id])
+  @@index([branch_id])
+  @@index([installment_id])
+  @@index([created_by_user_id], map: "idx_collection_actions_created_by_user_id")
+  @@index([action_status, next_follow_up_date], map: "idx_collection_actions_status_follow_up_date")
+  @@map("collection_actions")
+}
+
+model transactions {
+  id          Int      @id @default(autoincrement())
+  loan_id     Int?
+  client_id   Int?
+  branch_id   Int?
+  tx_type     String
+  amount      Decimal
+  occurred_at DateTime
+  note        String?
+
+  loan   loans?    @relation(fields: [loan_id], references: [id], onDelete: SetNull)
+  client clients?  @relation(fields: [client_id], references: [id], onDelete: SetNull)
+  branch branches? @relation("TransactionBranch", fields: [branch_id], references: [id], onDelete: SetNull)
+
+  @@index([loan_id])
+  @@index([client_id])
+  @@index([branch_id])
+  @@index([tx_type, occurred_at], map: "idx_transactions_tx_type_occurred_at")
+  @@map("transactions")
+}
+
+model approval_requests {
+  id                   Int       @id @default(autoincrement())
+  request_type         String
+  target_type          String    @default("loan")
+  target_id            Int
+  loan_id              Int
+  branch_id            Int?
+  requested_by_user_id Int
+  checker_user_id      Int?
+  status               String    @default("pending")
+  request_payload      String
+  request_note         String?
+  review_note          String?
+  requested_at         DateTime
+  reviewed_at          DateTime?
+  approved_at          DateTime?
+  rejected_at          DateTime?
+  executed_at          DateTime?
+  expires_at           DateTime?
+  created_at           DateTime
+  updated_at           DateTime
+
+  loan              loans     @relation(fields: [loan_id], references: [id], onDelete: Restrict)
+  branch            branches? @relation("ApprovalBranch", fields: [branch_id], references: [id], onDelete: SetNull)
+  requested_by_user users     @relation("ApprovalRequestedByUser", fields: [requested_by_user_id], references: [id], onDelete: Restrict)
+  checker_user      users?    @relation("ApprovalCheckerUser", fields: [checker_user_id], references: [id], onDelete: SetNull)
+
+  @@index([loan_id])
+  @@index([branch_id])
+  @@index([requested_by_user_id])
+  @@index([checker_user_id])
+  @@index([expires_at])
+  @@map("approval_requests")
+}
+
+model gl_accounts {
+  id           Int      @id @default(autoincrement())
+  code         String   @unique
+  name         String
+  account_type String
+  is_contra    Int      @default(0)
+  is_active    Int      @default(1)
+  created_at   DateTime
+
+  entries gl_entries[]
+
+  @@map("gl_accounts")
+}
+
+model gl_journals {
+  id                   Int       @id @default(autoincrement())
+  reference_type       String
+  reference_id         Int?
+  loan_id              Int?
+  client_id            Int?
+  branch_id            Int?
+  base_currency        String    @default("KES")
+  transaction_currency String    @default("KES")
+  exchange_rate        Decimal   @default(1)
+  fx_rate_source       String?
+  fx_rate_timestamp    DateTime?
+  description          String
+  note                 String?
+  posted_by_user_id    Int?
+  total_debit          Decimal
+  total_credit         Decimal
+  posted_at            DateTime
+  external_reference_id String?
+
+  loan           loans?       @relation(fields: [loan_id], references: [id], onDelete: SetNull)
+  client         clients?     @relation(fields: [client_id], references: [id], onDelete: SetNull)
+  branch         branches?    @relation("GlJournalBranch", fields: [branch_id], references: [id], onDelete: SetNull)
+  posted_by_user users?       @relation("GlJournalPostedByUser", fields: [posted_by_user_id], references: [id], onDelete: SetNull)
+  entries        gl_entries[]
+
+  @@unique([reference_type, reference_id])
+  @@index([loan_id])
+  @@index([client_id])
+  @@index([branch_id])
+  @@index([posted_by_user_id])
+  @@index([external_reference_id])
+  @@map("gl_journals")
+}
+
+model gl_entries {
+  id                   Int      @id @default(autoincrement())
+  journal_id           Int
+  account_id           Int
+  side                 String
+  amount               Decimal
+  transaction_amount   Decimal?
+  transaction_currency String?
+  coa_version_id       Int?
+  coa_account_code     String?
+  coa_account_name     String?
+  memo                 String?
+  created_at           DateTime
+
+  journal gl_journals @relation(fields: [journal_id], references: [id], onDelete: Restrict)
+  account gl_accounts @relation(fields: [account_id], references: [id], onDelete: Restrict)
+
+  @@index([journal_id])
+  @@index([account_id])
+  @@index([account_id, created_at], map: "idx_gl_entries_account_created_at")
+  @@map("gl_entries")
+}
+
+model gl_fx_rates {
+  id                 Int      @id @default(autoincrement())
+  base_currency      String
+  quote_currency     String
+  rate               Decimal
+  source             String
+  quoted_at          DateTime
+  created_by_user_id Int?
+  created_at         DateTime
+
+  @@unique([base_currency, quote_currency, quoted_at])
+  @@index([base_currency, quote_currency, quoted_at])
+  @@index([created_by_user_id])
+  @@map("gl_fx_rates")
+}
+
+model gl_period_locks {
+  id                Int      @id @default(autoincrement())
+  batch_run_id      Int?
+  lock_type         String
+  lock_date         DateTime
+  status            String   @default("locked")
+  note              String?
+  locked_by_user_id Int?
+  locked_at         DateTime
+  created_at        DateTime
+
+  @@unique([lock_type, lock_date])
+  @@index([batch_run_id])
+  @@index([locked_by_user_id])
+  @@index([lock_date])
+  @@map("gl_period_locks")
+}
+
+model gl_batch_runs {
+  id                   Int       @id @default(autoincrement())
+  batch_type           String
+  effective_date       DateTime
+  status               String
+  started_at           DateTime
+  completed_at         DateTime?
+  triggered_by_user_id Int?
+  summary_json         String?
+  error_message        String?
+  created_at           DateTime
+
+  @@unique([batch_type, effective_date])
+  @@index([status])
+  @@index([triggered_by_user_id])
+  @@map("gl_batch_runs")
+}
+
+model gl_balance_snapshots {
+  id            Int      @id @default(autoincrement())
+  batch_run_id  Int?
+  snapshot_date DateTime
+  account_id    Int
+  branch_id     Int?
+  currency      String
+  debit_total   Decimal
+  credit_total  Decimal
+  net_balance   Decimal
+  created_at    DateTime
+
+  @@unique([snapshot_date, account_id, branch_id, currency])
+  @@index([batch_run_id])
+  @@index([snapshot_date])
+  @@index([account_id])
+  @@index([branch_id])
+  @@map("gl_balance_snapshots")
+}
+
+model gl_trial_balance_snapshots {
+  id            Int      @id @default(autoincrement())
+  batch_run_id  Int?
+  snapshot_date DateTime
+  branch_id     Int?
+  currency      String
+  total_debit   Decimal
+  total_credit  Decimal
+  balanced      Int      @default(1)
+  row_count     Int      @default(0)
+  created_at    DateTime
+
+  @@index([batch_run_id])
+  @@index([snapshot_date])
+  @@index([branch_id])
+  @@map("gl_trial_balance_snapshots")
+}
+
+model gl_coa_versions {
+  id                   Int       @id @default(autoincrement())
+  version_code         String    @unique
+  name                 String
+  status               String    @default("draft")
+  effective_from       DateTime?
+  effective_to         DateTime?
+  parent_version_id    Int?
+  notes                String?
+  created_by_user_id   Int?
+  activated_by_user_id Int?
+  activated_at         DateTime?
+  created_at           DateTime
+  updated_at           DateTime
+
+  @@index([status])
+  @@index([parent_version_id])
+  @@index([created_by_user_id])
+  @@map("gl_coa_versions")
+}
+
+model gl_coa_accounts {
+  id                 Int      @id @default(autoincrement())
+  coa_version_id     Int
+  base_account_id    Int?
+  code               String
+  name               String
+  account_type       String
+  is_contra          Int      @default(0)
+  is_posting_allowed Int      @default(1)
+  is_active          Int      @default(1)
+  created_at         DateTime
+  updated_at         DateTime
+
+  @@unique([coa_version_id, code])
+  @@index([coa_version_id])
+  @@index([base_account_id])
+  @@map("gl_coa_accounts")
+}
+
+model gl_suspense_cases {
+  id                           Int       @id @default(autoincrement())
+  external_reference           String?
+  source_channel               String?
+  status                       String    @default("open")
+  description                  String?
+  branch_id                    Int?
+  client_id                    Int?
+  loan_id                      Int?
+  transaction_currency         String    @default("KES")
+  transaction_amount           Decimal
+  transaction_amount_remaining Decimal
+  book_currency                String    @default("KES")
+  book_amount                  Decimal
+  book_amount_remaining        Decimal
+  opening_fx_rate              Decimal   @default(1)
+  received_at                  DateTime
+  created_by_user_id           Int?
+  resolved_by_user_id          Int?
+  resolved_at                  DateTime?
+  note                         String?
+  created_at                   DateTime
+  updated_at                   DateTime
+
+  @@index([status])
+  @@index([branch_id])
+  @@index([client_id])
+  @@index([loan_id])
+  @@index([external_reference])
+  @@map("gl_suspense_cases")
+}
+
+model gl_suspense_allocations {
+  id                           Int      @id @default(autoincrement())
+  suspense_case_id             Int
+  journal_id                   Int
+  target_account_code          String
+  allocated_transaction_amount Decimal
+  carrying_book_amount         Decimal
+  settled_book_amount          Decimal
+  fx_difference_amount         Decimal  @default(0)
+  transaction_currency         String
+  book_currency                String
+  fx_rate                      Decimal  @default(1)
+  note                         String?
+  allocated_by_user_id         Int?
+  allocated_at                 DateTime
+  created_at                   DateTime
+
+  @@index([suspense_case_id])
+  @@index([journal_id])
+  @@index([allocated_by_user_id])
+  @@map("gl_suspense_allocations")
+}
+
+model password_resets {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  token_hash String    @unique
+  expires_at DateTime
+  used_at    DateTime?
+  created_at DateTime
+
+  user users @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@map("password_resets")
+}
+
+model audit_logs {
+  id          Int      @id @default(autoincrement())
+  user_id     Int?
+  action      String
+  target_type String?
+  target_id   Int?
+  details     String?
+  ip_address  String?
+  created_at  DateTime
+
+  user users? @relation(fields: [user_id], references: [id], onDelete: SetNull)
+
+  @@index([user_id])
+  @@map("audit_logs")
+}
+
+model guarantors {
+  id                 Int      @id @default(autoincrement())
+  full_name          String
+  phone              String?
+  national_id        String?
+  physical_address   String?
+  occupation         String?
+  employer_name      String?
+  monthly_income     Decimal  @default(0)
+  guarantee_amount   Decimal  @default(0)
+  is_active          Int      @default(1)
+  client_id          Int?
+  branch_id          Int?
+  created_by_user_id Int?
+  created_at         DateTime
+  updated_at         DateTime
+
+  client          clients?          @relation("ClientGuarantors", fields: [client_id], references: [id], onDelete: SetNull)
+  branch          branches?         @relation("GuarantorBranch", fields: [branch_id], references: [id], onDelete: SetNull)
+  created_by_user users?            @relation("GuarantorCreatedByUser", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+  loan_guarantors loan_guarantors[]
+
+  @@index([client_id])
+  @@index([branch_id])
+  @@index([created_by_user_id])
+  @@map("guarantors")
+}
+
+model loan_guarantors {
+  id                     Int      @id @default(autoincrement())
+  loan_id                Int
+  guarantor_id           Int
+  guarantee_amount       Decimal  @default(0)
+  relationship_to_client String?
+  liability_type         String   @default("individual")
+  note                   String?
+  created_by_user_id     Int?
+  created_at             DateTime
+
+  loan            loans      @relation(fields: [loan_id], references: [id], onDelete: Cascade)
+  guarantor       guarantors @relation(fields: [guarantor_id], references: [id], onDelete: Cascade)
+  created_by_user users?     @relation("LoanGuarantorCreatedByUser", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+
+  @@unique([loan_id, guarantor_id])
+  @@index([loan_id])
+  @@index([guarantor_id])
+  @@index([created_by_user_id])
+  @@map("loan_guarantors")
+}
+
+model collateral_assets {
+  id                  Int       @id @default(autoincrement())
+  asset_type          String
+  description         String
+  estimated_value     Decimal
+  ownership_type      String    @default("client")
+  owner_name          String?
+  owner_national_id   String?
+  registration_number String?
+  logbook_number      String?
+  title_number        String?
+  location_details    String?
+  valuation_date      DateTime?
+  status              String    @default("active")
+  client_id           Int?
+  branch_id           Int?
+  created_by_user_id  Int?
+  created_at          DateTime
+  updated_at          DateTime
+
+  client           clients?           @relation("ClientCollateralAssets", fields: [client_id], references: [id], onDelete: SetNull)
+  branch           branches?          @relation("CollateralAssetBranch", fields: [branch_id], references: [id], onDelete: SetNull)
+  created_by_user  users?             @relation("CollateralAssetCreatedByUser", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+  loan_collaterals loan_collaterals[]
+
+  @@index([client_id])
+  @@index([branch_id])
+  @@index([created_by_user_id])
+  @@map("collateral_assets")
+}
+
+model loan_collaterals {
+  id                  Int      @id @default(autoincrement())
+  loan_id             Int
+  collateral_asset_id Int
+  forced_sale_value   Decimal?
+  lien_rank           Int      @default(1)
+  note                String?
+  created_by_user_id  Int?
+  created_at          DateTime
+
+  loan             loans             @relation(fields: [loan_id], references: [id], onDelete: Cascade)
+  collateral_asset collateral_assets @relation(fields: [collateral_asset_id], references: [id], onDelete: Cascade)
+  created_by_user  users?            @relation("LoanCollateralCreatedByUser", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+
+  @@unique([loan_id, collateral_asset_id])
+  @@index([loan_id])
+  @@index([collateral_asset_id])
+  @@index([created_by_user_id])
+  @@map("loan_collaterals")
+}

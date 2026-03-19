@@ -1,0 +1,642 @@
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { AsyncState } from '../../../components/common/AsyncState'
+import { queryPolicies } from '../../../services/queryPolicies'
+import { getReportByPath, getReportFilterOptions } from '../../../services/reportService'
+import { useToastStore } from '../../../store/toastStore'
+import styles from './ReportsPage.module.css'
+
+const ReportResultsPanel = lazy(() => import('../components/ReportResultsPanel').then((module) => ({ default: module.ReportResultsPanel })))
+const ReportExportActions = lazy(() => import('../components/ReportExportActions').then((module) => ({ default: module.ReportExportActions })))
+
+type ReportDatePreset = 'today' | 'yesterday' | 'last_7_days' | 'last_30_days' | 'next_7_days' | 'next_30_days' | 'this_month' | 'last_month' | 'custom_range'
+
+type ReportFilterOptionsPayload = {
+  scope?: {
+    level?: string | null
+    role?: string | null
+    branchId?: number | null
+    regionId?: number | null
+  }
+  levels?: string[]
+  offices?: Array<{
+    id: number | string
+    name: string
+    code?: string | null
+    regionId?: number | null
+    regionName?: string | null
+    scopeType?: string | null
+  }>
+  agents?: Array<{
+    id: number | string
+    name: string
+    role?: string | null
+    branchId?: number | null
+    branchName?: string | null
+    branchCode?: string | null
+    managedLoans?: number
+    scopeType?: string | null
+  }>
+  ui?: {
+    levelLocked?: boolean
+    officeLocked?: boolean
+    agentLocked?: boolean
+    officeLabel?: string | null
+    officePlaceholder?: string | null
+    agentLabel?: string | null
+    agentPlaceholder?: string | null
+  }
+  categories?: Array<{
+    id: string
+    label: string
+  }>
+  reports?: Array<{
+    id: string
+    label: string
+    description?: string
+    category: string
+    endpoint: string
+  }>
+}
+
+type GeneratedRequest = {
+  report: {
+    id: string
+    label: string
+    description?: string
+    category: string
+    endpoint: string
+  }
+  params: Record<string, unknown>
+}
+
+const reportDatePresetOptions: Array<{ value: ReportDatePreset; label: string }> = [
+  { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: 'last_7_days', label: 'Last 7 Days' },
+  { value: 'last_30_days', label: 'Last 30 Days' },
+  { value: 'next_7_days', label: 'Next 7 Days' },
+  { value: 'next_30_days', label: 'Next 30 Days' },
+  { value: 'this_month', label: 'This Month' },
+  { value: 'last_month', label: 'Last Month' },
+  { value: 'custom_range', label: 'Custom Range' },
+]
+
+function startOfDay(date: Date): Date {
+  const next = new Date(date)
+  next.setHours(0, 0, 0, 0)
+  return next
+}
+
+function endOfDay(date: Date): Date {
+  const next = new Date(date)
+  next.setHours(23, 59, 59, 999)
+  return next
+}
+
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+function startOfMonth(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0, 0)
+}
+
+function endOfMonth(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999)
+}
+
+function resolveReportDateParams({
+  preset,
+  customDateFrom,
+  customDateTo,
+}: {
+  preset: ReportDatePreset
+  customDateFrom: string
+  customDateTo: string
+}): { params: Record<string, string>; error?: string } {
+  const now = new Date()
+  const todayStart = startOfDay(now)
+  const todayEnd = endOfDay(now)
+
+  if (preset === 'custom_range') {
+    if (!customDateFrom || !customDateTo) {
+      return { params: {}, error: 'Select both Date From and Date To for Custom Range.' }
+    }
+
+    const fromDate = new Date(`${customDateFrom}T00:00:00`)
+    const toDate = new Date(`${customDateTo}T23:59:59.999`)
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+      return { params: {}, error: 'Choose valid custom range dates.' }
+    }
+    if (fromDate > toDate) {
+      return { params: {}, error: 'Date From cannot be after Date To.' }
+    }
+    return {
+      params: {
+        dateFrom: fromDate.toISOString(),
+        dateTo: toDate.toISOString(),
+      },
+    }
+  }
+
+  let fromDate = todayStart
+  let toDate = todayEnd
+
+  switch (preset) {
+    case 'today':
+      break
+    case 'yesterday':
+      fromDate = startOfDay(addDays(now, -1))
+      toDate = endOfDay(addDays(now, -1))
+      break
+    case 'last_7_days':
+      fromDate = startOfDay(addDays(now, -6))
+      break
+    case 'last_30_days':
+      fromDate = startOfDay(addDays(now, -29))
+      break
+    case 'next_7_days':
+      toDate = endOfDay(addDays(now, 7))
+      break
+    case 'next_30_days':
+      toDate = endOfDay(addDays(now, 30))
+      break
+    case 'this_month':
+      fromDate = startOfMonth(now)
+      break
+    case 'last_month': {
+      const lastMonthAnchor = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      fromDate = startOfMonth(lastMonthAnchor)
+      toDate = endOfMonth(lastMonthAnchor)
+      break
+    }
+    default:
+      break
+  }
+
+  return {
+    params: {
+      dateFrom: fromDate.toISOString(),
+      dateTo: toDate.toISOString(),
+    },
+  }
+}
+
+function toLevelLabel(level: string): string {
+  const normalized = String(level || '').trim().toLowerCase()
+  if (normalized === 'hq') return 'Head Office'
+  if (normalized === 'region') return 'Region'
+  if (normalized === 'branch') return 'Branch'
+  if (normalized === 'entity') return 'Entity'
+  if (normalized === 'satellite') return 'Satellite'
+  return String(level || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+function normalizeReportPathLabel(endpoint: string) {
+  const normalized = String(endpoint || '').trim()
+  if (!normalized) {
+    return '/reports/portfolio'
+  }
+  if (normalized.startsWith('/api/')) {
+    return normalized.slice(4)
+  }
+  return normalized.startsWith('/') ? normalized : `/${normalized}`
+}
+
+function isDuesReportEndpoint(endpoint: string | null | undefined): boolean {
+  return normalizeReportPathLabel(String(endpoint || '')) === '/reports/dues'
+}
+
+function MultiAgentPicker({
+  availableAgents,
+  selectedAgentIds,
+  setSelectedAgentIds,
+  disabled,
+}: {
+  availableAgents: Array<{ id: number | string; name: string }>
+  selectedAgentIds: string[]
+  setSelectedAgentIds: (ids: string[]) => void
+  disabled: boolean
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const displayValue = selectedAgentIds.length === 0
+    ? 'All Officers'
+    : `${selectedAgentIds.length} Selected`
+
+  return (
+    <div className={styles.multiSelectWrap} ref={wrapperRef}>
+      <button
+        type="button"
+        className={styles.multiSelectTrigger}
+        disabled={disabled}
+        onClick={() => {
+          if (!disabled) {
+            setIsOpen((current) => !current)
+          }
+        }}
+      >
+        {displayValue}
+        <span style={{ color: '#9ba8b8', fontSize: '0.8rem' }}>v</span>
+      </button>
+
+      {isOpen ? (
+        <div className={styles.multiSelectDropdown}>
+          {availableAgents.map((agent) => {
+            const id = String(agent.id)
+            const isSelected = selectedAgentIds.includes(id)
+            return (
+              <label key={id} className={styles.multiSelectOption}>
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => {
+                    if (isSelected) {
+                      setSelectedAgentIds(selectedAgentIds.filter((value) => value !== id))
+                      return
+                    }
+                    setSelectedAgentIds([...selectedAgentIds, id])
+                  }}
+                />
+                {agent.name}
+              </label>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+export function ReportsPage() {
+  const [level, setLevel] = useState('')
+  const [officeId, setOfficeId] = useState('')
+  const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([])
+  const [categoryId, setCategoryId] = useState('')
+  const [reportId, setReportId] = useState('')
+  const [reportDatePreset, setReportDatePreset] = useState<ReportDatePreset>('last_30_days')
+  const [customDateFrom, setCustomDateFrom] = useState('')
+  const [customDateTo, setCustomDateTo] = useState('')
+  const [generatedRequest, setGeneratedRequest] = useState<GeneratedRequest | null>(null)
+  const pushToast = useToastStore((state) => state.pushToast)
+
+  const filterOptionsQuery = useQuery({
+    queryKey: ['reports', 'filter-options'],
+    queryFn: () => getReportFilterOptions({ agentRole: 'loan_officer' }),
+    ...queryPolicies.report,
+  })
+
+  const filterOptions = filterOptionsQuery.data as ReportFilterOptionsPayload | undefined
+  const normalizedFilterOptions = useMemo(() => ({
+    scope: filterOptions?.scope || {},
+    filterUi: filterOptions?.ui || {},
+    levels: Array.isArray(filterOptions?.levels) ? filterOptions.levels : [],
+    offices: Array.isArray(filterOptions?.offices) ? filterOptions.offices : [],
+    agents: Array.isArray(filterOptions?.agents) ? filterOptions.agents : [],
+    categories: Array.isArray(filterOptions?.categories) ? filterOptions.categories : [],
+    reports: Array.isArray(filterOptions?.reports) ? filterOptions.reports : [],
+  }), [filterOptions])
+  const { scope, filterUi, levels, offices, agents, categories, reports } = normalizedFilterOptions
+  const effectiveLevel = useMemo(() => {
+    if (levels.length === 0) {
+      return ''
+    }
+    if (level && levels.includes(level)) {
+      return level
+    }
+    const scopeLevel = String(scope.level || '').trim().toLowerCase()
+    const preferredLevel = levels.find((entry) => String(entry).trim().toLowerCase() === scopeLevel)
+    return preferredLevel || levels[0]
+  }, [level, levels, scope.level])
+  const effectiveOfficeId = useMemo(() => {
+    if (offices.length === 0) {
+      return ''
+    }
+    if (officeId && offices.some((entry) => String(entry.id) === String(officeId))) {
+      return officeId
+    }
+    const scopeBranchId = Number(scope.branchId || 0)
+    const preferredOffice = offices.find(
+      (office) => String(office.scopeType || '').trim().toLowerCase() === 'branch'
+        && Number(office.id) === scopeBranchId,
+    )
+    return String(preferredOffice?.id ?? offices[0].id)
+  }, [officeId, offices, scope.branchId])
+  const effectiveCategoryId = useMemo(() => {
+    if (categories.length === 0) {
+      return ''
+    }
+    if (categoryId && categories.some((entry) => entry.id === categoryId)) {
+      return categoryId
+    }
+    return categories[0].id
+  }, [categories, categoryId])
+  const selectedOffice = useMemo(
+    () => offices.find((entry) => String(entry.id) === String(effectiveOfficeId)) || null,
+    [effectiveOfficeId, offices],
+  )
+
+  const availableReports = useMemo(() => {
+    if (!effectiveCategoryId) {
+      return reports
+    }
+    return reports.filter((entry) => String(entry.category) === String(effectiveCategoryId))
+  }, [effectiveCategoryId, reports])
+
+  const effectiveReportId = useMemo(() => {
+    if (availableReports.length === 0) {
+      return ''
+    }
+    if (reportId && availableReports.some((entry) => entry.id === reportId)) {
+      return reportId
+    }
+    return availableReports[0].id
+  }, [availableReports, reportId])
+
+  const selectedReport = useMemo(
+    () => reports.find((entry) => entry.id === effectiveReportId) || null,
+    [effectiveReportId, reports],
+  )
+
+  const duesReportSelected = useMemo(
+    () => isDuesReportEndpoint(selectedReport?.endpoint),
+    [selectedReport?.endpoint],
+  )
+
+  const availableAgents = useMemo(() => {
+    const officeScopeType = String(selectedOffice?.scopeType || '').trim().toLowerCase()
+    if (officeScopeType !== 'branch') {
+      return agents
+    }
+    const selectedOfficeNumber = Number(selectedOffice?.id || 0)
+    if (!Number.isInteger(selectedOfficeNumber) || selectedOfficeNumber <= 0) {
+      return agents
+    }
+    return agents.filter((entry) => Number(entry.branchId || 0) === selectedOfficeNumber)
+  }, [agents, selectedOffice])
+  const effectiveSelectedAgentIds = useMemo(() => {
+    if (availableAgents.length === 0) {
+      return []
+    }
+    return selectedAgentIds.filter((selectedId) => (
+      availableAgents.some((entry) => String(entry.id) === String(selectedId))
+    ))
+  }, [availableAgents, selectedAgentIds])
+
+  const generatedReportQuery = useQuery({
+    queryKey: [
+      'reports',
+      'generated-report',
+      generatedRequest?.report.id || null,
+      generatedRequest?.params || {},
+    ],
+    queryFn: () => getReportByPath(generatedRequest?.report.endpoint || '/reports/portfolio', generatedRequest?.params || {}),
+    enabled: Boolean(generatedRequest),
+    ...queryPolicies.report,
+  })
+
+  function handleGenerate() {
+    if (!selectedReport) {
+      pushToast({ type: 'error', message: 'Select a report before generating.' })
+      return
+    }
+
+    const normalizedAgentIds = [...new Set(
+      effectiveSelectedAgentIds
+        .map((value) => Number(value || 0))
+        .filter((value) => Number.isInteger(value) && value > 0),
+    )]
+    const normalizedEndpoint = String(selectedReport.endpoint || '')
+    const resolvedDateParams = resolveReportDateParams({
+      preset: reportDatePreset,
+      customDateFrom,
+      customDateTo,
+    })
+
+    if (resolvedDateParams.error) {
+      pushToast({ type: 'error', message: resolvedDateParams.error })
+      return
+    }
+
+    const params: Record<string, unknown> = {
+      ...resolvedDateParams.params,
+      ...(
+        normalizedAgentIds.length > 0 && normalizedAgentIds.length < availableAgents.length
+          ? { officerIds: normalizedAgentIds.join(',') }
+          : {}
+      ),
+      ...(normalizedEndpoint.endsWith('/reports/portfolio') ? { includeBreakdown: true } : {}),
+    }
+
+    if (String(selectedOffice?.scopeType || '').trim().toLowerCase() === 'branch') {
+      const normalizedOfficeId = Number(selectedOffice?.id || 0)
+      if (Number.isInteger(normalizedOfficeId) && normalizedOfficeId > 0) {
+        params.branchId = normalizedOfficeId
+      }
+    }
+
+    setGeneratedRequest({
+      report: selectedReport,
+      params,
+    })
+  }
+
+  return (
+    <div className={styles.page}>
+      <section className={styles.generatorCard}>
+        <h1 className={styles.title}>Data & Reports</h1>
+
+        <div className={styles.dividerLabel}>
+          <span>Audience & Scope</span>
+        </div>
+        <div className={styles.grid}>
+          <label className={styles.compoundField}>
+            <span className={styles.compoundLabel}>Level</span>
+            <select
+              value={effectiveLevel}
+              onChange={(event) => setLevel(event.target.value)}
+              disabled={Boolean(filterUi.levelLocked)}
+            >
+              <option value="">Select level...</option>
+              {levels.map((entry) => (
+                <option key={entry} value={entry}>{toLevelLabel(entry)}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className={styles.compoundField}>
+            <span className={styles.compoundLabel}>{filterUi.officeLabel || 'Office'}</span>
+            <select
+              value={effectiveOfficeId}
+              onChange={(event) => setOfficeId(event.target.value)}
+              disabled={Boolean(filterUi.officeLocked)}
+            >
+              <option value="">{filterUi.officePlaceholder || 'Select office...'}</option>
+              {offices.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.code ? `${entry.code} - ${entry.name}` : entry.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div style={{ display: 'grid', gap: '8px' }}>
+            <div className={styles.compoundField}>
+              <span className={styles.compoundLabel}>{filterUi.agentLabel || 'Officers'}</span>
+              <MultiAgentPicker
+                availableAgents={availableAgents.map((agent) => ({ id: agent.id, name: agent.name }))}
+                selectedAgentIds={effectiveSelectedAgentIds}
+                setSelectedAgentIds={setSelectedAgentIds}
+                disabled={Boolean(filterUi.agentLocked)}
+              />
+            </div>
+            <p className={styles.fieldHint}>Select specific officers or leave for branch view.</p>
+          </div>
+        </div>
+
+        <div className={styles.dividerLabel}>
+          <span>Report Configuration</span>
+        </div>
+        <div className={styles.grid}>
+          <label className={styles.compoundField}>
+            <span className={styles.compoundLabel}>Category</span>
+            <select value={effectiveCategoryId} onChange={(event) => setCategoryId(event.target.value)}>
+              <option value="">Select category...</option>
+              {categories.map((entry) => (
+                <option key={entry.id} value={entry.id}>{entry.label.toUpperCase()}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className={styles.compoundField}>
+            <span className={styles.compoundLabel}>Report</span>
+            <select value={effectiveReportId} onChange={(event) => setReportId(event.target.value)}>
+              <option value="">Select report...</option>
+              {availableReports.map((entry) => (
+                <option key={entry.id} value={entry.id}>{entry.label}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className={styles.compoundField}>
+            <span className={styles.compoundLabel}>Date Range</span>
+            <select
+              value={reportDatePreset}
+              onChange={(event) => setReportDatePreset(event.target.value as ReportDatePreset)}
+            >
+              {reportDatePresetOptions.map((entry) => (
+                <option key={entry.value} value={entry.value}>{entry.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {selectedReport?.description ? (
+          <>
+            <p className={styles.reportDescription}>{selectedReport.description}</p>
+            {duesReportSelected ? (
+              <p className={styles.reportHint}>Time-series reports enforce exact boundary matching for disbursements and repays.</p>
+            ) : null}
+          </>
+        ) : null}
+
+        {reportDatePreset === 'custom_range' ? (
+          <div className={styles.customRangeGrid}>
+            <label className={styles.compoundField}>
+              <span className={styles.compoundLabel}>Date From</span>
+              <input
+                type="date"
+                value={customDateFrom}
+                onChange={(event) => setCustomDateFrom(event.target.value)}
+              />
+            </label>
+
+            <label className={styles.compoundField}>
+              <span className={styles.compoundLabel}>Date To</span>
+              <input
+                type="date"
+                value={customDateTo}
+                onChange={(event) => setCustomDateTo(event.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
+
+        <div className={styles.generateWrap}>
+          <button type="button" className={styles.generateButton} onClick={handleGenerate}>
+            Generate View
+          </button>
+        </div>
+      </section>
+
+      <AsyncState
+        loading={filterOptionsQuery.isLoading}
+        error={filterOptionsQuery.isError}
+        loadingText="Loading report configurations..."
+        errorText="Unable to load report configuration."
+        onRetry={() => {
+          void filterOptionsQuery.refetch()
+        }}
+      />
+
+      {generatedRequest ? (
+        <section className={styles.resultCard}>
+          <div className={styles.resultHeader}>
+            <div>
+              <p className={styles.resultEyebrow}>Report Results</p>
+              <h2>{generatedRequest.report.label}</h2>
+              {generatedRequest.report.description ? (
+                <p className={styles.resultDescription}>{generatedRequest.report.description}</p>
+              ) : null}
+            </div>
+            <Suspense
+              fallback={(
+                <div className={styles.exportGroup}>
+                  <button type="button" disabled>CSV</button>
+                  <button type="button" disabled>XLSX</button>
+                  <button type="button" disabled>PDF</button>
+                </div>
+              )}
+            >
+              <ReportExportActions
+                endpoint={generatedRequest.report.endpoint}
+                params={generatedRequest.params}
+                label={generatedRequest.report.label}
+              />
+            </Suspense>
+          </div>
+
+          <Suspense fallback={<p className={styles.fieldHint}>Loading report visuals...</p>}>
+            <ReportResultsPanel
+              data={generatedReportQuery.data}
+              loading={generatedReportQuery.isLoading}
+              error={generatedReportQuery.isError}
+              onRetry={() => {
+                void generatedReportQuery.refetch()
+              }}
+            />
+          </Suspense>
+        </section>
+      ) : null}
+    </div>
+  )
+}

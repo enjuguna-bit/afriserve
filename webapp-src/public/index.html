@@ -1,0 +1,1646 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/afriserve-mark.svg" />
+    <title>Afriserve | Microfinance Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#dashboardMain">Skip to main content</a>
+    <div id="appLiveRegion" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div class="bg-orb orb-left"></div>
+    <div class="bg-orb orb-right"></div>
+    <main class="app-shell">
+      <section id="authCard" class="auth-shell">
+        <article class="card auth-intro">
+          <div class="brand-lockup">
+            <img class="brand-logo" src="/afriserve-logo.svg" alt="Afriserve" />
+          </div>
+          <p class="eyebrow">Microfinance operations platform</p>
+          <h1>Microfinance Operations Center</h1>
+          <p class="muted">
+            Centralized tools for client onboarding, loan servicing, repayment tracking, collections follow-up, and
+            account security.
+          </p>
+          <ul class="auth-feature-list">
+            <li>Track portfolio health and transactions in one workspace.</li>
+            <li>Manage collections activity with overdue and action queues.</li>
+            <li>Secure access with password controls and admin user actions.</li>
+          </ul>
+        </article>
+
+        <article class="card auth-panel">
+          <h2>Sign In</h2>
+          <p class="muted">Use your organization account to continue.</p>
+          <form id="loginForm" class="form-grid">
+            <label>
+              Email
+              <input id="email" type="email" autocomplete="username" placeholder="name@afriserve.local" required />
+            </label>
+            <label>
+              Password
+              <input id="password" type="password" autocomplete="current-password" placeholder="Enter password" required />
+            </label>
+            <button type="submit">Login</button>
+          </form>
+          <p class="muted">Credentials are not prefilled for security. Last successful email is remembered on this browser.</p>
+
+          <hr />
+          <h3>Forgot Password</h3>
+          <form id="resetRequestForm" class="form-grid">
+            <label for="resetEmail">
+              Account Email
+              <input id="resetEmail" type="email" autocomplete="email" placeholder="Account email" required />
+            </label>
+            <button type="submit">Generate Reset Token</button>
+          </form>
+          <p class="muted">Reset requests are accepted without exposing token values in the browser.</p>
+          <p id="authMessage" class="message" role="status" aria-live="polite" aria-atomic="true"></p>
+        </article>
+      </section>
+
+      <section id="dashboard" class="dashboard-shell hidden">
+        <header class="card dashboard-header">
+          <div>
+            <p class="eyebrow">Operations Dashboard</p>
+            <h2>Daily Control Room</h2>
+            <p id="userMeta" class="muted"></p>
+            <p id="userScopeMeta" class="muted hidden"></p>
+            <p id="userRoleHint" class="muted hidden"></p>
+            <p id="dataRefreshMeta" class="muted" role="status" aria-live="polite" aria-atomic="true">Last updated: not yet</p>
+          </div>
+          <div class="header-actions">
+            <button id="mobileMenuToggleBtn" class="secondary" type="button" aria-expanded="false" aria-controls="dashboardMenu" aria-label="Open workspace menu">Menu</button>
+            <button id="logoutBtn" class="secondary" aria-label="Logout">Logout</button>
+          </div>
+        </header>
+
+        <div class="dashboard-layout">
+          <aside id="dashboardMenu" class="card dashboard-menu" role="navigation" aria-label="Workspace menu" tabindex="-1">
+            <div class="dashboard-brand">
+              <img class="dashboard-brand-logo" src="/afriserve-logo.svg" alt="Afriserve" />
+            </div>
+            <h3>Workspace</h3>
+            <p class="muted">Switch focus by business function.</p>
+            <div class="menu-groups">
+              <div class="menu-group">
+                <h4>Overview</h4>
+                <button class="menu-btn active" type="button" data-category="overview">Portfolio & Transactions</button>
+              </div>
+              <div class="menu-group">
+                <h4>Operations</h4>
+                <button class="menu-btn" type="button" data-category="operations">Clients, Loans, Repayments</button>
+              </div>
+              <div class="menu-group">
+                <h4>Collections</h4>
+                <button class="menu-btn" type="button" data-category="collections">Overdue Queue & Actions</button>
+              </div>
+              <div class="menu-group">
+                <h4>Reports</h4>
+                <button class="menu-btn" type="button" data-category="reports">Reports & Export Hub</button>
+              </div>
+              <div id="financeMenuGroup" class="menu-group hidden">
+                <h4>Finance</h4>
+                <button class="menu-btn" type="button" data-category="finance">General Ledger</button>
+              </div>
+              <div class="menu-group">
+                <h4>Security</h4>
+                <button class="menu-btn" type="button" data-category="security">Passwords & Resets</button>
+              </div>
+              <div id="adminMenuGroup" class="menu-group hidden">
+                <h4>Administration</h4>
+                <button class="menu-btn" type="button" data-category="admin">Users, Branches, Hierarchy, Audit</button>
+              </div>
+              <div class="menu-group">
+                <h4>View</h4>
+                <button class="menu-btn" type="button" data-category="all">Show All</button>
+              </div>
+            </div>
+          </aside>
+
+          <div id="dashboardMain" class="dashboard-content" role="main" tabindex="-1">
+            <section class="menu-section" data-category="overview">
+              <div class="section-header">
+                <h3>Portfolio Overview</h3>
+                <p class="muted">Monitor loan health and transaction flow at a glance.</p>
+              </div>
+              <div class="grid two-col">
+                <article class="card">
+                  <h4>Portfolio Summary</h4>
+                  <ul id="portfolioList" class="stat-list"></ul>
+                </article>
+                <article id="myPortfolioCard" class="card hidden">
+                  <h4>My Portfolio</h4>
+                  <ul id="myPortfolioList" class="stat-list compact"></ul>
+                </article>
+              </div>
+            </section>
+
+            <section class="menu-section" data-category="overview">
+              <article class="card">
+                <div class="section-header">
+                  <h4>Portfolio KPI Visualizations</h4>
+                  <p class="muted">Compare disbursements, collections, and dues for a selected reporting window.</p>
+                </div>
+                <form id="portfolioKpiForm" class="form-grid report-filter-grid">
+                  <label for="portfolioKpiDateFrom">
+                    Date From
+                    <input id="portfolioKpiDateFrom" type="date" />
+                  </label>
+                  <label for="portfolioKpiDateTo">
+                    Date To
+                    <input id="portfolioKpiDateTo" type="date" />
+                  </label>
+                  <div class="inline-form">
+                    <button type="submit">Apply Range</button>
+                    <button id="portfolioKpiResetBtn" type="button" class="secondary">Reset</button>
+                  </div>
+                </form>
+                <p id="portfolioKpiMeta" class="muted"></p>
+                <div id="portfolioKpiChart" class="mini-chart"></div>
+                <ul id="portfolioKpiHighlights" class="stat-list compact"></ul>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="overview">
+              <article class="card">
+                <h4>Recent Transactions</h4>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Type</th>
+                        <th>Client</th>
+                        <th>Loan</th>
+                        <th>Amount</th>
+                        <th>Date</th>
+                      </tr>
+                    </thead>
+                    <tbody id="txRows"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="overview">
+              <article class="card">
+                <div class="section-header">
+                  <h4>Client Acquisition Trends</h4>
+                  <p class="muted">Track new client registrations and first-time borrowers over time.</p>
+                </div>
+                <form id="clientTrendForm" class="form-grid report-filter-grid">
+                  <label for="clientTrendDateFrom">
+                    Date From
+                    <input id="clientTrendDateFrom" type="date" />
+                  </label>
+                  <label for="clientTrendDateTo">
+                    Date To
+                    <input id="clientTrendDateTo" type="date" />
+                  </label>
+                  <div class="inline-form">
+                    <button type="submit">Apply Range</button>
+                    <button id="clientTrendResetBtn" type="button" class="secondary">Reset</button>
+                  </div>
+                </form>
+                <p id="clientTrendMeta" class="muted"></p>
+                <div id="clientTrendChart" class="mini-chart"></div>
+                <ul id="clientTrendList" class="stat-list compact"></ul>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="overview">
+              <article id="officerPerformanceCard" class="card hidden">
+                <div class="section-header">
+                  <h4>Loan Officer Performance Leaderboard</h4>
+                  <p class="muted">Rank officers by collections and disbursement output within your reporting scope.</p>
+                </div>
+                <form id="officerPerformanceForm" class="form-grid">
+                  <label for="officerPerformanceDateFrom">
+                    Date From
+                    <input id="officerPerformanceDateFrom" type="date" />
+                  </label>
+                  <label for="officerPerformanceDateTo">
+                    Date To
+                    <input id="officerPerformanceDateTo" type="date" />
+                  </label>
+                  <div class="inline-form">
+                    <button type="submit">Apply Filter</button>
+                    <button id="officerPerformanceResetBtn" type="button" class="secondary">Reset</button>
+                  </div>
+                </form>
+                <p id="officerPerformanceMeta" class="muted"></p>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Rank</th>
+                        <th>Officer</th>
+                        <th>Branch</th>
+                        <th>Email</th>
+                        <th>Loans Disbursed</th>
+                        <th>Principal Disbursed</th>
+                        <th>Repayments</th>
+                        <th>Total Collected</th>
+                        <th>Collection Rate</th>
+                      </tr>
+                    </thead>
+                    <tbody id="officerPerformanceRows"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="operations">
+              <div class="section-header">
+                <h3>Operations</h3>
+                <p class="muted">Create client records, issue loans, track repayments, and inspect schedules.</p>
+              </div>
+              <div class="grid two-col">
+                <article class="card">
+                  <h4>Create Client</h4>
+                  <form id="clientForm" class="form-grid">
+                    <label for="clientName">
+                      Full Name
+                      <input id="clientName" type="text" placeholder="Client full name" required />
+                    </label>
+                    <label for="clientPhone">
+                      Phone
+                      <input id="clientPhone" type="text" placeholder="Phone (optional)" />
+                    </label>
+                    <button type="submit">Save Client</button>
+                  </form>
+                </article>
+
+                <article class="card">
+                  <h4>Create Loan</h4>
+                  <form id="loanForm" class="form-grid">
+                    <label for="loanClientId">
+                      Client
+                      <select id="loanClientId" required>
+                        <option value="">Loading clients...</option>
+                      </select>
+                    </label>
+                    <label for="loanPrincipal">
+                      Principal
+                      <input id="loanPrincipal" type="number" step="0.01" placeholder="Principal amount" required />
+                    </label>
+                    <label for="loanTerm">
+                      Term (Weeks)
+                      <input id="loanTerm" type="number" placeholder="Loan term in weeks" required />
+                    </label>
+                    <p class="muted">Fixed pricing: 20% interest, KSh 200 one-time registration, KSh 500 processing per loan.</p>
+                    <button type="submit">Create Loan</button>
+                  </form>
+                </article>
+
+                <article class="card">
+                  <h4>Record Repayment</h4>
+                  <form id="repaymentForm" class="form-grid">
+                    <label for="repaymentLoanId">
+                      Loan
+                      <select id="repaymentLoanId" required>
+                        <option value="">Loading active loans...</option>
+                      </select>
+                    </label>
+                    <label for="repaymentAmount">
+                      Amount
+                      <input id="repaymentAmount" type="number" step="0.01" placeholder="Repayment amount" required />
+                    </label>
+                    <button type="submit">Save Repayment</button>
+                  </form>
+                </article>
+
+                <article class="card">
+                  <h4>Loan Schedule</h4>
+                  <form id="scheduleForm" class="form-grid">
+                    <label for="scheduleLoanId">
+                      Loan
+                      <select id="scheduleLoanId" required>
+                        <option value="">Loading loans...</option>
+                      </select>
+                    </label>
+                    <button type="submit">Load Schedule</button>
+                  </form>
+                  <p id="scheduleSummary" class="muted"></p>
+                  <ul id="scheduleBreakdown" class="stat-list compact"></ul>
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Due Date</th>
+                          <th>Due</th>
+                          <th>Paid</th>
+                          <th>Outstanding</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                    <tbody id="scheduleRows"></tbody>
+                    </table>
+                  </div>
+                </article>
+
+                <article class="card">
+                  <h4>Search Loans</h4>
+                  <form id="loanSearchForm" class="form-grid">
+                    <label for="loanSearchLoanId">
+                      Loan ID
+                      <input id="loanSearchLoanId" type="number" min="1" placeholder="Loan ID (optional)" />
+                    </label>
+                    <label for="loanSearchClientId">
+                      Client ID
+                      <input id="loanSearchClientId" type="number" min="1" placeholder="Client ID (optional)" />
+                    </label>
+                    <label for="loanSearchStatus">
+                      Status
+                      <select id="loanSearchStatus">
+                        <option value="">Any status</option>
+                        <option value="active">active</option>
+                        <option value="closed">closed</option>
+                        <option value="written_off">written_off</option>
+                        <option value="restructured">restructured</option>
+                        <option value="pending_approval">pending_approval</option>
+                        <option value="rejected">rejected</option>
+                      </select>
+                    </label>
+                    <label for="loanSearchSortBy">
+                      Sort By
+                      <select id="loanSearchSortBy">
+                        <option value="id">Loan ID</option>
+                        <option value="disbursedAt">Disbursed Date</option>
+                        <option value="clientId">Client ID</option>
+                        <option value="status">Status</option>
+                        <option value="branchCode">Branch Code</option>
+                        <option value="officerName">Officer</option>
+                        <option value="principal">Principal</option>
+                        <option value="balance">Balance</option>
+                        <option value="expectedTotal">Expected Total</option>
+                        <option value="repaidTotal">Repaid Total</option>
+                      </select>
+                    </label>
+                    <label for="loanSearchSortOrder">
+                      Sort Order
+                      <select id="loanSearchSortOrder">
+                        <option value="desc">Descending</option>
+                        <option value="asc">Ascending</option>
+                      </select>
+                    </label>
+                    <div class="inline-form">
+                      <button type="submit">Search Loans</button>
+                      <button id="loanSearchResetBtn" type="button" class="secondary">Clear</button>
+                    </div>
+                  </form>
+                  <p id="loanSearchMeta" class="muted">Use one or more filters, then search.</p>
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Loan ID</th>
+                          <th>Client ID</th>
+                          <th>Client</th>
+                          <th>Status</th>
+                          <th>Branch</th>
+                          <th>Officer</th>
+                          <th>Principal</th>
+                          <th>Balance</th>
+                          <th>Disbursed</th>
+                        </tr>
+                      </thead>
+                      <tbody id="loanSearchRows"></tbody>
+                    </table>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="menu-section" data-category="operations">
+              <article class="card">
+                <div class="section-header">
+                  <h4>Client Management</h4>
+                  <p class="muted">Search clients, inspect details and history, manage KYC, and upload documents.</p>
+                </div>
+                <form id="clientManagementForm" class="form-grid report-filter-grid">
+                  <label for="clientMgmtSearch">
+                    Search
+                    <input id="clientMgmtSearch" type="text" placeholder="Name, phone, national ID" />
+                  </label>
+                  <label for="clientMgmtMinLoans">
+                    Min Loans
+                    <input id="clientMgmtMinLoans" type="number" min="0" step="1" placeholder="0" />
+                  </label>
+                  <label for="clientMgmtSortBy">
+                    Sort By
+                    <select id="clientMgmtSortBy">
+                      <option value="id">Client ID</option>
+                      <option value="fullName">Full Name</option>
+                      <option value="createdAt">Created Date</option>
+                      <option value="loanCount">Loan Count</option>
+                    </select>
+                  </label>
+                  <label for="clientMgmtSortOrder">
+                    Sort Order
+                    <select id="clientMgmtSortOrder">
+                      <option value="desc">Descending</option>
+                      <option value="asc">Ascending</option>
+                    </select>
+                  </label>
+                  <div class="inline-form">
+                    <button type="submit">Search Clients</button>
+                    <button id="clientManagementResetBtn" type="button" class="secondary">Reset</button>
+                  </div>
+                </form>
+                <p id="clientManagementMeta" class="muted">Search clients and open a profile to manage details.</p>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Full Name</th>
+                        <th>Phone</th>
+                        <th>National ID</th>
+                        <th>Branch</th>
+                        <th>KYC</th>
+                        <th>Loans</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="clientManagementRows"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="operations">
+              <div class="grid two-col">
+                <article class="card">
+                  <div class="section-header">
+                    <h4>Potential Duplicates</h4>
+                    <p class="muted">Identify duplicate client records by national ID, phone, or name.</p>
+                  </div>
+                  <form id="clientDuplicateForm" class="form-grid report-filter-grid">
+                    <label for="clientDupNationalId">
+                      National ID
+                      <input id="clientDupNationalId" type="text" placeholder="National ID" />
+                    </label>
+                    <label for="clientDupPhone">
+                      Phone
+                      <input id="clientDupPhone" type="text" placeholder="Phone" />
+                    </label>
+                    <label for="clientDupName">
+                      Name
+                      <input id="clientDupName" type="text" placeholder="Full name" />
+                    </label>
+                    <div class="inline-form">
+                      <button type="submit">Find Duplicates</button>
+                      <button id="clientDuplicateResetBtn" type="button" class="secondary">Reset</button>
+                    </div>
+                  </form>
+                  <p id="clientDuplicateMeta" class="muted">Provide at least one field to detect likely duplicates.</p>
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>ID</th>
+                          <th>Full Name</th>
+                          <th>Phone</th>
+                          <th>National ID</th>
+                          <th>Score</th>
+                          <th>Signals</th>
+                        </tr>
+                      </thead>
+                      <tbody id="clientDuplicateRows"></tbody>
+                    </table>
+                  </div>
+                </article>
+
+                <article class="card">
+                  <div class="section-header">
+                    <h4>Client Detail & History</h4>
+                    <p id="clientDetailMeta" class="muted">Select a client from the list to view detail and loan history.</p>
+                  </div>
+                  <ul id="clientDetailSummary" class="stat-list compact"></ul>
+                  <div class="client-document-preview">
+                    <h5>Client Documents</h5>
+                    <p id="clientDetailDocumentsMeta" class="muted">No document links available.</p>
+                    <div class="inline-form">
+                      <a id="clientDetailPhotoLink" href="#" target="_blank" rel="noopener noreferrer" class="secondary-btn hidden">Open Photo</a>
+                      <a id="clientDetailIdDocumentLink" href="#" target="_blank" rel="noopener noreferrer" class="secondary-btn hidden">Open ID Document</a>
+                    </div>
+                  </div>
+                  <h5>Loan History</h5>
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Loan ID</th>
+                          <th>Status</th>
+                          <th>Principal</th>
+                          <th>Expected</th>
+                          <th>Repaid</th>
+                          <th>Balance</th>
+                          <th>Disbursed</th>
+                        </tr>
+                      </thead>
+                      <tbody id="clientHistoryLoanRows"></tbody>
+                    </table>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="menu-section" data-category="operations">
+              <div class="grid two-col">
+                <article class="card">
+                  <h4>Edit Client Profile</h4>
+                  <form id="clientEditForm" class="form-grid">
+                    <label for="clientEditFullName">
+                      Full Name
+                      <input id="clientEditFullName" type="text" placeholder="Full name" />
+                    </label>
+                    <label for="clientEditPhone">
+                      Phone
+                      <input id="clientEditPhone" type="text" placeholder="Phone" />
+                    </label>
+                    <label for="clientEditNationalId">
+                      National ID
+                      <input id="clientEditNationalId" type="text" placeholder="National ID" />
+                    </label>
+                    <label for="clientEditKraPin">
+                      KRA PIN
+                      <input id="clientEditKraPin" type="text" placeholder="A123456789B" />
+                    </label>
+                    <label for="clientEditBusinessType">
+                      Business Type
+                      <input id="clientEditBusinessType" type="text" placeholder="Business type" />
+                    </label>
+                    <label for="clientEditBusinessYears">
+                      Business Years
+                      <input id="clientEditBusinessYears" type="number" min="0" step="1" placeholder="Years" />
+                    </label>
+                    <label for="clientEditBusinessLocation">
+                      Business Location
+                      <input id="clientEditBusinessLocation" type="text" placeholder="Business location" />
+                    </label>
+                    <label for="clientEditResidentialAddress">
+                      Residential Address
+                      <input id="clientEditResidentialAddress" type="text" placeholder="Residential address" />
+                    </label>
+                    <label for="clientEditNextKinName">
+                      Next of Kin Name
+                      <input id="clientEditNextKinName" type="text" placeholder="Next of kin" />
+                    </label>
+                    <label for="clientEditNextKinPhone">
+                      Next of Kin Phone
+                      <input id="clientEditNextKinPhone" type="text" placeholder="Next of kin phone" />
+                    </label>
+                    <label for="clientEditNextKinRelation">
+                      Next of Kin Relation
+                      <input id="clientEditNextKinRelation" type="text" placeholder="Relation" />
+                    </label>
+                    <div class="inline-form">
+                      <button type="submit">Save Profile</button>
+                      <button id="clientEditResetBtn" type="button" class="secondary">Reset Fields</button>
+                    </div>
+                  </form>
+                </article>
+
+                <article class="card">
+                  <h4>KYC & Documents</h4>
+                  <form id="clientKycForm" class="form-grid">
+                    <label for="clientKycStatus">
+                      KYC Status
+                      <select id="clientKycStatus">
+                        <option value="pending">pending</option>
+                        <option value="verified">verified</option>
+                        <option value="rejected">rejected</option>
+                      </select>
+                    </label>
+                    <label for="clientKycNote">
+                      KYC Note
+                      <input id="clientKycNote" type="text" placeholder="Optional audit note" />
+                    </label>
+                    <button type="submit">Update KYC</button>
+                  </form>
+                  <hr />
+                  <form id="clientDocumentUploadForm" class="form-grid" enctype="multipart/form-data">
+                    <label for="clientDocumentType">
+                      Document Type
+                      <select id="clientDocumentType">
+                        <option value="photo">photo</option>
+                        <option value="id_document">id_document</option>
+                      </select>
+                    </label>
+                    <label for="clientDocumentFile">
+                      File
+                      <input id="clientDocumentFile" type="file" />
+                    </label>
+                    <button type="submit">Upload Document</button>
+                  </form>
+                  <p id="clientDocumentMeta" class="muted">Select a client first, then upload photo or ID document.</p>
+                </article>
+              </div>
+            </section>
+
+            <section class="menu-section" data-category="operations">
+              <article id="myPipelineCard" class="card hidden">
+                <h4>My Pipeline (Pending Approval)</h4>
+                <p class="muted">Read-only queue of applications you submitted and are awaiting checker approval.</p>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Loan ID</th>
+                        <th>Client</th>
+                        <th>Principal</th>
+                        <th>Created At</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody id="myPipelineRows"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="operations">
+              <div class="section-header">
+                <h3>Loan Lifecycle Management</h3>
+                <p class="muted">Review pending approvals, run lifecycle actions, inspect statements, and view collateral coverage.</p>
+              </div>
+              <div class="grid two-col">
+                <article class="card">
+                  <div class="section-header">
+                    <h4>Pending Approval Queue</h4>
+                    <p class="muted">Maker-checker review queue for submitted loans.</p>
+                  </div>
+                  <form id="pendingApprovalForm" class="form-grid report-filter-grid">
+                    <label for="pendingApprovalDateFrom">
+                      Date From
+                      <input id="pendingApprovalDateFrom" type="date" />
+                    </label>
+                    <label for="pendingApprovalDateTo">
+                      Date To
+                      <input id="pendingApprovalDateTo" type="date" />
+                    </label>
+                    <label for="pendingApprovalBranchId">
+                      Branch
+                      <select id="pendingApprovalBranchId">
+                        <option value="">All branches</option>
+                      </select>
+                    </label>
+                    <div class="inline-form">
+                      <button type="submit">Load Queue</button>
+                      <button id="pendingApprovalResetBtn" type="button" class="secondary">Reset</button>
+                      <button id="refreshPendingApprovalBtn" type="button" class="secondary">Refresh</button>
+                    </div>
+                  </form>
+                  <p id="pendingApprovalMeta" class="muted">Load pending approvals by period and branch.</p>
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Loan ID</th>
+                          <th>Client</th>
+                          <th>Principal</th>
+                          <th>Expected</th>
+                          <th>Branch</th>
+                          <th>Officer</th>
+                          <th>Submitted</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody id="pendingApprovalRows"></tbody>
+                    </table>
+                  </div>
+                </article>
+
+                <article class="card">
+                  <div class="section-header">
+                    <h4>Lifecycle Actions & Statement</h4>
+                    <p class="muted">Approve/reject/restructure/write-off/archive and inspect statement output.</p>
+                  </div>
+                  <form id="loanLifecycleForm" class="form-grid">
+                    <label for="lifecycleLoanId">
+                      Loan ID
+                      <input id="lifecycleLoanId" type="number" min="1" placeholder="Loan ID" required />
+                    </label>
+                    <label for="lifecycleNote">
+                      Action Note
+                      <input id="lifecycleNote" type="text" placeholder="Optional note" />
+                    </label>
+                    <label for="lifecycleRejectReason">
+                      Reject Reason
+                      <input id="lifecycleRejectReason" type="text" placeholder="Reason for rejection" />
+                    </label>
+                    <label for="lifecycleNewTermWeeks">
+                      Restructure Term (Weeks)
+                      <input id="lifecycleNewTermWeeks" type="number" min="1" step="1" placeholder="New term" />
+                    </label>
+                    <label for="lifecycleWaiveInterest">
+                      Waive Interest
+                      <input id="lifecycleWaiveInterest" type="checkbox" />
+                    </label>
+                    <div class="inline-form">
+                      <button type="button" data-lifecycle-action="approve">Approve</button>
+                      <button type="button" data-lifecycle-action="reject" class="secondary">Reject</button>
+                      <button type="button" data-lifecycle-action="restructure" class="secondary">Restructure</button>
+                      <button type="button" data-lifecycle-action="write-off" class="secondary">Write-Off</button>
+                      <button type="button" data-lifecycle-action="archive" class="secondary">Archive</button>
+                    </div>
+                    <div class="inline-form">
+                      <button type="button" id="loadLoanStatementBtn" class="secondary">Load Statement</button>
+                      <button type="button" id="downloadLoanStatementBtn" class="secondary">Download Statement JSON</button>
+                      <button type="button" id="loadLoanCollateralBtn" class="secondary">Load Collateral</button>
+                    </div>
+                  </form>
+                  <p id="loanLifecycleMeta" class="muted">Enter a loan ID to perform lifecycle actions.</p>
+                  <ul id="loanStatementSummary" class="stat-list compact"></ul>
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Due Date</th>
+                          <th>Status</th>
+                          <th>Amount Due</th>
+                          <th>Amount Paid</th>
+                          <th>Outstanding</th>
+                          <th>Penalty Accrued</th>
+                        </tr>
+                      </thead>
+                      <tbody id="loanStatementRows"></tbody>
+                    </table>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="menu-section" data-category="operations">
+              <article class="card">
+                <div class="section-header">
+                  <h4>Loan Collateral Snapshot</h4>
+                  <p class="muted">Collateral assets and guarantors linked to selected loan ID.</p>
+                </div>
+                <div class="grid two-col">
+                  <div>
+                    <h5>Collaterals</h5>
+                    <div class="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Asset</th>
+                            <th>Description</th>
+                            <th>Estimated</th>
+                            <th>Forced Sale</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody id="loanCollateralRows"></tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div>
+                    <h5>Guarantors</h5>
+                    <div class="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Name</th>
+                            <th>Phone</th>
+                            <th>National ID</th>
+                            <th>Guarantee</th>
+                            <th>Liability</th>
+                          </tr>
+                        </thead>
+                        <tbody id="loanGuarantorRows"></tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="collections">
+              <div class="section-header">
+                <h3 id="collectionsPanelTitle">Collections</h3>
+                <p class="muted">Track overdue performance and capture every collection action in context.</p>
+              </div>
+              <div class="grid two-col">
+                <article class="card">
+                  <h4>Collections Summary</h4>
+                  <ul id="collectionsList" class="stat-list compact"></ul>
+                </article>
+
+                <article class="card">
+                  <h4>Log Collection Action</h4>
+                  <form id="collectionActionForm" class="form-grid">
+                    <label for="collectionLoanId">
+                      Loan
+                      <select id="collectionLoanId" required>
+                        <option value="">Loading loans...</option>
+                      </select>
+                    </label>
+                    <label for="collectionInstallmentId">
+                      Installment ID
+                      <input id="collectionInstallmentId" type="number" placeholder="Installment ID (optional)" />
+                    </label>
+                    <label for="collectionActionType">
+                      Action Type
+                      <select id="collectionActionType" required>
+                        <option value="contact_attempt">Contact Attempt</option>
+                        <option value="promise_to_pay">Promise to Pay</option>
+                        <option value="note">Note</option>
+                        <option value="status_change">Status Change</option>
+                      </select>
+                    </label>
+                    <label for="collectionActionStatus">
+                      Action Status
+                      <select id="collectionActionStatus">
+                        <option value="open">Open</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                      </select>
+                    </label>
+                    <label for="collectionPromiseDate">
+                      Promise Date
+                      <input id="collectionPromiseDate" type="datetime-local" placeholder="Promise date (optional)" />
+                    </label>
+                    <label for="collectionFollowUpDate">
+                      Next Follow-Up
+                      <input id="collectionFollowUpDate" type="datetime-local" placeholder="Next follow up (optional)" />
+                    </label>
+                    <label for="collectionActionNote">
+                      Action Note
+                      <input id="collectionActionNote" type="text" placeholder="Action note" />
+                    </label>
+                    <button type="submit">Save Collection Action</button>
+                  </form>
+                </article>
+              </div>
+            </section>
+
+            <section class="menu-section" data-category="collections">
+              <article class="card">
+                <div class="section-header">
+                  <h4>Overdue Collection Alerts</h4>
+                  <p class="muted">Flag urgent overdue accounts and review due-window exposure by severity.</p>
+                </div>
+                <form id="overdueAlertsForm" class="form-grid report-filter-grid">
+                  <label for="overdueAlertsDateFrom">
+                    Date From
+                    <input id="overdueAlertsDateFrom" type="date" />
+                  </label>
+                  <label for="overdueAlertsDateTo">
+                    Date To
+                    <input id="overdueAlertsDateTo" type="date" />
+                  </label>
+                  <label for="overdueAlertsMinDays">
+                    Minimum Days Overdue
+                    <input id="overdueAlertsMinDays" type="number" min="0" step="1" placeholder="15" />
+                  </label>
+                  <div class="inline-form">
+                    <button type="submit">Apply Alerts Filter</button>
+                    <button id="overdueAlertsResetBtn" type="button" class="secondary">Reset</button>
+                  </div>
+                </form>
+                <p id="overdueAlertsMeta" class="muted"></p>
+                <ul id="overdueAlertsList" class="stat-list compact"></ul>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Severity</th>
+                        <th>Loan</th>
+                        <th>Client</th>
+                        <th>Days Overdue</th>
+                        <th>Overdue Amount</th>
+                        <th>Installments</th>
+                        <th>Open Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="overdueAlertsRows"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="collections">
+              <article class="card">
+                <div class="inline-form">
+                  <button id="refreshOverdueBtn" type="button" class="secondary">Refresh Overdue Queue</button>
+                </div>
+                <h4>Overdue Queue</h4>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Loan</th>
+                        <th>Client</th>
+                        <th>Installments</th>
+                        <th>Overdue Amount</th>
+                        <th>Days Overdue</th>
+                        <th>Open Actions</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="overdueRows"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="collections">
+              <article class="card">
+                <div class="inline-form">
+                  <button id="refreshCollectionActionsBtn" type="button" class="secondary">Refresh Actions</button>
+                </div>
+                <h4>Recent Collection Actions</h4>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Loan</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Created By</th>
+                        <th>Date</th>
+                        <th>Note</th>
+                      </tr>
+                    </thead>
+                    <tbody id="collectionActionRows"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="reports">
+              <div class="section-header">
+                <h3>Reports & Export Hub</h3>
+                <p class="muted">Run reports, inspect JSON results in tables, and download CSV, PDF, or XLSX exports.</p>
+              </div>
+              <div id="reportsHub" class="reports-grid"></div>
+            </section>
+
+            <section class="menu-section" data-category="finance">
+              <div class="section-header">
+                <h3>General Ledger</h3>
+                <p class="muted">Finance reporting workspace for chart of accounts, trial balance, account statements, and cash-flow views.</p>
+              </div>
+            </section>
+
+            <section class="menu-section" data-category="finance">
+              <article class="card">
+                <div class="inline-form">
+                  <button id="refreshGlAccountsBtn" type="button" class="secondary">Refresh Accounts</button>
+                </div>
+                <h4>Chart of Accounts</h4>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Code</th>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Contra</th>
+                        <th>Active</th>
+                      </tr>
+                    </thead>
+                    <tbody id="glAccountsRows"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="finance">
+              <article class="card">
+                <div class="section-header">
+                  <h4>Trial Balance</h4>
+                  <p class="muted">Review debits and credits with period and branch filters.</p>
+                </div>
+                <form id="glTrialBalanceForm" class="form-grid report-filter-grid">
+                  <label for="glTrialDateFrom">
+                    Date From
+                    <input id="glTrialDateFrom" type="date" />
+                  </label>
+                  <label for="glTrialDateTo">
+                    Date To
+                    <input id="glTrialDateTo" type="date" />
+                  </label>
+                  <label for="glTrialBranchId">
+                    Branch
+                    <select id="glTrialBranchId">
+                      <option value="">All branches</option>
+                    </select>
+                  </label>
+                  <div class="inline-form">
+                    <button type="submit">Load Trial Balance</button>
+                    <button id="glTrialResetBtn" type="button" class="secondary">Reset</button>
+                    <button type="button" class="secondary" data-export="csv">CSV</button>
+                    <button type="button" class="secondary" data-export="pdf">PDF</button>
+                    <button type="button" class="secondary" data-export="xlsx">XLSX</button>
+                  </div>
+                </form>
+                <p id="glTrialMeta" class="muted">Select filters to load trial balance.</p>
+                <ul id="glTrialSummary" class="stat-list compact"></ul>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Code</th>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Debits</th>
+                        <th>Credits</th>
+                        <th>Net</th>
+                      </tr>
+                    </thead>
+                    <tbody id="glTrialRows"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="finance">
+              <div class="grid two-col">
+                <article class="card">
+                  <h4>GL Income Statement</h4>
+                  <form id="glIncomeStatementForm" class="form-grid report-filter-grid">
+                    <label for="glIncomeDateFrom">
+                      Date From
+                      <input id="glIncomeDateFrom" type="date" />
+                    </label>
+                    <label for="glIncomeDateTo">
+                      Date To
+                      <input id="glIncomeDateTo" type="date" />
+                    </label>
+                    <label for="glIncomeBranchId">
+                      Branch
+                      <select id="glIncomeBranchId">
+                        <option value="">All branches</option>
+                      </select>
+                    </label>
+                    <div class="inline-form">
+                      <button type="submit">Load Income Statement</button>
+                      <button id="glIncomeResetBtn" type="button" class="secondary">Reset</button>
+                      <button type="button" class="secondary" data-export="csv">CSV</button>
+                      <button type="button" class="secondary" data-export="pdf">PDF</button>
+                      <button type="button" class="secondary" data-export="xlsx">XLSX</button>
+                    </div>
+                  </form>
+                  <p id="glIncomeMeta" class="muted"></p>
+                  <ul id="glIncomeSummary" class="stat-list compact"></ul>
+                </article>
+
+                <article class="card">
+                  <h4>GL Cash Flow</h4>
+                  <form id="glCashFlowForm" class="form-grid report-filter-grid">
+                    <label for="glCashDateFrom">
+                      Date From
+                      <input id="glCashDateFrom" type="date" />
+                    </label>
+                    <label for="glCashDateTo">
+                      Date To
+                      <input id="glCashDateTo" type="date" />
+                    </label>
+                    <label for="glCashBranchId">
+                      Branch
+                      <select id="glCashBranchId">
+                        <option value="">All branches</option>
+                      </select>
+                    </label>
+                    <div class="inline-form">
+                      <button type="submit">Load Cash Flow</button>
+                      <button id="glCashResetBtn" type="button" class="secondary">Reset</button>
+                      <button type="button" class="secondary" data-export="csv">CSV</button>
+                      <button type="button" class="secondary" data-export="pdf">PDF</button>
+                      <button type="button" class="secondary" data-export="xlsx">XLSX</button>
+                    </div>
+                  </form>
+                  <p id="glCashMeta" class="muted"></p>
+                  <ul id="glCashSummary" class="stat-list compact"></ul>
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Disbursements</th>
+                          <th>Repayments</th>
+                          <th>Net Cash Flow</th>
+                        </tr>
+                      </thead>
+                      <tbody id="glCashRows"></tbody>
+                    </table>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="menu-section" data-category="finance">
+              <article class="card">
+                <div class="section-header">
+                  <h4>Account Statement</h4>
+                  <p class="muted">Load detailed ledger entries for a selected GL account.</p>
+                </div>
+                <form id="glAccountStatementForm" class="form-grid report-filter-grid">
+                  <label for="glStatementAccountId">
+                    GL Account
+                    <select id="glStatementAccountId">
+                      <option value="">Select account</option>
+                    </select>
+                  </label>
+                  <label for="glStatementDateFrom">
+                    Date From
+                    <input id="glStatementDateFrom" type="date" />
+                  </label>
+                  <label for="glStatementDateTo">
+                    Date To
+                    <input id="glStatementDateTo" type="date" />
+                  </label>
+                  <label for="glStatementBranchId">
+                    Branch
+                    <select id="glStatementBranchId">
+                      <option value="">All branches</option>
+                    </select>
+                  </label>
+                  <div class="inline-form">
+                    <button type="submit">Load Statement</button>
+                    <button id="glStatementResetBtn" type="button" class="secondary">Reset</button>
+                    <button type="button" class="secondary" data-export="csv">CSV</button>
+                    <button type="button" class="secondary" data-export="pdf">PDF</button>
+                    <button type="button" class="secondary" data-export="xlsx">XLSX</button>
+                  </div>
+                </form>
+                <p id="glStatementMeta" class="muted">Select an account and range to load statement entries.</p>
+                <ul id="glStatementSummary" class="stat-list compact"></ul>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Posted At</th>
+                        <th>Reference</th>
+                        <th>Branch</th>
+                        <th>Debit</th>
+                        <th>Credit</th>
+                        <th>Effect</th>
+                        <th>Running Balance</th>
+                      </tr>
+                    </thead>
+                    <tbody id="glStatementRows"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section class="menu-section" data-category="security">
+              <div class="section-header">
+                <h3>Security</h3>
+                <p class="muted">Update current credentials or apply token-based password resets.</p>
+              </div>
+              <div class="grid two-col">
+                <article class="card">
+                  <h4>Change Password</h4>
+                  <form id="changePasswordForm" class="form-grid">
+                    <label for="currentPassword">
+                      Current Password
+                      <input id="currentPassword" type="password" placeholder="Current password" required />
+                    </label>
+                    <label for="newPassword">
+                      New Password
+                      <input id="newPassword" type="password" autocomplete="new-password" placeholder="New password" required />
+                    </label>
+                    <button type="submit">Update Password</button>
+                  </form>
+                  <p class="muted">Password policy: minimum 8 chars with uppercase, lowercase, number, and special character.</p>
+                </article>
+
+                <article class="card">
+                  <h4>Reset Password (Token)</h4>
+                  <form id="resetConfirmForm" class="form-grid">
+                    <label for="resetToken">
+                      Reset Token
+                      <input id="resetToken" type="text" placeholder="Reset token" required />
+                    </label>
+                    <label for="resetNewPassword">
+                      New Password
+                      <input id="resetNewPassword" type="password" autocomplete="new-password" placeholder="New password" required />
+                    </label>
+                    <button type="submit">Apply Reset</button>
+                  </form>
+                  <p class="muted">New passwords must meet the same complexity policy.</p>
+                </article>
+              </div>
+            </section>
+
+            <section id="adminUserPanel" class="menu-section hidden" data-category="admin">
+              <article class="card">
+                <div class="section-header">
+                  <h3>User & Branch Administration (HQ)</h3>
+                  <p class="muted">Manage user onboarding, branch assignment, hierarchy controls, and assisted password resets.</p>
+                </div>
+                <form id="adminCreateUserForm" class="form-grid admin-user-form">
+                  <label for="adminUserFullName">
+                    Full Name
+                    <input id="adminUserFullName" type="text" placeholder="Full name" required />
+                  </label>
+                  <label for="adminUserEmail">
+                    Email
+                    <input id="adminUserEmail" type="email" placeholder="Email" required />
+                  </label>
+                  <label for="adminUserPassword">
+                    Temporary Password
+                    <input id="adminUserPassword" type="password" autocomplete="new-password" placeholder="Temporary password" required />
+                    <small class="muted">Must include uppercase, lowercase, number, and special character.</small>
+                  </label>
+                  <label for="adminUserRole">
+                    Role
+                    <select id="adminUserRole" required>
+                      <option value="admin">admin</option>
+                      <option value="ceo">ceo</option>
+                      <option value="finance">finance</option>
+                      <option value="operations_manager">operations_manager</option>
+                      <option value="it">it</option>
+                      <option value="area_manager">area_manager</option>
+                      <option value="loan_officer">loan_officer</option>
+                      <option value="cashier">cashier</option>
+                    </select>
+                  </label>
+                  <p id="adminUserRoleHint" class="muted role-hint">Role scope guidance will appear here.</p>
+                  <label for="adminUserBranchId" id="adminBranchField" class="admin-role-field" data-role-group="branch">
+                    Branch Assignment
+                    <select id="adminUserBranchId">
+                      <option value="">Select branch (optional)</option>
+                    </select>
+                    <small class="muted">Required for `operations_manager` and `loan_officer`.</small>
+                  </label>
+                  <label for="adminUserAreaBranchIds" id="adminAreaBranchIdsField" class="admin-role-field" data-role-group="area">
+                    Area Branch IDs
+                    <input id="adminUserAreaBranchIds" type="text" placeholder="Comma-separated branch IDs (optional)" />
+                    <small class="muted">Optional when using branch count auto-assignment.</small>
+                  </label>
+                  <label for="adminUserAreaBranchCount" id="adminAreaBranchCountField" class="admin-role-field" data-role-group="area">
+                    Area Branch Count
+                    <input id="adminUserAreaBranchCount" type="number" min="1" max="200" placeholder="Area branch count (optional)" />
+                  </label>
+                  <label for="adminUserPrimaryRegionId" id="adminPrimaryRegionField" class="admin-role-field" data-role-group="area">
+                    Primary Region ID
+                    <input id="adminUserPrimaryRegionId" type="number" placeholder="Primary region ID (optional)" />
+                  </label>
+                  <button type="submit">Create User</button>
+                </form>
+                <div class="inline-form">
+                  <button id="refreshUsersBtn" type="button" class="secondary">Refresh Users</button>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Role</th>
+                        <th>Branch</th>
+                        <th>Region</th>
+                        <th>Failed Attempts</th>
+                        <th>Locked Until</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="userRows"></tbody>
+                  </table>
+                </div>
+              </article>
+
+              <article class="card">
+                <div class="section-header">
+                  <h3>Branch Management</h3>
+                  <p class="muted">Create, edit, and deactivate Kenya branches by region and town.</p>
+                </div>
+                <form id="branchForm" class="form-grid">
+                  <label for="branchName">
+                    Branch Name
+                    <input id="branchName" type="text" placeholder="Branch name" required />
+                  </label>
+                  <label for="branchCode">
+                    Branch Code
+                    <input id="branchCode" type="text" placeholder="Branch code (optional)" />
+                  </label>
+                  <label for="branchCounty">
+                    County
+                    <input id="branchCounty" type="text" placeholder="County" required />
+                  </label>
+                  <label for="branchTown">
+                    Town
+                    <input id="branchTown" type="text" placeholder="Town" required />
+                  </label>
+                  <label for="branchLocationAddress">
+                    Location / Address
+                    <input id="branchLocationAddress" type="text" placeholder="Location / address" required />
+                  </label>
+                  <label for="branchRegionId">
+                    Region
+                    <select id="branchRegionId" required>
+                      <option value="">Select region</option>
+                    </select>
+                  </label>
+                  <label for="branchContactPhone">
+                    Contact Phone
+                    <input id="branchContactPhone" type="text" placeholder="Contact phone (optional)" />
+                  </label>
+                  <label for="branchContactEmail">
+                    Contact Email
+                    <input id="branchContactEmail" type="email" placeholder="Contact email (optional)" />
+                  </label>
+                  <button type="submit">Create Branch</button>
+                </form>
+                <div class="inline-form">
+                  <button id="refreshBranchesBtn" type="button" class="secondary">Refresh Branches</button>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Code</th>
+                        <th>Name</th>
+                        <th>Region</th>
+                        <th>Town</th>
+                        <th>County</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="branchRows"></tbody>
+                  </table>
+                </div>
+              </article>
+
+              <article class="card">
+                <div class="section-header">
+                  <h3>Loan Products</h3>
+                  <p class="muted">Configure loan product pricing, term limits, and active status.</p>
+                </div>
+                <form id="loanProductForm" class="form-grid report-filter-grid">
+                  <label for="loanProductName">
+                    Name
+                    <input id="loanProductName" type="text" placeholder="Product name" required />
+                  </label>
+                  <label for="loanProductInterestRate">
+                    Interest Rate
+                    <input id="loanProductInterestRate" type="number" min="0" step="0.01" required />
+                  </label>
+                  <label for="loanProductRegistrationFee">
+                    Registration Fee
+                    <input id="loanProductRegistrationFee" type="number" min="0" step="0.01" required />
+                  </label>
+                  <label for="loanProductProcessingFee">
+                    Processing Fee
+                    <input id="loanProductProcessingFee" type="number" min="0" step="0.01" required />
+                  </label>
+                  <label for="loanProductMinTermWeeks">
+                    Min Term Weeks
+                    <input id="loanProductMinTermWeeks" type="number" min="1" step="1" required />
+                  </label>
+                  <label for="loanProductMaxTermWeeks">
+                    Max Term Weeks
+                    <input id="loanProductMaxTermWeeks" type="number" min="1" step="1" required />
+                  </label>
+                  <div class="inline-form">
+                    <button type="submit">Create Product</button>
+                    <button id="refreshLoanProductsBtn" type="button" class="secondary">Refresh</button>
+                  </div>
+                </form>
+                <p id="loanProductMeta" class="muted">Manage loan product catalog.</p>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Interest</th>
+                        <th>Reg Fee</th>
+                        <th>Proc Fee</th>
+                        <th>Term Range</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="loanProductRows"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section id="adminAuditPanel" class="menu-section" data-category="admin">
+              <article class="card">
+                <div class="section-header">
+                  <h3>Audit Trail</h3>
+                  <p class="muted">Review user and system activities with filters and pagination controls.</p>
+                </div>
+                <form id="auditTrailForm" class="form-grid report-filter-grid">
+                  <label for="auditAction">
+                    Action
+                    <input id="auditAction" type="text" placeholder="e.g. login_success" />
+                  </label>
+                  <label for="auditUserId">
+                    User ID
+                    <input id="auditUserId" type="number" min="1" placeholder="User ID (optional)" />
+                  </label>
+                  <label for="auditTargetType">
+                    Target Type
+                    <input id="auditTargetType" type="text" placeholder="e.g. user, loan" />
+                  </label>
+                  <label for="auditTargetId">
+                    Target ID
+                    <input id="auditTargetId" type="number" min="1" placeholder="Target ID (optional)" />
+                  </label>
+                  <label for="auditDateFrom">
+                    Date From
+                    <input id="auditDateFrom" type="date" />
+                  </label>
+                  <label for="auditDateTo">
+                    Date To
+                    <input id="auditDateTo" type="date" />
+                  </label>
+                  <label for="auditLimit">
+                    Rows Per Page
+                    <select id="auditLimit">
+                      <option value="20">20</option>
+                      <option value="50">50</option>
+                      <option value="100">100</option>
+                    </select>
+                  </label>
+                  <div class="inline-form">
+                    <button type="submit">Load Audit Logs</button>
+                    <button id="auditTrailResetBtn" type="button" class="secondary">Reset</button>
+                  </div>
+                </form>
+                <p id="auditTrailMeta" class="muted">Load audit entries by action, actor, date, and target.</p>
+                <div class="inline-form admin-pagination-row">
+                  <button id="auditTrailPrevBtn" type="button" class="secondary">Previous</button>
+                  <p id="auditTrailPageMeta" class="muted">Page 1</p>
+                  <button id="auditTrailNextBtn" type="button" class="secondary">Next</button>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th data-sort-key="id"><button type="button" class="table-sort-btn" data-sort-table="audit" data-sort-key="id">ID</button></th>
+                        <th data-sort-key="createdAt"><button type="button" class="table-sort-btn" data-sort-table="audit" data-sort-key="createdAt">Time</button></th>
+                        <th data-sort-key="userId"><button type="button" class="table-sort-btn" data-sort-table="audit" data-sort-key="userId">User ID</button></th>
+                        <th>User</th>
+                        <th data-sort-key="action"><button type="button" class="table-sort-btn" data-sort-table="audit" data-sort-key="action">Action</button></th>
+                        <th data-sort-key="targetType"><button type="button" class="table-sort-btn" data-sort-table="audit" data-sort-key="targetType">Target Type</button></th>
+                        <th data-sort-key="targetId"><button type="button" class="table-sort-btn" data-sort-table="audit" data-sort-key="targetId">Target ID</button></th>
+                        <th>IP Address</th>
+                        <th>Details</th>
+                      </tr>
+                    </thead>
+                    <tbody id="auditTrailRows"></tbody>
+                  </table>
+                </div>
+              </article>
+
+              <article id="systemPanelCard" class="card hidden">
+                <div class="section-header">
+                  <h3>System</h3>
+                  <p class="muted">Runtime diagnostics, performance metrics, backup trigger, and hierarchy event monitoring.</p>
+                </div>
+
+                <div class="grid two-col">
+                  <article class="card system-subcard">
+                    <div class="inline-form">
+                      <h4>Configuration Status</h4>
+                      <button id="systemConfigRefreshBtn" type="button" class="secondary">Refresh Config</button>
+                    </div>
+                    <div id="systemConfigStatusOutput" class="system-output"></div>
+                  </article>
+
+                  <article class="card system-subcard">
+                    <div class="inline-form">
+                      <h4>System Metrics</h4>
+                      <button id="systemMetricsRefreshBtn" type="button" class="secondary">Refresh Metrics</button>
+                    </div>
+                    <div id="systemMetricsOutput" class="system-output"></div>
+                  </article>
+                </div>
+
+                <article class="card system-subcard">
+                  <div class="inline-form">
+                    <h4>Database Backup</h4>
+                    <button id="systemBackupBtn" type="button">Run Backup</button>
+                  </div>
+                  <p id="systemBackupMeta" class="muted">Run an on-demand backup from this panel.</p>
+                  <ul id="systemBackupSummary" class="stat-list compact"></ul>
+                </article>
+
+                <article class="card system-subcard">
+                  <div class="section-header">
+                    <h4>Hierarchy Event Log</h4>
+                    <p class="muted">Track hierarchy and assignment changes across HQ, region, and branch scopes.</p>
+                  </div>
+                  <form id="hierarchyEventsForm" class="form-grid report-filter-grid">
+                    <label for="hierarchyEventType">
+                      Event Type
+                      <input id="hierarchyEventType" type="text" placeholder="e.g. user_scope_updated" />
+                    </label>
+                    <label for="hierarchyScopeLevel">
+                      Scope Level
+                      <select id="hierarchyScopeLevel">
+                        <option value="">All scopes</option>
+                        <option value="hq">HQ</option>
+                        <option value="region">Region</option>
+                        <option value="branch">Branch</option>
+                      </select>
+                    </label>
+                    <label for="hierarchyRegionId">
+                      Region ID
+                      <input id="hierarchyRegionId" type="number" min="1" placeholder="Region ID (optional)" />
+                    </label>
+                    <label for="hierarchyBranchId">
+                      Branch ID
+                      <input id="hierarchyBranchId" type="number" min="1" placeholder="Branch ID (optional)" />
+                    </label>
+                    <label for="hierarchyActorUserId">
+                      Actor User ID
+                      <input id="hierarchyActorUserId" type="number" min="1" placeholder="Actor user ID (optional)" />
+                    </label>
+                    <label for="hierarchyDateFrom">
+                      Date From
+                      <input id="hierarchyDateFrom" type="date" />
+                    </label>
+                    <label for="hierarchyDateTo">
+                      Date To
+                      <input id="hierarchyDateTo" type="date" />
+                    </label>
+                    <label for="hierarchyLimit">
+                      Rows Per Page
+                      <select id="hierarchyLimit">
+                        <option value="20">20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                      </select>
+                    </label>
+                    <div class="inline-form">
+                      <button type="submit">Load Events</button>
+                      <button id="hierarchyEventsResetBtn" type="button" class="secondary">Reset</button>
+                    </div>
+                  </form>
+                  <p id="hierarchyEventsMeta" class="muted">Filter hierarchy events by scope, actor, and date.</p>
+                  <div class="inline-form admin-pagination-row">
+                    <button id="hierarchyEventsPrevBtn" type="button" class="secondary">Previous</button>
+                    <p id="hierarchyEventsPageMeta" class="muted">Page 1</p>
+                    <button id="hierarchyEventsNextBtn" type="button" class="secondary">Next</button>
+                  </div>
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th data-sort-key="id"><button type="button" class="table-sort-btn" data-sort-table="hierarchy" data-sort-key="id">ID</button></th>
+                          <th data-sort-key="createdAt"><button type="button" class="table-sort-btn" data-sort-table="hierarchy" data-sort-key="createdAt">Time</button></th>
+                          <th data-sort-key="eventType"><button type="button" class="table-sort-btn" data-sort-table="hierarchy" data-sort-key="eventType">Event Type</button></th>
+                          <th data-sort-key="scopeLevel"><button type="button" class="table-sort-btn" data-sort-table="hierarchy" data-sort-key="scopeLevel">Scope</button></th>
+                          <th data-sort-key="regionId"><button type="button" class="table-sort-btn" data-sort-table="hierarchy" data-sort-key="regionId">Region</button></th>
+                          <th data-sort-key="branchId"><button type="button" class="table-sort-btn" data-sort-table="hierarchy" data-sort-key="branchId">Branch</button></th>
+                          <th data-sort-key="actorUserId"><button type="button" class="table-sort-btn" data-sort-table="hierarchy" data-sort-key="actorUserId">Actor</button></th>
+                          <th>Details</th>
+                        </tr>
+                      </thead>
+                      <tbody id="hierarchyEventRows"></tbody>
+                    </table>
+                  </div>
+                </article>
+              </article>
+            </section>
+          </div>
+        </div>
+
+        <button id="mobileMenuOverlay" class="mobile-menu-overlay hidden" type="button" aria-label="Close workspace menu"></button>
+
+        <nav id="mobileBottomNav" class="mobile-bottom-nav hidden" aria-label="Mobile quick navigation">
+          <button type="button" class="mobile-nav-btn active" data-category="overview" aria-label="Go to overview">Overview</button>
+          <button type="button" class="mobile-nav-btn" data-category="operations" aria-label="Go to operations">Operations</button>
+          <button type="button" class="mobile-nav-btn" data-category="collections" aria-label="Go to collections">Collections</button>
+          <button type="button" class="mobile-nav-btn" data-category="reports" aria-label="Go to reports">Reports</button>
+          <button type="button" class="mobile-nav-btn" data-category="security" aria-label="Go to security">Security</button>
+        </nav>
+
+        <p id="dashboardMessage" class="message" role="status" aria-live="polite" aria-atomic="true"></p>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

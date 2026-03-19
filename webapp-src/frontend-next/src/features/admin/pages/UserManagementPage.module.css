@@ -1,0 +1,133 @@
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.toolbar {
+  margin-bottom: 12px;
+}
+
+.toolbar input {
+  width: min(420px, 100%);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.table th,
+.table td {
+  padding: 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  z-index: var(--z-modal);
+  overflow-y: auto;
+}
+
+.modal {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 32px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.form {
+  display: grid;
+  gap: 10px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.multiSelect {
+  min-height: 110px;
+}
+
+.assignmentPreview {
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.assignmentPreviewTitle {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.assignmentPreviewList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.assignmentPreviewChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+  font-size: 0.85rem;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger-text);
+}
+
+.modalActions {
+  display: flex;
+  gap: 8px;
+  position: sticky;
+  bottom: 0;
+  padding-top: 8px;
+  padding-bottom: 4px;
+  background: var(--surface);
+}
+
+@media (max-width: 900px), (max-height: 820px) {
+  .overlay {
+    place-items: start center;
+    padding: 12px;
+  }
+
+  .modal {
+    max-height: calc(100vh - 24px);
+    border-radius: 16px;
+  }
+
+  .multiSelect {
+    min-height: 84px;
+  }
+
+  .modalActions {
+    flex-wrap: wrap;
+  }
+}

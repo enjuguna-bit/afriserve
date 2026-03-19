@@ -1,0 +1,204 @@
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.label {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.value {
+  margin-top: 5px;
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.toolbar {
+  margin-bottom: 12px;
+}
+
+.createPanel {
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.createForm {
+  display: grid;
+  gap: 10px;
+}
+
+.createGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.createField {
+  width: 100%;
+  min-width: 0;
+}
+
+.fieldLabel {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.multiSelect {
+  width: 100%;
+  min-height: 140px;
+  padding: 8px 10px;
+}
+
+.assignmentPreview {
+  margin-top: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.assignmentPreviewTitle {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.assignmentPreviewList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.assignmentPreviewChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+  font-size: 0.85rem;
+}
+
+.createActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.errorText {
+  margin: 0;
+  color: var(--danger-text);
+}
+
+.input {
+  padding: 8px 10px;
+  min-width: 280px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.actionButton,
+.secondaryButton {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.permissionsPanel {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.roleEditor {
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.roleEditor h3 {
+  margin: 0 0 10px;
+}
+
+.roleEditorGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.roleEditorActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.permissionMeta {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.permissionActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.permissionList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.permissionItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.muted {
+  color: var(--text-muted);
+}

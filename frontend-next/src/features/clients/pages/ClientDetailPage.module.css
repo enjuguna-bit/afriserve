@@ -1,0 +1,1023 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   Customer 360 — ClientDetailPage styles
+   Dark-first, premium fintech aesthetic
+═══════════════════════════════════════════════════════════════════════ */
+
+.page {
+  display: grid;
+  gap: 20px;
+  padding-bottom: 40px;
+}
+
+/* ── Page header ──────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 4px 0 8px;
+}
+
+.header h1 {
+  margin: 0 0 4px;
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--navy);
+  letter-spacing: -0.02em;
+}
+
+.muted {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.actionBar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.actionBar a {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 120ms, color 120ms;
+}
+
+.actionBar a:hover {
+  background: var(--surface-soft);
+  color: var(--navy);
+}
+
+/* ── Just-created banner ──────────────────────────────────────────── */
+.justCreatedBanner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border: 1px solid var(--success-border);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(0,220,150,0.08), rgba(12,22,40,0.60));
+  animation: slideDown 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.justCreatedBannerContent {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.justCreatedBannerIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--success-text);
+  color: #fff;
+  font-weight: 800;
+  font-size: 1.1rem;
+}
+
+.justCreatedBannerContent strong {
+  display: block;
+  color: var(--navy);
+  font-size: 1rem;
+}
+
+.justCreatedBannerContent p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.justCreatedBannerClose {
+  background: transparent;
+  border: none;
+  font-size: 1.5rem;
+  line-height: 1;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.justCreatedBannerClose:hover { color: var(--navy); }
+
+/* ── Main layout: sidebar + content ─────────────────────────────── */
+.summaryShell {
+  display: grid;
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+/* ── Profile rail (left sidebar) ─────────────────────────────────── */
+.profileRail {
+  display: grid;
+  gap: 14px;
+  position: sticky;
+  top: 16px;
+}
+
+.profileHero {
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 24px;
+  background: rgba(14,25,44,0.92);
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+}
+
+.profilePhoto,
+.profilePhotoFallback {
+  width: 76px;
+  height: 76px;
+  border-radius: 20px;
+}
+
+.profilePhoto {
+  object-fit: cover;
+  border: 2px solid var(--border-accent);
+}
+
+.profilePhotoFallback {
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--navy), var(--accent-gold));
+  color: #fff;
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.profileCopy h2 {
+  margin: 0 0 4px;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.profileCopy p {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+
+.statusBadgeRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.statusPillActive,
+.statusPillInactive {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.statusPillActive {
+  color: var(--success-text);
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+}
+
+.statusPillInactive {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+}
+
+.kycBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.kycBadgeVerified { color: var(--success-text); background: var(--success-bg); border: 1px solid var(--success-border); }
+.kycBadgePending  { color: var(--accent-gold); background: var(--accent-gold-soft); border: 1px solid rgba(245,166,35,0.3); }
+.kycBadgeRejected { color: var(--danger-text); background: var(--danger-bg); border: 1px solid var(--danger-border); }
+
+/* ── Profile navigation panel ─────────────────────────────────────── */
+.profilePanel {
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 20px;
+  background: rgba(14,25,44,0.92);
+  padding: 16px;
+}
+
+.profilePanel h3 {
+  margin: 0 0 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+}
+
+.quickMenuSections {
+  display: grid;
+  gap: 12px;
+}
+
+.quickMenuSection {
+  display: grid;
+  gap: 4px;
+}
+
+.quickMenuSection + .quickMenuSection {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.quickMenuSectionTitle {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 0 4px;
+  margin-bottom: 4px;
+}
+
+.quickMenu {
+  display: grid;
+  gap: 3px;
+}
+
+.quickMenuButton {
+  width: 100%;
+  border: none;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  color: var(--text-muted);
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: background 100ms, color 100ms;
+}
+
+.quickMenuButton:hover {
+  color: var(--navy);
+  background: rgba(255,255,255,0.04);
+}
+
+.quickMenuButtonActive {
+  color: var(--navy);
+  background: rgba(0,220,150,0.1);
+  font-weight: 700;
+  border: 1px solid rgba(0,220,150,0.15);
+}
+
+.quickMenuButtonActive .quickMenuIcon {
+  background: rgba(0,220,150,0.18);
+  color: var(--accent);
+}
+
+.quickMenuIcon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.05);
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+  transition: background 100ms, color 100ms;
+}
+
+/* ── Meta list in profile rail ────────────────────────────────────── */
+.profileMetaList {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.profileMetaList div {
+  display: grid;
+  gap: 2px;
+}
+
+.profileMetaList dt {
+  color: var(--text-dim);
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.profileMetaList dd {
+  margin: 0;
+  color: var(--navy);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+/* ── Dashboard pane (right column) ───────────────────────────────── */
+.dashboardPane {
+  display: grid;
+  gap: 18px;
+}
+
+/* ── Next-step banner ─────────────────────────────────────────────── */
+.nextStepBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px solid rgba(245,166,35,0.28);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(245,166,35,0.07), rgba(12,22,40,0.80));
+  flex-wrap: wrap;
+}
+
+.nextStepBannerIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--accent-gold);
+  color: #fff;
+  font-weight: 800;
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.nextStepBannerContent {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.nextStepBannerEyebrow {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+
+.nextStepBannerLabel {
+  color: var(--navy);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.nextStepBannerCta {
+  background: var(--accent-gold);
+  color: #fff;
+  border: none;
+  padding: 9px 18px;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 0.86rem;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: opacity 120ms;
+}
+
+.nextStepBannerCta:hover { opacity: 0.88; }
+
+/* ── Cycle / repeat loan banner ───────────────────────────────────── */
+.cycleBanner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px;
+  border: 1px solid rgba(0,220,150,0.22);
+  border-radius: 22px;
+  background: linear-gradient(135deg, rgba(0,220,150,0.07), rgba(12,22,40,0.92));
+  flex-wrap: wrap;
+}
+
+.cycleBannerCopy {
+  display: grid;
+  gap: 6px;
+}
+
+.cycleBannerCopy h2,
+.cycleBannerCopy p {
+  margin: 0;
+}
+
+.cycleBannerCopy h2 { color: var(--navy); font-size: 1.1rem; }
+
+.cycleBannerCopy p {
+  color: var(--text-muted);
+  max-width: 58ch;
+  font-size: 0.88rem;
+}
+
+.cycleBannerEyebrow {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.cycleBannerActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+/* ── Metric cards row ─────────────────────────────────────────────── */
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.metricCard {
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 18px;
+  background: rgba(14,25,44,0.90);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 150ms;
+}
+
+.metricCard:hover { border-color: rgba(0,220,150,0.18); }
+
+.metricLabel {
+  display: block;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.metricValue {
+  display: block;
+  margin-top: 6px;
+  color: var(--navy);
+  font-size: 1.5rem;
+  font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.metricValueGreen { color: var(--success-text); }
+.metricValueAmber { color: var(--accent-gold); }
+.metricValueRed   { color: var(--danger-text); }
+
+.metricMeta {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+/* ── Section cards ────────────────────────────────────────────────── */
+.sectionCard {
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 22px;
+  background: rgba(14,25,44,0.90);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sectionCard h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.sectionTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sectionTitleRow a {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.sectionTitleRow a:hover { text-decoration: underline; }
+
+/* ── Profile grid / info cards ────────────────────────────────────── */
+.grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.card {
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  padding: 13px 15px;
+}
+
+.label {
+  color: var(--text-dim);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.value {
+  margin-top: 5px;
+  color: var(--navy);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+/* ── Loans table ─────────────────────────────────────────────────── */
+.tableWrap { overflow-x: auto; }
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.table th {
+  text-align: left;
+  padding: 9px 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-soft);
+  background: rgba(255,255,255,0.02);
+}
+
+.table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.table tr:last-child td { border-bottom: none; }
+
+.table tr:hover td { background: rgba(255,255,255,0.02); }
+
+.table a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.table a:hover { text-decoration: underline; }
+
+/* Loan status badges */
+.loanStatusBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: capitalize;
+}
+
+.loanStatusActive    { color: var(--success-text); background: var(--success-bg); border: 1px solid var(--success-border); }
+.loanStatusPending   { color: var(--accent-gold); background: var(--accent-gold-soft); border: 1px solid rgba(245,166,35,0.28); }
+.loanStatusClosed    { color: var(--text-muted); background: rgba(255,255,255,0.05); border: 1px solid var(--border-soft); }
+.loanStatusRejected  { color: var(--danger-text); background: var(--danger-bg); border: 1px solid var(--danger-border); }
+.loanStatusDefault   { color: var(--text-muted); background: rgba(255,255,255,0.04); border: 1px solid var(--border-soft); }
+
+/* ── Statement section ────────────────────────────────────────────── */
+.statementHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.statementActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.statementNote {
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border-soft);
+  background: rgba(255,255,255,0.03);
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.statementStack { display: grid; gap: 16px; }
+.statementGroup { display: grid; gap: 12px; }
+
+.statementGrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.statementCard {
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  padding: 12px 14px;
+}
+
+.statementCardLabel {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.statementCardValue {
+  margin-top: 6px;
+  color: var(--navy);
+  font-size: 1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.statementLoanHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.statementLoanHeader h3 { margin: 0; font-size: 0.95rem; color: var(--navy); }
+.statementLoanHeader p  { margin: 4px 0 0; color: var(--text-muted); font-size: 0.84rem; }
+
+.statementBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.statementSubtle { margin: 0; color: var(--text-muted); font-size: 0.84rem; }
+.statementEmpty  { margin: 0; color: var(--text-muted); font-style: italic; }
+
+/* ── Action buttons (shared) ──────────────────────────────────────── */
+.primaryButton,
+.primaryLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 18px;
+  border-radius: 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: opacity 120ms;
+}
+
+.primaryButton {
+  border: none;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-strong), var(--accent));
+}
+
+.primaryLink {
+  color: #fff;
+  background: linear-gradient(135deg, var(--navy), var(--navy-soft));
+}
+
+.primaryButton:hover,
+.primaryLink:hover { opacity: 0.88; }
+
+.primaryButton:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.secondaryButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  background: var(--surface);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 120ms, color 120ms;
+}
+
+.secondaryButton:hover {
+  background: var(--surface-soft);
+  color: var(--navy);
+}
+
+/* ── Actions / onboarding panel ───────────────────────────────────── */
+.onboardingCompact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 14px 16px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 14px;
+  border: 1px solid var(--border-soft);
+}
+
+.onboardingCompactChip {
+  padding: 5px 11px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.onboardingCompactChipReady {
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: var(--success-bg);
+  color: var(--success-text);
+  border: 1px solid var(--success-border);
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.onboardingCompactChipPending {
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(245,166,35,0.1);
+  color: var(--accent-gold);
+  border: 1px solid rgba(245,166,35,0.28);
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+/* Onboarding step tabs */
+.actionTabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.actionTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 100ms, color 100ms, border-color 100ms;
+}
+
+.actionTab:hover {
+  background: rgba(255,255,255,0.05);
+  color: var(--navy);
+}
+
+.actionTabActive {
+  background: rgba(0,220,150,0.1);
+  border-color: rgba(0,220,150,0.28);
+  color: var(--accent);
+}
+
+.actionTabDone {
+  background: rgba(0,220,150,0.06);
+  border-color: rgba(0,220,150,0.15);
+  color: var(--success-text);
+}
+
+.actionTabDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+/* Step form section */
+.stepFormCard {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-soft);
+  padding: 18px 20px;
+  display: grid;
+  gap: 16px;
+  animation: fadeIn 0.2s ease;
+}
+
+.stepFormCard h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.stepFormCard p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+/* ── Action tab: detail panels (legacy — kept for actions that don't use tabs) */
+.stack { display: grid; gap: 12px; }
+
+.detailPanel {
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  padding: 14px 16px;
+}
+
+.detailSummary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--navy);
+  font-size: 0.92rem;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.detailSummary::before {
+  content: '▸';
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  transition: transform 150ms;
+}
+
+details[open] .detailSummary::before { transform: rotate(90deg); }
+
+.noteTitle {
+  font-weight: 700;
+  color: var(--navy);
+  font-size: 0.9rem;
+}
+
+/* ── Inline form ─────────────────────────────────────────────────── */
+.inlineForm {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  align-items: end;
+}
+
+.inlineForm label {
+  display: grid;
+  gap: 5px;
+}
+
+.inlineForm label span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.inlineForm input,
+.inlineForm select {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--navy);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.inlineForm input:focus,
+.inlineForm select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0,220,150,0.12);
+}
+
+.fullWidthField { grid-column: 1 / -1; }
+
+/* ── Empty state ─────────────────────────────────────────────────── */
+.emptyState {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 16px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.02);
+  border: 1px dashed var(--border-soft);
+}
+
+.emptyState p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────── */
+@media (max-width: 960px) {
+  .summaryShell,
+  .metricGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .profileRail { position: static; }
+}
+
+@media (max-width: 700px) {
+  .header,
+  .sectionTitleRow,
+  .statementHeader,
+  .statementLoanHeader,
+  .cycleBanner,
+  .nextStepBanner,
+  .emptyState {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+/* ── Animations ──────────────────────────────────────────────────── */
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

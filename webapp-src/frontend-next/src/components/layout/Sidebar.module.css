@@ -1,0 +1,286 @@
+.sidebar {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  padding: 20px 18px 24px;
+  border-right: 1px solid var(--glass-border);
+  background:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 16%, transparent), transparent 24%),
+    linear-gradient(180deg, color-mix(in srgb, var(--glass-surface-strong) 98%, white), var(--glass-surface));
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.04);
+  transition: width 0.22s ease, transform 0.22s ease, padding 0.22s ease;
+  overflow: auto;
+  backdrop-filter: blur(calc(var(--glass-blur) + 4px));
+}
+
+.brandCard,
+.profileCard {
+  border: 1px solid var(--glass-border);
+  border-radius: 30px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--glass-surface-strong) 96%, white), var(--glass-surface));
+  box-shadow: var(--shadow-elev);
+}
+
+.brandCard {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  gap: 12px;
+  padding: 18px 16px 16px;
+}
+
+.brandCard::after {
+  content: "";
+  position: absolute;
+  right: -28px;
+  top: -20px;
+  width: 116px;
+  height: 116px;
+  border-radius: 999px;
+  background: radial-gradient(circle at center, color-mix(in srgb, var(--accent-gold) 20%, transparent), transparent 70%);
+}
+
+.logo {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: min(100%, 220px);
+  height: auto;
+}
+
+.tagline {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.profileCard {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+}
+
+.profileAvatar {
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: 20px;
+  background: linear-gradient(135deg, var(--navy), var(--navy-soft));
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.profileName {
+  display: block;
+  color: var(--navy);
+}
+
+.profileMeta {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.nav {
+  display: grid;
+  gap: 18px;
+}
+
+.section {
+  display: grid;
+  gap: 12px;
+}
+
+.sectionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+}
+
+.sectionTitle {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+}
+
+.sectionCount {
+  min-width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
+  color: var(--navy);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.sectionLinks {
+  display: grid;
+  gap: 6px;
+}
+
+.link,
+.linkButton {
+  position: relative;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 22px;
+  border: 1px solid transparent;
+  color: var(--text);
+  text-decoration: none;
+  background: color-mix(in srgb, var(--glass-surface) 88%, transparent);
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.linkButton {
+  text-align: left;
+}
+
+.link:hover,
+.linkButton:hover {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--glass-border));
+}
+
+.linkGlyph {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--navy) 12%, var(--surface-soft)), color-mix(in srgb, var(--accent) 14%, var(--surface-soft)));
+  color: var(--navy);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.linkCopy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.linkLabel {
+  color: inherit;
+  font-weight: 700;
+}
+
+.linkMeta {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.active {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--glass-border));
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 12%, transparent), transparent 48%),
+    linear-gradient(180deg, color-mix(in srgb, var(--glass-surface-strong) 96%, white), var(--glass-surface));
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--navy) 10%, transparent);
+}
+
+.activeRail {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  bottom: 8px;
+  width: 6px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-gold));
+}
+
+.nestedBlock {
+  display: grid;
+  gap: 6px;
+}
+
+.childLinks,
+.grandChildLinks {
+  display: grid;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.childLinks {
+  margin-left: 20px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-soft);
+}
+
+.grandChildLinks {
+  margin-left: 16px;
+}
+
+.childLink {
+  grid-template-columns: 38px minmax(0, 1fr);
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.childLink .linkGlyph {
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+}
+
+.expander {
+  font-size: 1rem;
+  font-weight: 700;
+  color: inherit;
+}
+
+.open {
+  width: 296px;
+}
+
+.closed {
+  width: 0;
+  border-right: none;
+  padding: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(320px, 82vw);
+    z-index: var(--z-sidebar);
+    box-shadow: var(--shadow-float);
+    transform: translateX(-110%);
+  }
+
+  .open {
+    width: min(320px, 82vw);
+    border-right: 1px solid var(--glass-border);
+    padding: 20px 18px 24px;
+    transform: translateX(0);
+  }
+
+  .closed {
+    width: min(320px, 82vw);
+    border-right: 1px solid var(--glass-border);
+    padding: 20px 18px 24px;
+    transform: translateX(-110%);
+  }
+}

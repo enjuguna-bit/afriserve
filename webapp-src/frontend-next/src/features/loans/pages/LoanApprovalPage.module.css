@@ -1,0 +1,141 @@
+.subtle {
+  color: var(--text-muted);
+  margin-top: -6px;
+}
+
+.handoffBanner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin: 18px 0 22px;
+  padding: 16px 18px;
+  border: 1px solid rgba(167, 178, 196, 0.24);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(240, 246, 252, 0.96), rgba(255, 251, 240, 0.96));
+}
+
+.handoffCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.handoffActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.handoffPrimary,
+.handoffSecondary,
+.inlineLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  text-decoration: none;
+  font: inherit;
+}
+
+.handoffPrimary {
+  color: #fff;
+  background: var(--navy);
+}
+
+.handoffSecondary,
+.inlineLink {
+  border: 1px solid rgba(32, 49, 73, 0.14);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--navy);
+}
+
+.toolbar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 20px 0 16px;
+}
+
+.filterGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+  color: var(--text-muted);
+}
+
+.filterGroup select {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-primary);
+  padding: 10px 12px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 10px;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: top;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.reject {
+  border-color: var(--danger-border);
+  color: var(--danger-text);
+}
+
+.metaBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.blockerList {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--danger-text);
+}
+
+.reviewStack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.noteInput {
+  width: 100%;
+  min-width: 220px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised, var(--surface));
+  color: var(--text-primary);
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+@media (max-width: 900px) {
+  .handoffBanner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

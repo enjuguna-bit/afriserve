@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 380" role="img" aria-labelledby="afriserveLogoTitle">
+  <title id="afriserveLogoTitle">Afriserve logo</title>
+  <defs>
+    <linearGradient id="logoContinent" x1="64" x2="238" y1="64" y2="334" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8BD091" />
+      <stop offset="0.54" stop-color="#52AF5F" />
+      <stop offset="1" stop-color="#2A8640" />
+    </linearGradient>
+    <linearGradient id="logoGold" x1="96" x2="275" y1="243" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D3A24D" />
+      <stop offset="0.5" stop-color="#E5BC6A" />
+      <stop offset="1" stop-color="#C8943D" />
+    </linearGradient>
+    <filter id="logoShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="12" flood-color="#0E2E25" flood-opacity="0.16" />
+    </filter>
+  </defs>
+  <g filter="url(#logoShadow)">
+    <path
+      fill="url(#logoContinent)"
+      d="M168 42C153 45 142 57 134 71C117 74 104 82 95 95C85 109 83 123 78 138C63 149 54 165 54 184C54 200 61 214 72 226C78 240 84 256 94 271C98 286 101 302 109 318C118 336 135 351 154 358C175 365 196 356 206 338C214 326 216 311 224 299C232 287 246 281 256 269C266 256 270 239 266 222C278 209 286 193 286 175C286 158 280 143 269 130C270 113 264 98 251 88C239 78 223 76 209 76C198 62 184 51 168 42Z"
+    />
+    <path
+      fill="#FFFFFF"
+      opacity="0.22"
+      d="M96 170C116 154 144 146 170 150C197 154 223 167 242 184C220 175 192 171 168 175C146 179 122 190 102 206C95 196 93 184 96 170Z"
+    />
+    <path
+      fill="#076D2B"
+      d="M20 126C45 112 78 106 116 110C140 100 171 101 199 112C223 106 251 110 281 122C264 124 244 128 224 132C211 134 199 140 188 149C170 142 150 141 131 145C108 150 84 145 58 141C43 138 30 133 20 126Z"
+    />
+    <path
+      fill="#065F25"
+      d="M36 156C58 145 87 142 118 148C141 140 168 141 194 151C220 145 247 148 272 160C256 161 241 164 224 168C208 171 194 179 182 189C164 182 146 181 128 184C107 188 86 182 66 176C53 172 43 166 36 156Z"
+    />
+    <path
+      fill="none"
+      stroke="#EEF9F2"
+      stroke-linecap="round"
+      stroke-width="5"
+      d="M34 144C70 161 114 165 150 156C168 152 184 144 201 136"
+    />
+    <path
+      fill="#066B26"
+      d="M150 142C138 156 135 173 139 190C143 204 150 217 154 231C159 247 159 265 153 282C147 298 136 313 131 330C143 319 154 307 164 296C173 286 181 274 184 260C188 239 182 219 186 198C189 182 199 165 218 145C203 149 189 159 179 172C170 184 166 197 164 211C158 192 155 173 159 154C157 148 154 144 150 142Z"
+    />
+    <g fill="none" stroke="#066B26" stroke-linecap="round" stroke-width="6">
+      <path d="M151 284C139 300 133 318 132 342" />
+      <path d="M160 286C162 306 159 326 151 350" />
+      <path d="M171 280C179 296 179 318 172 342" />
+      <path d="M183 270C196 286 202 307 199 330" />
+      <path d="M148 274C134 281 122 295 116 311" />
+      <path d="M141 286C126 294 114 309 108 326" />
+      <path d="M188 257C203 263 216 275 224 291" />
+      <path d="M170 247C185 247 198 252 211 261" />
+    </g>
+    <path
+      fill="url(#logoGold)"
+      stroke="#F9F2E6"
+      stroke-linejoin="round"
+      stroke-width="10"
+      d="M108 222L95 209L216 88L201 73L283 47L257 130L242 115L121 236Z"
+    />
+    <path
+      fill="url(#logoGold)"
+      stroke="#F9F2E6"
+      stroke-linejoin="round"
+      stroke-width="8"
+      d="M158 254L148 244L191 201L179 189L236 174L219 231L208 219L165 262Z"
+    />
+  </g>
+  <text
+    x="336"
+    y="246"
+    font-family="Bahnschrift, 'Trebuchet MS', 'Segoe UI', sans-serif"
+    font-size="112"
+    font-weight="700"
+    letter-spacing="4"
+  >
+    <tspan fill="#062B57">AFRI</tspan>
+    <tspan fill="#C99947">SERVE</tspan>
+  </text>
+</svg>

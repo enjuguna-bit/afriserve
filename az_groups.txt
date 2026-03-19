@@ -1,0 +1,8 @@
+Name                   Location          Status
+---------------------  ----------------  ---------
+Customers              westus2           Succeeded
+microfinance           southeastasia     Succeeded
+AfriserveMicrofinance  southafricanorth  Succeeded
+afriserve-prod-rg      eastus            Succeeded
+rg-afsrv26             eastus            Succeeded
+rg-afsrv26webapp       eastus            Succeeded

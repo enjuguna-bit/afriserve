@@ -1,0 +1,239 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - img "Afriserve" [ref=e6]
+    - generic [ref=e7]:
+      - generic [ref=e8]: Quick actions
+      - generic [ref=e9]:
+        - link "+ Borrower" [ref=e10] [cursor=pointer]:
+          - /url: /clients/new
+        - link "+ Loan" [ref=e11] [cursor=pointer]:
+          - /url: /loans/new
+        - link "Record payment" [ref=e12] [cursor=pointer]:
+          - /url: /collections
+    - navigation [ref=e13]:
+      - generic [ref=e14]:
+        - button "Operate" [ref=e15] [cursor=pointer]:
+          - generic [ref=e16]: Operate
+          - generic [ref=e17]: ›
+        - generic [ref=e18]:
+          - button "Borrowers" [ref=e20] [cursor=pointer]:
+            - generic [ref=e21]: Borrowers
+            - generic [ref=e22]: ›
+          - link "Loans" [ref=e24] [cursor=pointer]:
+            - /url: /loans
+            - generic [ref=e25]: Loans
+          - link "Collections" [ref=e27] [cursor=pointer]:
+            - /url: /collections
+            - generic [ref=e28]: Collections
+          - button "Risk & collateral" [ref=e30] [cursor=pointer]:
+            - generic [ref=e31]: Risk & collateral
+            - generic [ref=e32]: ›
+      - generic [ref=e33]:
+        - button "Measure" [ref=e34] [cursor=pointer]:
+          - generic [ref=e35]: Measure
+          - generic [ref=e36]: ›
+        - generic [ref=e37]:
+          - link "Dashboard" [ref=e39] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=e41]: Dashboard
+          - link "Reports" [ref=e43] [cursor=pointer]:
+            - /url: /reports
+            - generic [ref=e44]: Reports
+      - button "Configure" [ref=e46] [cursor=pointer]:
+        - generic [ref=e47]: Configure
+        - generic [ref=e48]: ›
+    - generic [ref=e49]:
+      - generic [ref=e50]: AM
+      - generic [ref=e51]:
+        - strong [ref=e52]: alex mwangi
+        - generic [ref=e53]: Client onboarding, loan origination, and collections operations.
+        - generic [ref=e54]: MOLO
+  - generic [ref=e55]:
+    - banner [ref=e56]:
+      - generic [ref=e57]:
+        - button "Menu" [ref=e58] [cursor=pointer]
+        - generic [ref=e59]:
+          - paragraph [ref=e60]: measure
+          - generic [ref=e61]: Dashboard
+      - generic [ref=e62]:
+        - button "Open quick search" [ref=e63] [cursor=pointer]:
+          - generic [ref=e64]: Quick Find
+          - generic [ref=e65]: CTRL K
+        - link "Search Page" [ref=e66] [cursor=pointer]:
+          - /url: /search
+        - button "Notifications" [ref=e68] [cursor=pointer]
+        - button "Night mode" [ref=e69] [cursor=pointer]
+        - link "Profile" [ref=e70] [cursor=pointer]:
+          - /url: /profile
+        - generic [ref=e71]:
+          - generic [ref=e72]: AM
+          - generic [ref=e73]:
+            - strong [ref=e74]: alex mwangi
+            - generic [ref=e75]: Client onboarding, loan origination, and collections operations.
+            - generic [ref=e76]: MOLO
+        - button "Logout" [ref=e77] [cursor=pointer]
+    - main [ref=e78]:
+      - generic [ref=e80]:
+        - generic [ref=e82]:
+          - paragraph [ref=e83]: Dashboard
+          - heading "Dashboard" [level=1] [ref=e84]
+          - paragraph [ref=e85]: MOLO Â· branch performance
+        - generic [ref=e87]:
+          - generic [ref=e88]: Good afternoon, alex
+          - generic [ref=e89]: MOLO portfolio is on track. Collections are within normal range.
+        - generic [ref=e90]:
+          - generic [ref=e91]: Today
+          - generic [ref=e92]:
+            - article [ref=e93]:
+              - generic [ref=e94]: Due today
+              - generic [ref=e95]: Ksh 0.00
+              - generic [ref=e97]: No dues today
+            - article [ref=e98]:
+              - generic [ref=e99]: Collected today
+              - generic [ref=e100]: Ksh 0.00
+              - generic [ref=e102]: No dues today
+            - article [ref=e103]:
+              - generic [ref=e104]: Arrears backlog
+              - generic [ref=e105]: Ksh 0.00
+              - generic [ref=e106]: From prior periods
+        - generic [ref=e107]:
+          - generic [ref=e108]: Portfolio
+          - generic [ref=e109]:
+            - article [ref=e110]:
+              - generic [ref=e111]: Total borrowers
+              - generic [ref=e112]: "2"
+              - generic [ref=e113]:
+                - generic [ref=e114]: â†‘ 2
+                - generic [ref=e115]: this month
+            - article [ref=e116]:
+              - generic [ref=e117]: Active loans
+              - generic [ref=e118]: "3"
+              - generic [ref=e119]:
+                - generic [ref=e120]: â†‘ 6
+                - generic [ref=e121]: disbursed MTD
+            - article [ref=e122]:
+              - generic [ref=e123]: Outstanding balance
+              - generic [ref=e124]: Ksh 20,338.01
+              - generic [ref=e125]: 2 active customers
+            - article [ref=e126]:
+              - generic [ref=e127]: PAR ratio
+              - generic [ref=e128]: 0.00%
+              - generic [ref=e129]: Portfolio at risk
+        - generic [ref=e130]:
+          - generic [ref=e131]:
+            - generic [ref=e132]:
+              - generic [ref=e133]:
+                - paragraph [ref=e134]: Portfolio risk
+                - heading "Arrears aging and NPL exposure" [level=2] [ref=e135]
+              - generic [ref=e136]:
+                - generic [ref=e137]: Arrears rate
+                - text: —
+                - generic [ref=e138]: Healthy
+            - generic [ref=e139]:
+              - generic [ref=e140]:
+                - generic [ref=e141]:
+                  - generic [ref=e142]: PAR 30
+                  - generic [ref=e143]: Overdue
+                - strong [ref=e144]: Ksh 0
+                - generic [ref=e145]: None overdue
+              - generic [ref=e146]:
+                - generic [ref=e147]:
+                  - generic [ref=e148]: PAR 60
+                  - generic [ref=e149]: Pre-write-off watch
+                - strong [ref=e150]: Ksh 0
+                - generic [ref=e151]: Monitored for write-off risk
+              - generic [ref=e152]:
+                - generic [ref=e153]:
+                  - generic [ref=e154]: PAR 90
+                  - generic [ref=e155]: Non-performing
+                - strong [ref=e156]: Ksh 0
+                - generic [ref=e157]: No NPL loans
+              - generic [ref=e158]:
+                - generic [ref=e159]:
+                  - generic [ref=e160]: Written off
+                  - generic [ref=e161]: Expensed balance
+                - strong [ref=e162]: Ksh 0
+                - generic [ref=e163]: No write-offs
+            - link "Full arrears & PAR report →" [ref=e164] [cursor=pointer]:
+              - /url: /reports
+          - generic [ref=e165]:
+            - generic [ref=e166]:
+              - generic [ref=e167]:
+                - paragraph [ref=e168]: Collection pulse
+                - heading "Today's collection detail" [level=2] [ref=e169]
+              - generic [ref=e170]:
+                - generic [ref=e171]: 0%
+                - generic [ref=e172]: coverage
+            - generic [ref=e174]:
+              - generic [ref=e175]: Collection progress
+              - generic [ref=e176]: 0% of today's dues collected
+            - generic [ref=e179]:
+              - generic [ref=e180]:
+                - generic [ref=e181]: Repayment transactions
+                - strong [ref=e182]: —
+                - generic [ref=e183]: loans paid today
+              - generic [ref=e184]:
+                - generic [ref=e185]: Still to collect
+                - strong [ref=e186]: All clear
+                - generic [ref=e187]: no unpaid dues today
+            - link "Collections register →" [ref=e188] [cursor=pointer]:
+              - /url: /collections
+        - generic [ref=e189]:
+          - article [ref=e190]:
+            - generic [ref=e192]:
+              - paragraph [ref=e193]: Borrowers · month to date
+              - heading "Client acquisition" [level=2] [ref=e194]
+            - generic [ref=e195]:
+              - generic [ref=e196]:
+                - generic [ref=e197]: New clients registered
+                - strong [ref=e198]: "2"
+              - generic [ref=e199]:
+                - generic [ref=e200]: First-time borrowers
+                - strong [ref=e201]: "2"
+              - generic [ref=e202]:
+                - generic [ref=e203]: Repeat borrowers
+                - strong [ref=e204]: "2"
+              - generic [ref=e205]:
+                - generic [ref=e206]: Repeat borrower rate
+                - strong [ref=e207]: 50%
+            - link "Borrower register →" [ref=e208] [cursor=pointer]:
+              - /url: /clients
+          - article [ref=e209]:
+            - generic [ref=e211]:
+              - paragraph [ref=e212]: Disbursements · month to date
+              - heading "Loan issuance" [level=2] [ref=e213]
+            - generic [ref=e214]:
+              - generic [ref=e215]:
+                - generic [ref=e216]: Loans disbursed
+                - strong [ref=e217]: "6"
+              - generic [ref=e218]:
+                - generic [ref=e219]: Total amount disbursed
+                - strong [ref=e220]: —
+              - generic [ref=e221]:
+                - generic [ref=e222]: Average loan size
+                - strong [ref=e223]: —
+            - link "Loans register →" [ref=e224] [cursor=pointer]:
+              - /url: /loans
+          - article [ref=e225]:
+            - generic [ref=e227]:
+              - paragraph [ref=e228]: Loan health
+              - heading "Restructured & watchlist" [level=2] [ref=e229]
+            - generic [ref=e230]:
+              - generic [ref=e231]:
+                - generic [ref=e232]: Restructured loans
+                - strong [ref=e233]: —
+              - generic [ref=e234]:
+                - generic [ref=e235]: Overdue installments
+                - strong [ref=e236]: —
+              - generic [ref=e237]:
+                - generic [ref=e238]: PAR 90 loans (NPL)
+                - strong [ref=e239]: —
+              - generic [ref=e240]:
+                - generic [ref=e241]: Written-off balance
+                - strong [ref=e242]: None
+            - link "Risk & arrears report →" [ref=e243] [cursor=pointer]:
+              - /url: /reports
+```

@@ -1,0 +1,197 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ROUTE LOADING SHELL — dark analytics skeleton
+═══════════════════════════════════════════════════════════════════════════ */
+.shell {
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse at top left,  rgba(0, 220, 150, 0.06), transparent 28%),
+    radial-gradient(ellipse at bottom right, rgba(75, 156, 245, 0.04), transparent 26%),
+    linear-gradient(180deg, var(--bg-mid), var(--bg-deep));
+}
+
+.workspaceShell {
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr);
+}
+
+.authShell {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+/* ── Skeleton blocks ─────────────────────────────────────────────────────── */
+.block {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+.block::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(0, 220, 150, 0.05),
+    rgba(255, 255, 255, 0.04),
+    transparent
+  );
+  transform: translateX(-100%);
+  animation: shimmer 1.6s linear infinite;
+}
+
+/* ── Sidebar skeleton ────────────────────────────────────────────────────── */
+.sidebar {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  padding: 24px 14px;
+  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(10, 18, 32, 0.98), rgba(7, 13, 24, 0.96));
+}
+
+.sidebarBrand   { width: 184px; height: 64px; border-radius: 18px; }
+.sidebarStack   { display: grid; gap: 10px; }
+.sidebarItem    { height: 46px; border-radius: 12px; }
+
+/* ── Main area skeleton ──────────────────────────────────────────────────── */
+.workspaceMain {
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px 0;
+}
+
+.headerLead, .headerActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.headerLead      { flex-direction: column; align-items: flex-start; }
+.headerEyebrow   { width: 120px; height: 14px; border-radius: 999px; }
+.headerTitle     { width: 220px; height: 38px; }
+.headerChip      { width: 110px; height: 40px; border-radius: 12px; }
+.headerProfile   { width: 200px; height: 60px; border-radius: 16px; }
+
+.content {
+  display: grid;
+  gap: 16px;
+  padding: 16px 18px 24px;
+}
+
+/* ── Card skeletons ──────────────────────────────────────────────────────── */
+.hero, .dataCard, .authHero, .authCard {
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
+}
+
+.hero {
+  display: grid;
+  gap: 14px;
+  padding: 20px 22px;
+}
+
+.heroHeadline  { width: min(480px, 80%); height: 32px; }
+.heroLead      { width: min(640px, 92%); height: 16px; }
+
+.heroActions      { display: flex; flex-wrap: wrap; gap: 10px; }
+.heroChip         { width: 120px; height: 42px; border-radius: 12px; }
+.heroChipWide     { width: 168px; height: 42px; border-radius: 12px; }
+
+.cardGrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.dataCard {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.cardLabel  { width: 86px;  height: 12px; border-radius: 999px; }
+.cardValue  { width: 148px; height: 26px; }
+.cardMeta   { width: 116px; height: 10px; border-radius: 999px; }
+
+/* ── Auth frame skeleton ─────────────────────────────────────────────────── */
+.authFrame {
+  width: min(1060px, 100%);
+  display: grid;
+  gap: 22px;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 400px);
+}
+
+.authHero, .authCard {
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+}
+
+.authHero {
+  align-content: start;
+  background:
+    radial-gradient(ellipse at top right, rgba(0, 220, 150, 0.07), transparent 38%),
+    var(--surface-card);
+}
+
+.brandMark       { width: 170px; height: 60px; }
+.authEyebrow     { width: 160px; height: 12px; border-radius: 999px; }
+.authHeadline    { width: min(420px, 90%); height: 38px; }
+.authLead        { width: min(480px, 94%); height: 16px; }
+
+.authList        { display: grid; gap: 10px; margin-top: 8px; }
+.authListItem    { display: flex; align-items: center; gap: 10px; }
+.authBullet      { width: 16px; height: 16px; border-radius: 50%; }
+.authListLine    { width: min(400px, 86%); height: 12px; border-radius: 999px; }
+
+.authCard        { align-content: start; }
+.authCardEyebrow { width: 100px; height: 12px; border-radius: 999px; }
+.authCardTitle   { width: 140px; height: 28px; }
+
+.authField     { display: grid; gap: 7px; }
+.fieldLabel    { width: 76px;  height: 12px; border-radius: 999px; }
+.fieldInput    { width: 100%;  height: 48px; }
+.authButton    { width: 100%;  height: 48px; border-radius: 12px; }
+
+@keyframes shimmer {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
+}
+
+@media (max-width: 1024px) {
+  .workspaceShell  { grid-template-columns: 80px minmax(0, 1fr); }
+  .sidebarBrand    { width: 48px; }
+  .headerProfile   { width: 150px; }
+  .authFrame       { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 900px) {
+  .workspaceShell { grid-template-columns: 1fr; }
+  .sidebar        { display: none; }
+  .header, .content { padding-left: 10px; padding-right: 10px; }
+  .header { padding-top: 10px; flex-direction: column; align-items: stretch; }
+  .headerActions   { justify-content: space-between; }
+  .headerProfile   { flex: 1 1 auto; width: auto; }
+}
+
+@media (max-width: 640px) {
+  .authShell { padding: 10px; }
+  .authHero, .authCard, .hero, .dataCard { padding: 18px; border-radius: 16px; }
+  .heroHeadline, .authHeadline { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .block::after { animation: none; }
+}

@@ -1,0 +1,85 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-afriserve}
+      POSTGRES_USER: ${POSTGRES_USER:-afriserve}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-afriserve}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-afriserve} -d ${POSTGRES_DB:-afriserve}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-afriserve}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-afriserve}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: ${PORT:-3000}
+      DB_CLIENT: ${DB_CLIENT:-postgres}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://afriserve:afriserve@postgres:5432/afriserve}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      AUTH_TOKEN_STORE_REDIS_URL: ${AUTH_TOKEN_STORE_REDIS_URL:-redis://redis:6379}
+      AUTH_SESSION_CACHE_REDIS_URL: ${AUTH_SESSION_CACHE_REDIS_URL:-redis://redis:6379}
+      RATE_LIMIT_REDIS_URL: ${RATE_LIMIT_REDIS_URL:-redis://redis:6379}
+      JOB_QUEUE_REDIS_URL: ${JOB_QUEUE_REDIS_URL:-redis://redis:6379}
+      REPORT_CACHE_REDIS_URL: ${REPORT_CACHE_REDIS_URL:-redis://redis:6379}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://afriserve:afriserve@rabbitmq:5672}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - ./data/uploads:/app/data/uploads
+
+volumes:
+  postgres-data:
+  redis-data:
+  rabbitmq-data:

@@ -1,0 +1,300 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   WIZARD PAGE — dark analytics theme
+═══════════════════════════════════════════════════════════════════════════ */
+.page { display: grid; gap: 16px; }
+
+/* ── Hero ────────────────────────────────────────────────────────────────── */
+.hero {
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(ellipse at top right, rgba(0, 220, 150, 0.07), transparent 38%),
+    linear-gradient(160deg, rgba(13, 23, 42, 0.98), rgba(9, 16, 30, 0.95));
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(22px);
+}
+
+.heroTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.eyebrow {
+  margin: 0 0 5px;
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 700;
+}
+
+.hero h1 {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+  font-weight: 700;
+}
+
+.subtitle {
+  margin: 7px 0 0;
+  color: var(--text-muted);
+  max-width: 56ch;
+}
+
+.heroActions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.ghostLink,
+.secondaryButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 600;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.ghostLink:hover,
+.secondaryButton:hover {
+  border-color: var(--border-accent);
+  background: rgba(0, 220, 150, 0.06);
+  color: var(--accent);
+}
+
+/* ── Progress rail ───────────────────────────────────────────────────────── */
+.progressRail { display: grid; gap: 9px; }
+
+.progressMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.progressBar {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.progressBarFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent));
+  box-shadow: 0 0 8px var(--accent-glow);
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Step cards ──────────────────────────────────────────────────────────── */
+.stepList {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.stepCard {
+  display: grid;
+  gap: 7px;
+  padding: 15px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-dim);
+  transition: border-color 0.15s ease;
+}
+
+.stepActive {
+  border-color: rgba(0, 220, 150, 0.28);
+  background:
+    radial-gradient(ellipse at top right, rgba(0, 220, 150, 0.08), transparent 48%),
+    rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  box-shadow: 0 0 20px rgba(0, 220, 150, 0.08), var(--shadow-card);
+}
+
+.stepComplete {
+  border-color: rgba(0, 220, 150, 0.18);
+  background: rgba(0, 220, 150, 0.04);
+}
+
+.stepBadge {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+
+.stepActive .stepBadge {
+  background: linear-gradient(135deg, var(--accent-strong), var(--accent));
+  color: #001a0d;
+  box-shadow: 0 0 12px rgba(0, 220, 150, 0.28);
+}
+
+.stepComplete .stepBadge {
+  background: rgba(0, 220, 150, 0.15);
+  color: var(--accent);
+}
+
+.stepTitle       { font-weight: 700; color: var(--text); font-size: 0.9rem; }
+.stepDescription { font-size: 0.82rem; color: var(--text-muted); }
+
+/* ── Workspace (panel + summary) ─────────────────────────────────────────── */
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+  align-items: start;
+}
+
+.panel,
+.summaryPanel {
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: linear-gradient(160deg, rgba(13, 23, 42, 0.97), rgba(9, 16, 30, 0.94));
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(22px);
+}
+
+.panelHeader { display: grid; gap: 4px; }
+
+.panelHeader h2,
+.summaryPanel h2 {
+  margin: 0;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.panelHeader p,
+.summaryPanel p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+/* ── Fields ──────────────────────────────────────────────────────────────── */
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+}
+
+.field,
+.fieldWide { display: grid; gap: 5px; }
+.fieldWide { grid-column: 1 / -1; }
+
+.fieldLabel { font-size: 0.82rem; color: var(--text-muted); font-weight: 500; }
+.fieldHint  { margin: 0; font-size: 0.76rem; color: var(--text-dim); }
+.error      { font-size: 0.8rem; color: var(--danger-text); }
+
+/* ── Summary items ───────────────────────────────────────────────────────── */
+.summaryList { display: grid; gap: 10px; }
+
+.summaryItem {
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+}
+
+.summaryLabel {
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 700;
+}
+
+.summaryValue { color: var(--text); font-weight: 700; font-size: 0.92rem; }
+
+.metaCard {
+  padding: 13px 15px;
+  border-radius: 14px;
+  background: rgba(0, 220, 150, 0.07);
+  border: 1px solid rgba(0, 220, 150, 0.14);
+  color: var(--text);
+}
+
+.metaCard strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--accent);
+  font-size: 0.88rem;
+}
+
+/* ── Actions ─────────────────────────────────────────────────────────────── */
+.wizardActions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.actionGroup { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.primaryButton,
+.secondaryButton {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter 130ms ease, transform 130ms ease;
+}
+
+.primaryButton {
+  border: none;
+  background: linear-gradient(135deg, var(--accent-strong), var(--accent));
+  color: #001a0d;
+  box-shadow: 0 6px 20px rgba(0, 220, 150, 0.26);
+}
+
+.primaryButton:hover  { filter: brightness(1.06); transform: translateY(-1px); }
+.secondaryButton:hover { filter: brightness(1.08); }
+
+.summaryPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 980px) {
+  .workspace { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 840px) {
+  .stepList, .fieldGrid { grid-template-columns: 1fr; }
+  .hero, .panel, .summaryPanel { padding: 18px 16px; }
+}

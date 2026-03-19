@@ -1,0 +1,14 @@
+{
+  "environmentName": "AzureCloud",
+  "homeTenantId": "e3f2ebb3-0810-4959-8e05-6cecd8c00ff2",
+  "id": "5dd22bbf-548f-4b9e-bcfc-5be366d6dbbe",
+  "isDefault": true,
+  "managedByTenants": [],
+  "name": "Azure for Students",
+  "state": "Enabled",
+  "tenantId": "e3f2ebb3-0810-4959-8e05-6cecd8c00ff2",
+  "user": {
+    "name": "ErickGitau@my.uopeople.edu",
+    "type": "user"
+  }
+}

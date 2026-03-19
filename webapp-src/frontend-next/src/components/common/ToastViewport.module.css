@@ -1,0 +1,45 @@
+.viewport {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: var(--z-toast);
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100vw - 28px));
+}
+
+.toast {
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: 10px 12px;
+  box-shadow: var(--shadow-elev);
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.success {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.error {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.info {
+  border-color: var(--info-border);
+  background: var(--info-bg);
+  color: var(--info-text);
+}
+
+.close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+}

@@ -1,0 +1,430 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   REPORTS PAGE — dark analytics theme
+═══════════════════════════════════════════════════════════════════════════ */
+
+.page { display: grid; gap: 16px; }
+
+/* ── Cards ───────────────────────────────────────────────────────────────── */
+.generatorCard,
+.resultCard {
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background:
+    radial-gradient(ellipse at top right, rgba(0, 220, 150, 0.05), transparent 40%),
+    linear-gradient(160deg, rgba(13, 23, 42, 0.98), rgba(9, 16, 30, 0.95));
+  box-shadow: var(--shadow-card);
+}
+
+.generatorCard { padding: 22px 26px 26px; }
+
+.title {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 1.7rem;
+  font-weight: 700;
+}
+
+/* ── Divider ─────────────────────────────────────────────────────────────── */
+.dividerLabel {
+  margin-top: 22px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-dim);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.68rem;
+}
+
+.dividerLabel::after {
+  content: '';
+  height: 1px;
+  flex: 1 1 auto;
+  background: var(--border);
+}
+
+/* ── Filter grids ────────────────────────────────────────────────────────── */
+.grid,
+.customRangeGrid {
+  margin-top: 14px;
+  display: grid;
+  gap: 14px;
+  align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+
+/* ── Compound field ──────────────────────────────────────────────────────── */
+.compoundField {
+  display: flex;
+  align-items: stretch;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+  transition: all 140ms ease;
+}
+
+.compoundField:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.compoundLabel {
+  flex: 0 0 auto;
+  min-width: 86px;
+  padding: 11px 14px;
+  display: flex;
+  align-items: center;
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 0.82rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-right: 1px solid var(--border);
+}
+
+.compoundField select,
+.compoundField input {
+  flex: 1 1 auto;
+  min-height: 46px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 10px 13px;
+  font: inherit;
+  font-weight: 500;
+  width: 100%;
+}
+
+.compoundField select:focus,
+.compoundField input:focus { outline: none; }
+
+/* ── Multi-select ────────────────────────────────────────────────────────── */
+.multiSelectWrap { position: relative; flex: 1 1 auto; }
+
+.multiSelectTrigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 13px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.multiSelectDropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: rgba(12, 22, 40, 0.99);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-float);
+  max-height: 230px;
+  overflow-y: auto;
+  z-index: 100;
+  padding: 6px;
+  backdrop-filter: blur(20px);
+}
+
+.multiSelectOption {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 100ms;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.multiSelectOption:hover { background: rgba(255, 255, 255, 0.05); color: var(--text); }
+
+.multiSelectOption input {
+  margin: 0;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.fieldHint { margin: 5px 0 0 10px; color: var(--text-dim); font-size: 0.78rem; }
+
+.reportDescription {
+  margin: 12px 0 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+.reportHint { margin: 7px 0 0; color: var(--warning-text); font-size: 0.8rem; font-weight: 500; }
+
+.generateWrap { margin-top: 22px; display: flex; justify-content: flex-end; }
+
+.generateButton {
+  min-width: 190px;
+  min-height: 50px;
+  border: none;
+  border-radius: 13px;
+  background: linear-gradient(135deg, var(--accent-strong), var(--accent));
+  color: #001a0d;
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: filter 130ms ease, transform 130ms ease;
+  box-shadow: 0 6px 22px rgba(0, 220, 150, 0.28);
+}
+
+.generateButton:hover {
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+}
+
+/* ── Result card ─────────────────────────────────────────────────────────── */
+.resultCard {
+  padding: 22px 26px;
+  display: flex;
+  flex-direction: column;
+}
+
+.resultHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.resultEyebrow {
+  margin: 0 0 5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.resultHeader h2 {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.resultDescription { margin: 7px 0 0; color: var(--text-muted); max-width: 58ch; line-height: 1.5; }
+
+/* ── Export buttons ──────────────────────────────────────────────────────── */
+.exportGroup { display: flex; gap: 8px; }
+
+.exportGroup button {
+  min-width: 74px;
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.86rem;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.exportGroup button:hover:not(:disabled) {
+  background: rgba(0, 220, 150, 0.08);
+  color: var(--accent);
+  border-color: var(--border-accent);
+}
+
+.exportGroup button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Metric cards ────────────────────────────────────────────────────────── */
+.metricGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  margin-bottom: 22px;
+}
+
+.metricCard {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 15px 17px;
+  background: rgba(255, 255, 255, 0.03);
+  display: grid;
+  gap: 7px;
+  transition: border-color 0.15s ease;
+}
+
+.metricCard:hover { border-color: var(--border-accent); }
+
+.metricCard span   { color: var(--text-dim); font-size: 0.8rem; font-weight: 500; }
+.metricCard strong { color: var(--text); font-size: 1.38rem; line-height: 1.1; font-weight: 700; }
+
+/* ── Data table ──────────────────────────────────────────────────────────── */
+.tableContainer {
+  margin-top: 22px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+
+.tableToolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tableToolbar h3 { margin: 0; color: var(--text); font-size: 1.05rem; font-weight: 700; }
+
+.sortButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.sortButton span { color: var(--text-dim); font-size: 0.6rem; letter-spacing: 0.12em; }
+
+.tableSearch {
+  display: flex;
+  align-items: center;
+  position: relative;
+  min-width: 240px;
+}
+
+.tableSearch span {
+  position: absolute;
+  left: 13px;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+.tableSearch input {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 13px 0 38px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  font: inherit;
+  font-size: 0.86rem;
+  color: var(--text);
+}
+
+.tableSearch input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.tableWrap { overflow-x: auto; }
+
+.table { width: 100%; border-collapse: collapse; }
+
+.table th {
+  padding: 13px 18px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-align: left;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease;
+}
+
+.table th:hover { color: var(--text); }
+
+.table td {
+  padding: 13px 18px;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.table tbody tr:hover td {
+  background: rgba(0, 220, 150, 0.03);
+  color: var(--text);
+}
+
+/* ── Pagination ──────────────────────────────────────────────────────────── */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 18px;
+  background: rgba(255, 255, 255, 0.02);
+  border-top: 1px solid var(--border);
+}
+
+.pageInfo { font-size: 0.82rem; color: var(--text-dim); }
+.pageInfo strong { color: var(--text); }
+
+.pageControls { display: flex; gap: 6px; }
+
+.pageBtn {
+  min-width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.86rem;
+  transition: all 0.14s ease;
+}
+
+.pageBtn:hover:not(:disabled) {
+  background: rgba(0, 220, 150, 0.08);
+  border-color: var(--border-accent);
+  color: var(--accent);
+}
+
+.pageBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .resultHeader { flex-direction: column; align-items: flex-start; }
+  .exportGroup { width: 100%; }
+  .exportGroup button { flex: 1 1 0; }
+  .tableToolbar { flex-direction: column; align-items: stretch; }
+}
