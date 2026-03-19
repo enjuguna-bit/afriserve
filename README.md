@@ -316,13 +316,6 @@ npm run typecheck:strict
 
 Current scope is intentionally narrow for safe rollout: `src/utils/http.js`, `src/utils/helpers.js`, `src/utils/sqlBuilder.js`, `src/routes/systemRoutes.js`, `src/routes/authRoutes.js`, `src/routes/clientRoutes.js`, `src/routes/collectionRoutes.js`, `src/routes/branchRoutes.js`, `src/routes/userRoutes.js`, `src/routes/loanRoutes.js`, `src/routes/reportRoutes.js`, `src/middleware/auth.js`, `src/middleware/requestContext.js`, `src/middleware/errorHandler.js`, `src/config/roles.js`, `src/config/security.js`, `src/services/logger.js`, `src/services/metricsService.js`, `src/services/reportCacheService.js`, `src/services/hierarchyService.js`, `src/services/hierarchyEventService.js`, and `src/db.js` (plus `src/types/*`), using `@ts-check` with `noEmit`.
 
-## Default admin login
-
-> **Security warning (first boot):** when the `users` table is empty, the server seeds a default admin account (`admin@afriserve.local` / `Admin@123`). Change this password immediately after startup and before exposing the system on any shared or public network.
-
-- Email: `admin@afriserve.local`
-- Password: `Admin@123`
-
 ## API Endpoints
 
 All `/api/*` routes require `Authorization: Bearer <token>`, except public auth endpoints (`/api/auth/login`, `/api/auth/refresh`, `/api/auth/reset-password/request`, `/api/auth/reset-password/confirm`).
