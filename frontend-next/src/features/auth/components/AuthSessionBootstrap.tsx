@@ -15,9 +15,9 @@ export function AuthSessionBootstrap({ children }: PropsWithChildren) {
     queryKey: queryKeys.auth.me(),
     queryFn: getCurrentUser,
     enabled: Boolean(token) && !user,
+    ...queryPolicies.auth,
     retry: false,
     refetchOnWindowFocus: false,
-    ...queryPolicies.auth,
   })
 
   useEffect(() => {

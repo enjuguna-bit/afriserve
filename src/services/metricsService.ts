@@ -8,6 +8,7 @@ import type {
   ReportCacheCounters,
   ReportCacheObservation,
 } from "../types/observability.js";
+import { getDbPoolSnapshots, recordPaymentFailure, getPaymentFailureSnapshot } from "../observability/metricsRegistry.js";
 
 function incrementCounter(map: Map<string, number>, key: string, delta = 1): void {
   map.set(key, Number(map.get(key) || 0) + delta);
@@ -208,6 +209,10 @@ function createMetricsService() {
     }
   }
 
+  function observePaymentFailure(reason: string) {
+    recordPaymentFailure(reason);
+  }
+
   function observeDbQuery({ category, durationMs }: DbQueryObservation) {
     const key = String(category || "unknown").trim() || "unknown";
     const normalizedDuration = Number(durationMs || 0);
@@ -262,6 +267,8 @@ function createMetricsService() {
       },
       backgroundTasks: mapToObject(backgroundTasks),
       dbQueries: buildDbQuerySnapshot(),
+      dbPools: getDbPoolSnapshots(),
+      paymentFailures: getPaymentFailureSnapshot(),
       reportCache: {
         ...currentReportCacheCounters,
         deltas: reportCacheDeltas,
@@ -309,6 +316,7 @@ function createMetricsService() {
     observeBackgroundTask,
     observeDbQuery,
     observeReportCache,
+    observePaymentFailure,
     getSnapshot,
   };
 }

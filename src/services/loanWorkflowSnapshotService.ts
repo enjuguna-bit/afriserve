@@ -1,4 +1,9 @@
-﻿type DbGet = (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
+import { getCurrentTenantId } from "../utils/tenantStore.js";
+import {
+  MIN_REQUIRED_COLLATERALS,
+  MIN_REQUIRED_GUARANTORS,
+} from "./client/clientValidation.js";
+type DbGet = (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
 
 type ClientOnboardingSnapshot = {
   client_id: number;
@@ -59,7 +64,8 @@ function formatLifecycleLabel(value: string): string {
     .split("_")
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(" ");
+    .join(" ")
+    .replace(/\bNpl\b/g, "NPL");
 }
 
 function deriveClientOnboardingStatus(payload: {
@@ -70,7 +76,12 @@ function deriveClientOnboardingStatus(payload: {
 }): string {
   const normalizedKycStatus = String(payload.kycStatus || "pending").trim().toLowerCase();
 
-  if (normalizedKycStatus === "verified" && payload.guarantorCount > 0 && payload.collateralCount > 0 && payload.feesPaid) {
+  if (
+    normalizedKycStatus === "verified"
+    && payload.guarantorCount >= MIN_REQUIRED_GUARANTORS
+    && payload.collateralCount >= MIN_REQUIRED_COLLATERALS
+    && payload.feesPaid
+  ) {
     return "complete";
   }
   if (normalizedKycStatus === "verified") {
@@ -92,11 +103,11 @@ function buildClientOnboardingBlockers(payload: {
   if (String(payload.kycStatus || "pending").trim().toLowerCase() !== "verified") {
     blockers.push("Verify client KYC");
   }
-  if (payload.guarantorCount <= 0) {
+  if (payload.guarantorCount < MIN_REQUIRED_GUARANTORS) {
     blockers.push("Add at least one client guarantor");
   }
-  if (payload.collateralCount <= 0) {
-    blockers.push("Add at least one client collateral asset");
+  if (payload.collateralCount < MIN_REQUIRED_COLLATERALS) {
+    blockers.push("Add at least 2 client collateral assets");
   }
   if (!payload.feesPaid) {
     blockers.push("Record client onboarding fee payment");
@@ -216,17 +227,17 @@ function deriveCurrentDpd(payload: {
 }
 
 function deriveParBucket(currentDpd: number): string {
-  if (currentDpd >= 90) {
-    return "par_90_plus";
+  if (currentDpd >= 91) {
+    return "npl";
   }
-  if (currentDpd >= 60) {
+  if (currentDpd >= 61) {
+    return "par_90";
+  }
+  if (currentDpd >= 31) {
     return "par_60";
   }
-  if (currentDpd >= 30) {
-    return "par_30";
-  }
   if (currentDpd > 0) {
-    return "par_1_29";
+    return "par_30";
   }
   return "current";
 }
@@ -271,17 +282,17 @@ function deriveServicingStage(payload: {
   if (payload.balance > 0 && Number.isFinite(maturityTime) && maturityTime < Date.now()) {
     return "matured_unpaid";
   }
-  if (payload.currentDpd >= 90) {
-    return "par_90_plus";
+  if (payload.currentDpd >= 91) {
+    return "npl";
   }
-  if (payload.currentDpd >= 60) {
+  if (payload.currentDpd >= 61) {
+    return "par_90";
+  }
+  if (payload.currentDpd >= 31) {
     return "par_60";
   }
-  if (payload.currentDpd >= 30) {
-    return "par_30";
-  }
   if (payload.currentDpd > 0) {
-    return "overdue";
+    return "par_30";
   }
   return "current";
 }
@@ -307,6 +318,31 @@ function deriveArchiveState(archivedAt: string | null): string {
   return archivedAt ? "archived" : "active_record";
 }
 
+function isMissingTenantColumnError(error: unknown): boolean {
+  const message = String((error as { message?: unknown })?.message || error || "");
+  return /no such column:\s*(?:\w+\.)?tenant_id|column .*tenant_id.* does not exist|unknown column .*tenant_id/i.test(message);
+}
+
+function stripTenantFilter(sql: string): string {
+  return sql.replace(/\s+AND\s+(?:\w+\.)?tenant_id\s*=\s*\?/gi, "");
+}
+
+async function getWithTenantFallback(
+  get: DbGet,
+  sql: string,
+  params: unknown[],
+): Promise<Record<string, any> | null | undefined> {
+  try {
+    return await get(sql, params);
+  } catch (error) {
+    if (!isMissingTenantColumnError(error)) {
+      throw error;
+    }
+
+    return get(stripTenantFilter(sql), params.slice(0, -1));
+  }
+}
+
 async function getClientOnboardingSnapshot({
   get,
   clientId,
@@ -314,7 +350,9 @@ async function getClientOnboardingSnapshot({
   get: DbGet;
   clientId: number;
 }): Promise<ClientOnboardingSnapshot | null> {
-  const client = await get(
+  const tenantId = getCurrentTenantId();
+  const client = await getWithTenantFallback(
+    get,
     `
       SELECT
         id,
@@ -323,10 +361,10 @@ async function getClientOnboardingSnapshot({
         fees_paid_at,
         kyc_status
       FROM clients
-      WHERE id = ?
+      WHERE id = ? AND tenant_id = ?
       LIMIT 1
     `,
-    [clientId],
+    [clientId, tenantId],
   );
 
   if (!client) {
@@ -334,23 +372,27 @@ async function getClientOnboardingSnapshot({
   }
 
   const [guarantorCountRow, collateralCountRow] = await Promise.all([
-    get(
+    getWithTenantFallback(
+      get,
       `
         SELECT COUNT(*) AS total
         FROM guarantors
         WHERE client_id = ?
+          AND tenant_id = ?
           AND COALESCE(is_active, 1) = 1
       `,
-      [clientId],
+      [clientId, tenantId],
     ),
-    get(
+    getWithTenantFallback(
+      get,
       `
         SELECT COUNT(*) AS total
         FROM collateral_assets
         WHERE client_id = ?
+          AND tenant_id = ?
           AND LOWER(COALESCE(status, 'active')) IN ('active', 'released')
       `,
-      [clientId],
+      [clientId, tenantId],
     ),
   ]);
 
@@ -381,9 +423,9 @@ async function getClientOnboardingSnapshot({
         : normalizedKycStatus === "suspended"
           ? "resolve_kyc_hold"
           : "start_kyc";
-  } else if (guarantorCount <= 0) {
+  } else if (guarantorCount < MIN_REQUIRED_GUARANTORS) {
     nextStep = "add_guarantor";
-  } else if (collateralCount <= 0) {
+  } else if (collateralCount < MIN_REQUIRED_COLLATERALS) {
     nextStep = "add_collateral";
   } else if (!feesPaid) {
     nextStep = "record_fee_payment";
@@ -410,7 +452,9 @@ async function getLoanWorkflowSnapshot({
   get: DbGet;
   loanId: number;
 }): Promise<LoanWorkflowSnapshot | null> {
-  const loan = await get(
+  const tenantId = getCurrentTenantId();
+  const loan = await getWithTenantFallback(
+    get,
     `
       SELECT
         l.id,
@@ -423,10 +467,10 @@ async function getLoanWorkflowSnapshot({
         l.archived_at,
         l.principal
       FROM loans l
-      WHERE l.id = ?
+      WHERE l.id = ? AND l.tenant_id = ?
       LIMIT 1
     `,
-    [loanId],
+    [loanId, tenantId],
   );
 
   if (!loan) {
@@ -435,23 +479,28 @@ async function getLoanWorkflowSnapshot({
 
   const [clientOnboarding, loanGuarantorCountRow, loanCollateralCountRow, installmentSummaryRow, disbursementSummaryRow] = await Promise.all([
     getClientOnboardingSnapshot({ get, clientId: Number(loan.client_id) }),
-    get(
+    getWithTenantFallback(
+      get,
       `
         SELECT COUNT(*) AS total
         FROM loan_guarantors
         WHERE loan_id = ?
+          AND tenant_id = ?
       `,
-      [loanId],
+      [loanId, tenantId],
     ),
-    get(
+    getWithTenantFallback(
+      get,
       `
         SELECT COUNT(*) AS total
         FROM loan_collaterals
         WHERE loan_id = ?
+          AND tenant_id = ?
       `,
-      [loanId],
+      [loanId, tenantId],
     ),
-    get(
+    getWithTenantFallback(
+      get,
       `
         SELECT
           COUNT(*) AS total_installments,
@@ -459,7 +508,7 @@ async function getLoanWorkflowSnapshot({
             CASE
               WHEN status = 'paid' THEN 0
               WHEN COALESCE(amount_due, 0) - COALESCE(amount_paid, 0) <= 0 THEN 0
-              WHEN datetime(due_date) < datetime('now') OR status = 'overdue' THEN 0
+              WHEN date(due_date) < date('now') OR status = 'overdue' THEN 0
               ELSE 1
             END
           ) AS pending_installments,
@@ -467,7 +516,7 @@ async function getLoanWorkflowSnapshot({
             CASE
               WHEN status = 'paid' THEN 0
               WHEN COALESCE(amount_due, 0) - COALESCE(amount_paid, 0) <= 0 THEN 0
-              WHEN datetime(due_date) < datetime('now') OR status = 'overdue' THEN 1
+              WHEN date(due_date) < date('now') OR status = 'overdue' THEN 1
               ELSE 0
             END
           ) AS overdue_installments,
@@ -477,7 +526,7 @@ async function getLoanWorkflowSnapshot({
               CASE
                 WHEN status = 'paid' THEN 0
                 WHEN COALESCE(amount_due, 0) - COALESCE(amount_paid, 0) <= 0 THEN 0
-                WHEN datetime(due_date) < datetime('now') OR status = 'overdue' THEN 0
+                WHEN date(due_date) < date('now') OR status = 'overdue' THEN 0
                 ELSE amount_due - amount_paid
               END
             ),
@@ -488,7 +537,7 @@ async function getLoanWorkflowSnapshot({
               CASE
                 WHEN status = 'paid' THEN 0
                 WHEN COALESCE(amount_due, 0) - COALESCE(amount_paid, 0) <= 0 THEN 0
-                WHEN datetime(due_date) < datetime('now') OR status = 'overdue' THEN amount_due - amount_paid
+                WHEN date(due_date) < date('now') OR status = 'overdue' THEN amount_due - amount_paid
                 ELSE 0
               END
             ),
@@ -498,7 +547,7 @@ async function getLoanWorkflowSnapshot({
             CASE
               WHEN status = 'paid' THEN NULL
               WHEN COALESCE(amount_due, 0) - COALESCE(amount_paid, 0) <= 0 THEN NULL
-              WHEN datetime(due_date) < datetime('now') OR status = 'overdue' THEN due_date
+              WHEN date(due_date) < date('now') OR status = 'overdue' THEN due_date
               ELSE NULL
             END
           ) AS oldest_overdue_date,
@@ -512,18 +561,21 @@ async function getLoanWorkflowSnapshot({
           MAX(due_date) AS maturity_date
         FROM loan_installments
         WHERE loan_id = ?
+          AND tenant_id = ?
       `,
-      [loanId],
+      [loanId, tenantId],
     ),
-    get(
+    getWithTenantFallback(
+      get,
       `
         SELECT
           COUNT(*) AS tranche_count,
           COALESCE(SUM(amount), 0) AS total_disbursed
         FROM loan_disbursement_tranches
         WHERE loan_id = ?
+          AND tenant_id = ?
       `,
-      [loanId],
+      [loanId, tenantId],
     ),
   ]);
 

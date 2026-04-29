@@ -42,6 +42,8 @@ interface FindDuplicateCandidatesFilters {
   limit: number;
 }
 
+const normalizedPhoneSql = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(COALESCE(c.phone, '')), ' ', ''), '-', ''), '(', ''), ')', ''), '+', ''), '.', '')";
+
 const clientListSortColumnMap: Record<ListClientsFilters["sortBy"], string> = {
   id: "c.id",
   fullName: "c.full_name",
@@ -173,10 +175,13 @@ function createClientReadRepository(deps: ClientReadRepositoryDeps) {
     }
 
     if (filters.normalizedPhone) {
-      matchClauses.push(
-        "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(COALESCE(c.phone, '')), ' ', ''), '-', ''), '(', ''), ')', ''), '+', ''), '.', '') LIKE ?",
-      );
+      matchClauses.push(`${normalizedPhoneSql} LIKE ?`);
       matchParams.push(`%${filters.normalizedPhone}%`);
+
+      if (filters.normalizedPhone.length >= 7) {
+        matchClauses.push(`${normalizedPhoneSql} LIKE ?`);
+        matchParams.push(`%${filters.normalizedPhone.slice(-7)}`);
+      }
     }
 
     if (filters.normalizedName) {

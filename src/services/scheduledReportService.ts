@@ -1,68 +1,53 @@
-import type { PrismaClientLike } from "../db/prismaClient.js";
+import { all } from "../db/connection.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 import { buildTabularExport } from "./reportExportService.js";
 
-interface ScheduledReportServiceDeps {
-  prisma: PrismaClientLike;
-}
-
-function createScheduledReportService(deps: ScheduledReportServiceDeps) {
-  const { prisma } = deps;
+function createScheduledReportService() {
 
   async function getPortfolioSummary(): Promise<Record<string, number>> {
-    const loans = await prisma.loans.findMany({
-      select: {
-        id: true,
-        status: true,
-        principal: true,
-        expected_total: true,
-        repaid_total: true,
-        balance: true,
-      },
-    });
-
-    const activeStatuses = new Set(["active", "restructured"]);
-    const activeLoanIds = new Set(
-      loans
-        .filter((loan: any) => activeStatuses.has(String(loan.status || "").toLowerCase()))
-        .map((loan: any) => Number(loan.id)),
+    const tenantId = getCurrentTenantId();
+    const loans = await all(
+      "SELECT id, status, principal, expected_total, repaid_total, balance FROM loans WHERE tenant_id = ?",
+      [tenantId],
     );
 
-    const overdueInstallments = activeLoanIds.size > 0
-      ? await prisma.loan_installments.findMany({
-        where: {
-          loan_id: { in: [...activeLoanIds] },
-          status: {
-            not: "paid",
-          },
-          due_date: {
-            lt: new Date().toISOString(),
-          },
-        },
-        select: {
-          amount_due: true,
-          amount_paid: true,
-        },
-      })
-      : [];
+    const activeStatuses = new Set(["active", "restructured"]);
+    const activeLoanIds = loans
+      .filter((loan) => activeStatuses.has(String(loan["status"] || "").toLowerCase()))
+      .map((loan) => Number(loan["id"]))
+      .filter((id) => Number.isInteger(id) && id > 0);
+
+    let overdueInstallments: Array<Record<string, unknown>> = [];
+    if (activeLoanIds.length > 0) {
+      const placeholders = activeLoanIds.map(() => "?").join(", ");
+      overdueInstallments = await all(
+        `SELECT amount_due, amount_paid
+         FROM loan_installments
+         WHERE loan_id IN (${placeholders})
+           AND status != 'paid'
+           AND date(due_date) < date('now')`,
+        activeLoanIds,
+      );
+    }
 
     const totalLoans = loans.length;
-    const activeLoans = loans.filter((loan: any) => activeStatuses.has(String(loan.status || "").toLowerCase())).length;
-    const restructuredLoans = loans.filter((loan: any) => String(loan.status || "").toLowerCase() === "restructured").length;
-    const writtenOffLoans = loans.filter((loan: any) => String(loan.status || "").toLowerCase() === "written_off").length;
+    const activeLoans = loans.filter((loan) => activeStatuses.has(String(loan["status"] || "").toLowerCase())).length;
+    const restructuredLoans = loans.filter((loan) => String(loan["status"] || "").toLowerCase() === "restructured").length;
+    const writtenOffLoans = loans.filter((loan) => String(loan["status"] || "").toLowerCase() === "written_off").length;
 
-    const principalDisbursed = Number(loans.reduce((sum: number, loan: any) => sum + Number(loan.principal || 0), 0).toFixed(2));
-    const expectedTotal = Number(loans.reduce((sum: number, loan: any) => sum + Number(loan.expected_total || 0), 0).toFixed(2));
-    const repaidTotal = Number(loans.reduce((sum: number, loan: any) => sum + Number(loan.repaid_total || 0), 0).toFixed(2));
+    const principalDisbursed = Number(loans.reduce((sum, loan) => sum + Number(loan["principal"] || 0), 0).toFixed(2));
+    const expectedTotal = Number(loans.reduce((sum, loan) => sum + Number(loan["expected_total"] || 0), 0).toFixed(2));
+    const repaidTotal = Number(loans.reduce((sum, loan) => sum + Number(loan["repaid_total"] || 0), 0).toFixed(2));
     const outstandingBalance = Number(
       loans
-        .filter((loan: any) => activeStatuses.has(String(loan.status || "").toLowerCase()))
-        .reduce((sum: number, loan: any) => sum + Number(loan.balance || 0), 0)
+        .filter((loan) => activeStatuses.has(String(loan["status"] || "").toLowerCase()))
+        .reduce((sum, loan) => sum + Number(loan["balance"] || 0), 0)
         .toFixed(2),
     );
     const overdueInstallmentsCount = overdueInstallments.length;
     const overdueAmount = Number(
       overdueInstallments
-        .reduce((sum: number, installment: any) => sum + Number(installment.amount_due || 0) - Number(installment.amount_paid || 0), 0)
+        .reduce((sum, installment) => sum + Number(installment["amount_due"] || 0) - Number(installment["amount_paid"] || 0), 0)
         .toFixed(2),
     );
 

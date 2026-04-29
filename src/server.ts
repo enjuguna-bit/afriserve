@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveDefaultSqliteDbPath } from "./utils/projectPaths.js";
 import { getConfiguredDbClient } from "./utils/env.js";
+import { initializeTracing } from "./observability/tracing.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -58,6 +59,10 @@ function normalizeDatabaseEnvironment(): void {
 }
 
 normalizeDatabaseEnvironment();
+
+await initializeTracing({
+	serviceName: "afriserve-api",
+});
 
 const { startServer } = await import("./runtime/startServer.js");
 startServer();

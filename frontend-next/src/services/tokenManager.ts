@@ -1,31 +1,42 @@
 class SecureTokenManager {
-  private readonly accessTokenKey = "__afriserve_token";
-  private readonly refreshTokenKey = "__afriserve_refresh_token";
+  private readonly accessTokenKey = '__afriserve_access_token'
+  private readonly refreshTokenKey = '__afriserve_refresh_token'
+
+  // In-memory fallback for environments where sessionStorage is unavailable
+  // (SSR, private-browsing with strict storage blocking, certain WebViews).
+  private memoryAccessToken: string | null = null
+  private memoryRefreshToken: string | null = null
 
   setAccessToken(token: string) {
-    sessionStorage.setItem(this.accessTokenKey, token);
+    this.memoryAccessToken = token
+    try { sessionStorage.setItem(this.accessTokenKey, token) } catch { /* storage blocked */ }
   }
 
   getAccessToken(): string | null {
-    return sessionStorage.getItem(this.accessTokenKey);
+    if (this.memoryAccessToken) return this.memoryAccessToken
+    try { return sessionStorage.getItem(this.accessTokenKey) } catch { return null }
   }
 
   setRefreshToken(token: string) {
-    sessionStorage.setItem(this.refreshTokenKey, token);
+    this.memoryRefreshToken = token
+    try { sessionStorage.setItem(this.refreshTokenKey, token) } catch { /* storage blocked */ }
   }
 
   getRefreshToken(): string | null {
-    return sessionStorage.getItem(this.refreshTokenKey);
+    if (this.memoryRefreshToken) return this.memoryRefreshToken
+    try { return sessionStorage.getItem(this.refreshTokenKey) } catch { return null }
   }
 
   clearTokens() {
-    sessionStorage.removeItem(this.accessTokenKey);
-    sessionStorage.removeItem(this.refreshTokenKey);
+    this.memoryAccessToken = null
+    this.memoryRefreshToken = null
+    try {
+      sessionStorage.removeItem(this.accessTokenKey)
+      sessionStorage.removeItem(this.refreshTokenKey)
+    } catch { /* storage blocked */ }
   }
 }
 
-const tokenManager = new SecureTokenManager();
+const tokenManager = new SecureTokenManager()
 
-export {
-  tokenManager,
-};
+export { tokenManager }

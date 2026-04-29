@@ -12,6 +12,9 @@ function createFakeBullmq() {
       this.name = name;
       this.options = options;
       this.addCalls = [];
+      this.waitingCount = 0;
+      this.failedCount = 0;
+      this.jobs = [];
       this.closed = false;
       queues.push(this);
     }
@@ -19,6 +22,18 @@ function createFakeBullmq() {
     async add(name, data, options) {
       this.addCalls.push({ name, data, options });
       return { id: `${name}-${this.addCalls.length}` };
+    }
+
+    async getWaitingCount() {
+      return this.waitingCount;
+    }
+
+    async getFailedCount() {
+      return this.failedCount;
+    }
+
+    async getJobs() {
+      return this.jobs;
     }
 
     async close() {
@@ -234,6 +249,66 @@ test("queue orchestrator can run in worker-only mode without rescheduling repeat
   const worker = fakeBullmq._instances.workers[0];
   await worker.processor({ name: "overdue-sync" });
   assert.equal(runCount, 1);
+
+  await orchestrator.stop();
+});
+
+test("dead-letter inspector suppresses identical alerts until the queue state changes", async () => {
+  const fakeBullmq = createFakeBullmq();
+  const warnCalls = [];
+  const orchestrator = createQueueOrchestrator({
+    enabled: true,
+    redisUrl: "redis://localhost:6379",
+    queueName: "system-jobs",
+    deadLetterQueueName: "system-jobs:dead-letter",
+    concurrency: 1,
+    attempts: 2,
+    bullmq: fakeBullmq,
+    logger: {
+      warn: (message, meta) => {
+        warnCalls.push({ message, meta });
+      },
+    },
+    deadLetterInspectIntervalMs: 1000,
+    deadLetterAlertRepeatWindowMs: 60000,
+    jobs: [
+      {
+        name: "overdue-sync",
+        intervalMs: 1000,
+        runOnce: async () => ({}),
+      },
+    ],
+  });
+
+  await orchestrator.start();
+
+  const [, deadLetterQueue] = fakeBullmq._instances.queues;
+  deadLetterQueue.waitingCount = 2;
+  deadLetterQueue.jobs = [
+    {
+      name: "overdue-sync:dead-letter",
+      data: {
+        originalJobName: "overdue-sync",
+        failedReason: "db timeout",
+        attemptsMade: 2,
+      },
+      failedReason: "db timeout",
+      attemptsMade: 2,
+    },
+  ];
+
+  await new Promise((resolve) => setTimeout(resolve, 1150));
+  const initialWarnings = warnCalls.filter((entry) => entry.message === "jobs.queue.dead_letter_detected");
+  assert.equal(initialWarnings.length, 1);
+  assert.equal(initialWarnings[0].meta.totalCount, 2);
+  assert.equal(initialWarnings[0].meta.sampleJobs[0].originalJobName, "overdue-sync");
+
+  deadLetterQueue.waitingCount = 3;
+  await new Promise((resolve) => setTimeout(resolve, 1150));
+
+  const updatedWarnings = warnCalls.filter((entry) => entry.message === "jobs.queue.dead_letter_detected");
+  assert.equal(updatedWarnings.length, 2);
+  assert.equal(updatedWarnings[1].meta.totalCount, 3);
 
   await orchestrator.stop();
 });

@@ -9,7 +9,7 @@ export default [
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["**/*.ts"],
+    files: ["**/*.{js,mjs,cjs,ts}"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "module",
@@ -20,16 +20,18 @@ export default [
     rules: {
       "no-unused-vars": "off",
       "@typescript-eslint/no-unused-vars": [
-        "warn",
+        "error",
         {
           argsIgnorePattern: "^_",
           varsIgnorePattern: "^_",
           caughtErrorsIgnorePattern: "^_",
         },
       ],
-      "@typescript-eslint/no-explicit-any": "warn",
-      "no-empty": ["warn", { allowEmptyCatch: true }],
-      "no-useless-escape": "warn",
+      // The repo still has a large explicit-any surface across legacy adapters.
+      // Keep strict TS checks and focus lint on actionable correctness issues.
+      "@typescript-eslint/no-explicit-any": "off",
+      "no-empty": ["error", { allowEmptyCatch: true }],
+      "no-useless-escape": "error",
     },
   },
 ];

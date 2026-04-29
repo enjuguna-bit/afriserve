@@ -42,6 +42,8 @@ function buildPrometheusMetrics(snapshot: Record<string, unknown>): string {
   const errors = asRecord(snapshot?.errors);
   const backgroundTasks = asRecord(snapshot?.backgroundTasks);
   const reportCache = asRecord(snapshot?.reportCache);
+  const dbPools = asRecord(snapshot?.dbPools);
+  const paymentFailures = asRecord(snapshot?.paymentFailures);
 
   lines.push("# TYPE microfinance_http_requests_total counter");
   lines.push(createGaugeLine("microfinance_http_requests_total", http.requestsTotal));
@@ -87,6 +89,25 @@ function buildPrometheusMetrics(snapshot: Record<string, unknown>): string {
     ));
   });
 
+  // ── Payment failure counters ─────────────────────────────────────────────
+  // Tracks B2C core_failed and callback_failed events by reason label.
+  // Alert rule: microfinance_payment_failure_total{reason="b2c.core_failed"} > 0
+  const paymentFailureEntries = Object.entries(paymentFailures);
+  if (paymentFailureEntries.length > 0) {
+    lines.push("# TYPE microfinance_payment_failure_total counter");
+    lines.push("# HELP microfinance_payment_failure_total Payment-layer failures by reason. Alert on b2c.core_failed > 0.");
+    paymentFailureEntries.forEach(([reason, count]) => {
+      lines.push(createGaugeLine("microfinance_payment_failure_total", count, { reason }));
+    });
+  } else {
+    // Always emit the metric family even when count is zero so dashboards
+    // and alert rules can reference it without "no data" gaps.
+    lines.push("# TYPE microfinance_payment_failure_total counter");
+    lines.push("# HELP microfinance_payment_failure_total Payment-layer failures by reason. Alert on b2c.core_failed > 0.");
+    lines.push(createGaugeLine("microfinance_payment_failure_total", 0, { reason: "b2c.core_failed" }));
+    lines.push(createGaugeLine("microfinance_payment_failure_total", 0, { reason: "b2c.callback_failed" }));
+  }
+
   lines.push("# TYPE microfinance_report_cache_get_or_set_total counter");
   lines.push(createGaugeLine("microfinance_report_cache_get_or_set_total", reportCache.getOrSetCalls));
   lines.push(createGaugeLine("microfinance_report_cache_hits_total", reportCache.hits));
@@ -113,6 +134,59 @@ function buildPrometheusMetrics(snapshot: Record<string, unknown>): string {
       lines.push(createGaugeLine("microfinance_db_query_duration_total_milliseconds", queryStats.totalMs, { category }));
       lines.push(createGaugeLine("microfinance_db_query_duration_avg_milliseconds", queryStats.avgMs, { category }));
       lines.push(createGaugeLine("microfinance_db_query_duration_max_milliseconds", queryStats.maxMs, { category }));
+    });
+  }
+
+  const dbPoolEntries = Object.entries(dbPools);
+  if (dbPoolEntries.length > 0) {
+    lines.push("# TYPE microfinance_db_pool_max_connections gauge");
+    lines.push("# TYPE microfinance_db_pool_total_connections gauge");
+    lines.push("# TYPE microfinance_db_pool_active_connections gauge");
+    lines.push("# TYPE microfinance_db_pool_idle_connections gauge");
+    lines.push("# TYPE microfinance_db_pool_waiting_clients gauge");
+    lines.push("# TYPE microfinance_db_pool_acquires_total counter");
+    lines.push("# TYPE microfinance_db_pool_acquire_wait_avg_milliseconds gauge");
+    lines.push("# TYPE microfinance_db_pool_acquire_wait_max_milliseconds gauge");
+    lines.push("# TYPE microfinance_db_pool_acquire_wait_last_milliseconds gauge");
+    lines.push("# TYPE microfinance_db_pool_acquire_timeouts_total counter");
+    lines.push("# TYPE microfinance_db_pool_high_acquire_wait gauge");
+    lines.push("# TYPE microfinance_db_pool_exhausted gauge");
+
+    dbPoolEntries.forEach(([poolName, stats]) => {
+      const poolStats = asRecord(stats);
+      const alerts = asRecord(poolStats.alerts);
+      lines.push(createGaugeLine("microfinance_db_pool_max_connections", poolStats.maxConnections, { pool: poolName }));
+      lines.push(createGaugeLine("microfinance_db_pool_total_connections", poolStats.totalConnections, { pool: poolName }));
+      lines.push(createGaugeLine("microfinance_db_pool_active_connections", poolStats.activeConnections, { pool: poolName }));
+      lines.push(createGaugeLine("microfinance_db_pool_idle_connections", poolStats.idleConnections, { pool: poolName }));
+      lines.push(createGaugeLine("microfinance_db_pool_waiting_clients", poolStats.waitingClients, { pool: poolName }));
+      lines.push(createGaugeLine("microfinance_db_pool_acquires_total", poolStats.acquires, { pool: poolName }));
+      lines.push(createGaugeLine(
+        "microfinance_db_pool_acquire_wait_avg_milliseconds",
+        poolStats.averageAcquireWaitMs,
+        { pool: poolName },
+      ));
+      lines.push(createGaugeLine(
+        "microfinance_db_pool_acquire_wait_max_milliseconds",
+        poolStats.maxAcquireWaitMs,
+        { pool: poolName },
+      ));
+      lines.push(createGaugeLine(
+        "microfinance_db_pool_acquire_wait_last_milliseconds",
+        poolStats.lastAcquireWaitMs,
+        { pool: poolName },
+      ));
+      lines.push(createGaugeLine("microfinance_db_pool_acquire_timeouts_total", poolStats.acquireTimeouts, { pool: poolName }));
+      lines.push(createGaugeLine(
+        "microfinance_db_pool_high_acquire_wait",
+        toNumber(alerts.highAcquireWait ? 1 : 0),
+        { pool: poolName },
+      ));
+      lines.push(createGaugeLine(
+        "microfinance_db_pool_exhausted",
+        toNumber(alerts.poolExhausted ? 1 : 0),
+        { pool: poolName },
+      ));
     });
   }
 

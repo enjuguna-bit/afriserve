@@ -1,69 +1,35 @@
-# Data model & migration strategy (scale and maintainability)
+# Migration strategy
 
-1. Mixed migration approaches increases cognitive load
-   You have:
+## Canonical path
 
-Prisma schema (prisma/schema.prisma)
-Prisma migration SQL files
-runtime “compatibility” schema evolution in src/db/schema.ts
-legacy JS migrations in src/migrations/\*
-This can work, but it’s easy to drift.
+Production schema changes should ship through reviewed Prisma SQL migrations under:
 
-Suggested improvement:
+- `prisma/migrations/` for SQLite compatibility
+- `prisma/postgres/migrations/` for Postgres production deployments
 
-Pick one canonical path for production (ideally Prisma migrate deploy + reviewed SQL).
-Keep schema.ts only for dev-only compatibility or explicit bootstrapping, not long-term evolution.
-For SQLite dev bootstrap: fine; for Postgres prod: keep strict migrations. 2) Generated Prisma clients per DB type
-src/db/prismaClient.ts dynamically imports a generated sqlite/postgres client module. This is clever and can work, but it increases packaging complexity.
+Runtime compatibility helpers in `src/db/schema.ts` and legacy JS migrations in `src/migrations/` still exist to keep local bootstraps and older environments working, but they are not the source of truth for production rollout planning.
 
-Suggested improvement:
+## Deployment order
 
-Ensure CI builds both clients deterministically.
-In production images, confirm generated/prisma/\* matches the deployed schema version.
-Observability & ops (what I’d add for production)
-Structured logging is present; add:
-request sampling rules
-explicit PII scrubbing policy (you started with sanitizeForLogs but ensure client PII fields are redacted too: nationalId, phone, KRA PIN, etc.)
-Metrics:
-add DB query timing histograms per endpoint category
-add job execution metrics (duration, success/failure, last-run timestamps)
-Health/readiness:
-/ready should validate downstream dependencies used in production mode (DB + Redis + queue broker if enabled)
-Docker & deployment notes
-Dockerfile looks generally solid (multi-stage build, non-root user).
-One likely bug: it creates /home/appdata/uploads (missing slash between app and data). That’s probably a typo and could cause confusing permissions issues.
-Docker compose uses default PORT=3000 while README uses 4000 default locally. That’s not wrong, but it’s a constant source of “works on my machine” confusion—standardize.Data model & migration strategy (scale and maintainability)
+1. Build artifacts and generate Prisma clients.
+2. Review the forward migration SQL for both SQLite and Postgres paths.
+3. Apply migrations in staging with production-like data volume.
+4. Verify application startup, health checks, and critical loan workflows.
+5. Promote the same migration set to production.
 
-1. Mixed migration approaches increases cognitive load
-   You have:
+## Rollback stance
 
-Prisma schema (prisma/schema.prisma)
-Prisma migration SQL files
-runtime “compatibility” schema evolution in src/db/schema.ts
-legacy JS migrations in src/migrations/\*
-This can work, but it’s easy to drift.
+Prisma migrations are append-only by default. The rollback plan is therefore operational, not automatic:
 
-Suggested improvement:
+1. Stop rollout traffic to the affected version.
+2. Restore application code to the last known-good release.
+3. Follow the runbook in [`docs/runbooks/migration-rollback.md`](./runbooks/migration-rollback.md).
+4. Ship a compensating forward migration if the failed migration cannot be safely reversed in place.
 
-Pick one canonical path for production (ideally Prisma migrate deploy + reviewed SQL).
-Keep schema.ts only for dev-only compatibility or explicit bootstrapping, not long-term evolution.
-For SQLite dev bootstrap: fine; for Postgres prod: keep strict migrations. 2) Generated Prisma clients per DB type
-src/db/prismaClient.ts dynamically imports a generated sqlite/postgres client module. This is clever and can work, but it increases packaging complexity.
+## Release checklist
 
-Suggested improvement:
-
-Ensure CI builds both clients deterministically.
-In production images, confirm generated/prisma/\* matches the deployed schema version.
-Observability & ops (what I’d add for production)
-Structured logging is present; add:
-request sampling rules
-explicit PII scrubbing policy (you started with sanitizeForLogs but ensure client PII fields are redacted too: nationalId, phone, KRA PIN, etc.)
-Metrics:
-add DB query timing histograms per endpoint category
-add job execution metrics (duration, success/failure, last-run timestamps)
-Health/readiness:
-/ready should validate downstream dependencies used in production mode (DB + Redis + queue broker if enabled)
-Docker & deployment notes
-Dockerfile looks generally solid (multi-stage build, non-root user).
-One likely bug: it creates /home/appdata/uploads (missing slash between app and data). That’s probably a typo and could cause confusing permissions issues.
-Docker compose uses default PORT=3000 while README uses 4000 default locally. That’s not wrong, but it’s a constant source of “works on my machine” confusion—standardize.
+- Confirm a recent database backup or snapshot exists.
+- Confirm the migration has a tested rollback path.
+- Confirm `ci.yml` passed against Postgres, not just SQLite.
+- Confirm any new tenant-scoped tables include `tenant_id`, indexes, and RLS coverage.
+- Confirm on-call engineers know which dashboards, traces, and alert rules to watch during rollout.

@@ -56,6 +56,50 @@ test("system metrics endpoint is admin-protected and returns metrics snapshot", 
   }
 });
 
+test("prometheus /metrics emits payment failure counter and DB pool gauges after activity", async () => {
+  const { baseUrl, stop } = await startServer();
+
+  try {
+    // Make a few API calls so the DB pool registers acquires
+    const adminToken = await loginAsAdmin(baseUrl);
+    await api(baseUrl, "/api/reports/portfolio", { token: adminToken });
+
+    const response = await fetch(`${baseUrl}/metrics`);
+    assert.equal(response.status, 200);
+    const payload = await response.text();
+
+    // Payment failure counter family (zero-baseline always present after our fix)
+    assert.ok(
+      payload.includes("microfinance_payment_failure_total"),
+      "Expected microfinance_payment_failure_total in /metrics output",
+    );
+    assert.ok(
+      payload.includes('reason="b2c.core_failed"'),
+      "Expected b2c.core_failed baseline gauge in /metrics",
+    );
+    assert.ok(
+      payload.includes('reason="b2c.callback_failed"'),
+      "Expected b2c.callback_failed baseline gauge in /metrics",
+    );
+
+    // DB pool gauges — present after first DB acquire
+    assert.ok(
+      payload.includes("microfinance_db_pool_max_connections"),
+      "Expected DB pool max_connections gauge in /metrics",
+    );
+    assert.ok(
+      payload.includes("microfinance_db_pool_acquires_total"),
+      "Expected DB pool acquires_total counter in /metrics",
+    );
+    assert.ok(
+      payload.includes("microfinance_db_pool_active_connections"),
+      "Expected DB pool active_connections gauge in /metrics",
+    );
+  } finally {
+    await stop();
+  }
+});
+
 test("metrics snapshot includes report cache hit/miss/invalidation counters", async () => {
   const { baseUrl, stop } = await startServer({
     envOverrides: {

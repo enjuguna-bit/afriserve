@@ -111,14 +111,20 @@ const rootRelsXml = [
   "</Relationships>",
 ].join("");
 
-const workbookXml = [
-  '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
-  '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
-  "<sheets>",
-  '<sheet name="Report" sheetId="1" r:id="rId1"/>',
-  "</sheets>",
-  "</workbook>",
-].join("");
+function buildWorkbookXml(sheetName: string): string {
+  const safeName = sheetName
+    .replace(/[\\/*?:[\]]/g, "")
+    .trim()
+    .slice(0, 31) || "Report";
+  return [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+    "<sheets>",
+    `<sheet name="${escapeXml(safeName)}" sheetId="1" r:id="rId1"/>`,
+    "</sheets>",
+    "</workbook>",
+  ].join("");
+}
 
 const workbookRelsXml = [
   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
@@ -243,13 +249,14 @@ function createStoredZip(entries: ZipEntry[]): Buffer {
 interface CreateSimpleXlsxWorkbookOptions {
   headers: string[];
   rows: Array<Record<string, unknown>>;
+  title?: string;
 }
 
-function createSimpleXlsxWorkbook({ headers, rows }: CreateSimpleXlsxWorkbookOptions): Buffer {
+function createSimpleXlsxWorkbook({ headers, rows, title = "Report" }: CreateSimpleXlsxWorkbookOptions): Buffer {
   const entries = [
     { name: "[Content_Types].xml", data: Buffer.from(contentTypesXml, "utf8") },
     { name: "_rels/.rels", data: Buffer.from(rootRelsXml, "utf8") },
-    { name: "xl/workbook.xml", data: Buffer.from(workbookXml, "utf8") },
+    { name: "xl/workbook.xml", data: Buffer.from(buildWorkbookXml(title), "utf8") },
     { name: "xl/_rels/workbook.xml.rels", data: Buffer.from(workbookRelsXml, "utf8") },
     { name: "xl/styles.xml", data: Buffer.from(stylesXml, "utf8") },
     { name: "xl/worksheets/sheet1.xml", data: Buffer.from(buildSheetXml(headers, rows), "utf8") },

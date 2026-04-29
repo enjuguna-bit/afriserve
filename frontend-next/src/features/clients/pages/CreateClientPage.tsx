@@ -10,6 +10,8 @@ import { useCreateClient } from '../hooks/useClients'
 import { clientFormSchema, type ClientFormValues } from './shared/clientFormSchema'
 import styles from '../../shared/styles/WizardPage.module.css'
 
+void useState
+
 function normalize(value?: string) {
   const trimmed = (value || '').trim()
   return trimmed.length > 0 ? trimmed : undefined
@@ -57,8 +59,6 @@ export function CreateClientPage() {
   const draftUpdatedAt = useClientDraftStore((state) => state.updatedAt)
   const patchDraftValues = useClientDraftStore((state) => state.patchValues)
   const resetDraft = useClientDraftStore((state) => state.reset)
-  const [phoneDuplicate, setPhoneDuplicate] = useState<string | null>(null)
-  const [idDuplicate, setIdDuplicate] = useState<string | null>(null)
 
   const {
     control,
@@ -94,13 +94,15 @@ export function CreateClientPage() {
     staleTime: 30_000,
   })
 
-  useEffect(() => {
-    setPhoneDuplicate(phoneDuplicateQuery.data?.exists ? phoneDuplicateQuery.data.name || 'Existing client' : null)
-  }, [phoneDuplicateQuery.data])
+  const phoneDuplicate = useMemo(
+    () => (phoneDuplicateQuery.data?.exists ? phoneDuplicateQuery.data.name || 'Existing client' : null),
+    [phoneDuplicateQuery.data],
+  )
 
-  useEffect(() => {
-    setIdDuplicate(idDuplicateQuery.data?.exists ? idDuplicateQuery.data.name || 'Existing client' : null)
-  }, [idDuplicateQuery.data])
+  const idDuplicate = useMemo(
+    () => (idDuplicateQuery.data?.exists ? idDuplicateQuery.data.name || 'Existing client' : null),
+    [idDuplicateQuery.data],
+  )
 
   const summaryItems = useMemo(() => {
     const values = {

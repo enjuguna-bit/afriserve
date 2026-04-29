@@ -1,11 +1,57 @@
-﻿import { createSqlWhereBuilder } from "../../utils/sqlBuilder.js";
+import { createSqlWhereBuilder } from "../../utils/sqlBuilder.js";
 import {
   getLegacyReportTemplate,
   mapLegacyArrearsRows,
   mapLegacyDisbursementRows,
   mapLegacyDuesRows,
 } from "../../services/legacyReportTemplateService.js";
+import {
+  buildDailyCollectionBreakdownRows,
+  buildPeriodCollectionBreakdownSummary,
+  loadRepaymentCollectionEvents,
+} from "../../services/repaymentCollectionReportService.js";
+import { normalizeKenyanPhone } from "../../utils/helpers.js";
 import type { RouteRegistrar } from "../../types/routeDeps.js";
+
+const BUSINESS_TIME_ZONE_OFFSET_HOURS = 3;
+const BUSINESS_DATE_SHIFT_SQL = "+3 hours";
+const PAR_30_MIN_DAYS = 1;
+const PAR_30_MAX_DAYS = 30;
+const PAR_60_MIN_DAYS = 31;
+const PAR_60_MAX_DAYS = 60;
+const PAR_90_MIN_DAYS = 61;
+const PAR_90_MAX_DAYS = 90;
+const NPL_MIN_DAYS = 91;
+const VALID_AGING_BUCKETS = new Set(["1_30", "31_60", "61_90", "91_plus"]);
+
+function resolveAgingBucketFilter(rawValue: unknown, res: any): string | null | undefined {
+  const normalized = String(rawValue || "").trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (!VALID_AGING_BUCKETS.has(normalized)) {
+    res.status(400).json({ message: "Invalid agingBucket filter. Use one of: 1_30, 31_60, 61_90, 91_plus." });
+    return undefined;
+  }
+
+  return normalized;
+}
+
+function buildAgingBucketWhereSql(columnRef: string, agingBucket: string | null | undefined): string {
+  switch (agingBucket) {
+    case "1_30":
+      return `${columnRef} BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS}`;
+    case "31_60":
+      return `${columnRef} BETWEEN ${PAR_60_MIN_DAYS} AND ${PAR_60_MAX_DAYS}`;
+    case "61_90":
+      return `${columnRef} BETWEEN ${PAR_90_MIN_DAYS} AND ${PAR_90_MAX_DAYS}`;
+    case "91_plus":
+      return `${columnRef} >= ${NPL_MIN_DAYS}`;
+    default:
+      return "";
+  }
+}
 
 function registerPortfolioReports(app: RouteRegistrar, context: Record<string, any>) {
   const {
@@ -65,24 +111,77 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
     whereBuilder.addClause(clause.sql, clause.params);
   }
 
+  function shiftDateToBusinessTimezone(date: Date): Date {
+    return new Date(date.getTime() + (BUSINESS_TIME_ZONE_OFFSET_HOURS * 60 * 60 * 1000));
+  }
+
+  function shiftDateFromBusinessTimezone(date: Date): Date {
+    return new Date(date.getTime() - (BUSINESS_TIME_ZONE_OFFSET_HOURS * 60 * 60 * 1000));
+  }
+
+  function resolveBusinessDayBoundaryIso(date: Date, boundary: "start" | "end", dayOffset = 0): string {
+    const businessDate = shiftDateToBusinessTimezone(date);
+    businessDate.setUTCDate(businessDate.getUTCDate() + dayOffset);
+    if (boundary === "start") {
+      businessDate.setUTCHours(0, 0, 0, 0);
+    } else {
+      businessDate.setUTCHours(23, 59, 59, 999);
+    }
+    return shiftDateFromBusinessTimezone(businessDate).toISOString();
+  }
+
   function startOfTodayIso(): string {
-    const date = new Date();
-    date.setHours(0, 0, 0, 0);
-    return date.toISOString();
+    return resolveBusinessDayBoundaryIso(new Date(), "start");
   }
 
   function endOfDayAfterDaysIso(daysToAdd: number): string {
-    const date = new Date();
-    date.setHours(23, 59, 59, 999);
-    date.setDate(date.getDate() + daysToAdd);
-    return date.toISOString();
+    return resolveBusinessDayBoundaryIso(new Date(), "end", daysToAdd);
   }
 
   function resolveArrearsSnapshotIso(dateTo?: string | null): string {
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
+    const endOfToday = new Date(resolveBusinessDayBoundaryIso(new Date(), "end"));
     const requestedDate = dateTo ? new Date(String(dateTo)) : endOfToday;
     return new Date(Math.min(requestedDate.getTime(), endOfToday.getTime())).toISOString();
+  }
+
+  function formatUtcDateOnly(date: Date): string {
+    return date.toISOString().slice(0, 10);
+  }
+
+  function isUtcCalendarBoundary(date: Date): boolean {
+    const isStartOfDay = date.getUTCHours() === 0
+      && date.getUTCMinutes() === 0
+      && date.getUTCSeconds() === 0
+      && date.getUTCMilliseconds() === 0;
+    const isEndOfDay = date.getUTCHours() === 23
+      && date.getUTCMinutes() === 59
+      && date.getUTCSeconds() === 59
+      && date.getUTCMilliseconds() === 999;
+    return isStartOfDay || isEndOfDay;
+  }
+
+  function resolveBusinessDateParam(value: string | null | undefined): string | null {
+    if (!value) {
+      return null;
+    }
+
+    const parsed = new Date(String(value));
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+
+    // Report filters often arrive as full UTC calendar-day bounds, while dashboard
+    // deep links use Nairobi-shifted timestamps. Preserve explicit UTC day bounds
+    // and only shift non-boundary instants into the business timezone.
+    if (isUtcCalendarBoundary(parsed)) {
+      return formatUtcDateOnly(parsed);
+    }
+
+    return formatUtcDateOnly(shiftDateToBusinessTimezone(parsed));
+  }
+
+  function businessDateSql(sqlExpression: string): string {
+    return `date(datetime(${sqlExpression}, '${BUSINESS_DATE_SHIFT_SQL}'))`;
   }
 
   /**
@@ -279,6 +378,12 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
         const normalizedDateFromIso = effectiveDateFrom.toISOString();
         const normalizedDateToIso = effectiveDateTo.toISOString();
         const arrearsSnapshotAt = resolveArrearsSnapshotIso(normalizedDateToIso);
+        const normalizedDateFromBusinessDate = resolveBusinessDateParam(normalizedDateFromIso)
+          ?? formatUtcDateOnly(new Date(normalizedDateFromIso));
+        const normalizedDateToBusinessDate = resolveBusinessDateParam(normalizedDateToIso)
+          ?? formatUtcDateOnly(new Date(normalizedDateToIso));
+        const arrearsSnapshotBusinessDate = resolveBusinessDateParam(arrearsSnapshotAt)
+          ?? formatUtcDateOnly(new Date(arrearsSnapshotAt));
         const cacheMinuteBucket = Math.floor(Date.now() / 60000);
         const branchFilter = parseId(req.query.branchId);
         const officerIdsFilter = resolveOfficerFilter(req.query.officerIds, req.query.officerId, res);
@@ -314,7 +419,12 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
         const collectionParams = collectionWhereBuilder.getParams();
 
         const dueWhereBuilder = createSqlWhereBuilder();
-        dueWhereBuilder.addDateRange("i.due_date", normalizedDateFromIso, normalizedDateToIso);
+        if (normalizedDateFromBusinessDate) {
+          dueWhereBuilder.addClause(`${businessDateSql("i.due_date")} >= date(?)`, [normalizedDateFromBusinessDate]);
+        }
+        if (normalizedDateToBusinessDate) {
+          dueWhereBuilder.addClause(`${businessDateSql("i.due_date")} <= date(?)`, [normalizedDateToBusinessDate]);
+        }
         applyOfficerFilter(dueWhereBuilder, "l.officer_id", officerIdsFilter);
         if (!applyScopeAndBranchFilter({
           whereBuilder: dueWhereBuilder,
@@ -331,7 +441,7 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
         const dueParams = dueWhereBuilder.getParams();
 
         const arrearsWhereBuilder = createSqlWhereBuilder();
-        arrearsWhereBuilder.addClause("l.status IN ('active', 'restructured')");
+        arrearsWhereBuilder.addClause("l.status IN ('active', 'restructured', 'overdue')");
         applyOfficerFilter(arrearsWhereBuilder, "l.officer_id", officerIdsFilter);
         if (!applyScopeAndBranchFilter({
           whereBuilder: arrearsWhereBuilder,
@@ -362,121 +472,118 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
             minuteBucket: cacheMinuteBucket,
           },
           compute: async () => {
-            const collectionsSummary = await get(
-              `
-                SELECT
-                  COUNT(r.id) AS repayment_count,
-                  COUNT(DISTINCT r.loan_id) AS loans_with_repayments,
-                  COALESCE(SUM(r.amount), 0) AS total_collected
-                FROM repayments r
-                INNER JOIN loans l ON l.id = r.loan_id
-                ${collectionWhereSql}
-              `,
-              collectionParams,
-            );
-
-            const dueSummary = await get(
-              `
-                SELECT
-                  COALESCE(SUM(i.amount_due), 0) AS total_due,
-                  COALESCE(SUM(i.amount_paid), 0) AS total_paid_against_due
-                FROM loan_installments i
-                INNER JOIN loans l ON l.id = i.loan_id
-                ${dueWhereSql}
-              `,
-              dueParams,
-            );
-
-            const arrearsSummary = await get(
-              `
-                WITH loan_arrears AS (
+            const [collectionEvents, dueSummary, arrearsSummary, topRiskBranches] = await Promise.all([
+              loadRepaymentCollectionEvents({
+                all,
+                repaymentWhereSql: collectionWhereSql,
+                repaymentWhereParams: collectionParams,
+                dateTo: normalizedDateToIso,
+              }),
+              get(
+                `
                   SELECT
-                    l.id AS loan_id,
-                    l.branch_id,
-                    l.balance AS outstanding_balance,
-                    COALESCE(SUM(i.amount_due - i.amount_paid), 0) AS arrears_amount,
-                    CAST(julianday(?) - julianday(MIN(i.due_date)) AS INTEGER) AS days_overdue
-                  FROM loans l
-                  INNER JOIN loan_installments i ON i.loan_id = l.id
-                  ${arrearsWhereSql}
-                    AND i.status != 'paid'
-                    AND datetime(i.due_date) < datetime(?)
-                  GROUP BY l.id, l.branch_id, l.balance
-                )
-                SELECT
-                  COUNT(*) AS loans_in_arrears,
-                  COALESCE(SUM(arrears_amount), 0) AS total_arrears_amount,
-                  COALESCE(SUM(outstanding_balance), 0) AS at_risk_balance,
-                  COALESCE(SUM(CASE WHEN days_overdue >= 30 THEN outstanding_balance ELSE 0 END), 0) AS par30_balance,
-                  COALESCE(SUM(CASE WHEN days_overdue >= 90 THEN outstanding_balance ELSE 0 END), 0) AS par90_balance
-                FROM loan_arrears
-              `,
-              [arrearsSnapshotAt, ...arrearsParams, arrearsSnapshotAt],
-            );
-
-            const topRiskBranches = await all(
-              `
-                WITH loan_arrears AS (
+                    COALESCE(SUM(i.amount_due), 0) AS total_due
+                  FROM loan_installments i
+                  INNER JOIN loans l ON l.id = i.loan_id
+                  ${dueWhereSql}
+                `,
+                dueParams,
+              ),
+              get(
+                `
+                  WITH loan_arrears AS (
+                    SELECT
+                      l.id AS loan_id,
+                      l.branch_id,
+                      l.balance AS outstanding_balance,
+                      COALESCE(SUM(i.amount_due - i.amount_paid), 0) AS arrears_amount,
+                      CAST(julianday(date(?)) - julianday(${businessDateSql("MIN(i.due_date)")}) AS INTEGER) AS days_overdue
+                    FROM loans l
+                    INNER JOIN loan_installments i ON i.loan_id = l.id
+                    ${arrearsWhereSql}
+                      AND i.status != 'paid'
+                      AND ${businessDateSql("i.due_date")} < date(?)
+                    GROUP BY l.id, l.branch_id, l.balance
+                  )
                   SELECT
-                    l.id AS loan_id,
-                    l.branch_id,
-                    l.balance AS outstanding_balance,
-                    COALESCE(SUM(i.amount_due - i.amount_paid), 0) AS arrears_amount,
-                    CAST(julianday(?) - julianday(MIN(i.due_date)) AS INTEGER) AS days_overdue
-                  FROM loans l
-                  INNER JOIN loan_installments i ON i.loan_id = l.id
-                  ${arrearsWhereSql}
-                    AND i.status != 'paid'
-                    AND datetime(i.due_date) < datetime(?)
-                  GROUP BY l.id, l.branch_id, l.balance
-                )
-                SELECT
-                  b.id AS branch_id,
-                  b.name AS branch_name,
-                  r.name AS region_name,
-                  COUNT(*) AS loans_in_arrears,
-                  COALESCE(SUM(la.arrears_amount), 0) AS total_arrears_amount,
-                  COALESCE(SUM(la.outstanding_balance), 0) AS at_risk_balance,
-                  COALESCE(SUM(CASE WHEN la.days_overdue >= 30 THEN la.outstanding_balance ELSE 0 END), 0) AS par30_balance
-                FROM loan_arrears la
-                INNER JOIN branches b ON b.id = la.branch_id
-                INNER JOIN regions r ON r.id = b.region_id
-                GROUP BY b.id
-                ORDER BY par30_balance DESC, at_risk_balance DESC, b.name ASC
-                LIMIT ${branchLimit}
-              `,
-              [arrearsSnapshotAt, ...arrearsParams, arrearsSnapshotAt],
-            );
+                    COUNT(*) AS loans_in_arrears,
+                    COALESCE(SUM(arrears_amount), 0) AS total_arrears_amount,
+                    COALESCE(SUM(outstanding_balance), 0) AS at_risk_balance,
+                    COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN outstanding_balance ELSE 0 END), 0) AS par30_balance,
+                    COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_60_MIN_DAYS} AND ${PAR_60_MAX_DAYS} THEN outstanding_balance ELSE 0 END), 0) AS par60_balance,
+                    COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_90_MIN_DAYS} AND ${PAR_90_MAX_DAYS} THEN outstanding_balance ELSE 0 END), 0) AS par90_balance,
+                    COALESCE(SUM(CASE WHEN days_overdue >= ${NPL_MIN_DAYS} THEN outstanding_balance ELSE 0 END), 0) AS npl_balance
+                  FROM loan_arrears
+                `,
+                [arrearsSnapshotBusinessDate, ...arrearsParams, arrearsSnapshotBusinessDate],
+              ),
+              all(
+                `
+                  WITH loan_arrears AS (
+                    SELECT
+                      l.id AS loan_id,
+                      l.branch_id,
+                      l.balance AS outstanding_balance,
+                      COALESCE(SUM(i.amount_due - i.amount_paid), 0) AS arrears_amount,
+                      CAST(julianday(date(?)) - julianday(${businessDateSql("MIN(i.due_date)")}) AS INTEGER) AS days_overdue
+                    FROM loans l
+                    INNER JOIN loan_installments i ON i.loan_id = l.id
+                    ${arrearsWhereSql}
+                      AND i.status != 'paid'
+                      AND ${businessDateSql("i.due_date")} < date(?)
+                    GROUP BY l.id, l.branch_id, l.balance
+                  )
+                  SELECT
+                    b.id AS branch_id,
+                    b.name AS branch_name,
+                    r.name AS region_name,
+                    COUNT(*) AS loans_in_arrears,
+                    COALESCE(SUM(la.arrears_amount), 0) AS total_arrears_amount,
+                    COALESCE(SUM(la.outstanding_balance), 0) AS at_risk_balance,
+                    COALESCE(SUM(CASE WHEN la.days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN la.outstanding_balance ELSE 0 END), 0) AS par30_balance,
+                    COALESCE(SUM(CASE WHEN la.days_overdue BETWEEN ${PAR_60_MIN_DAYS} AND ${PAR_60_MAX_DAYS} THEN la.outstanding_balance ELSE 0 END), 0) AS par60_balance,
+                    COALESCE(SUM(CASE WHEN la.days_overdue BETWEEN ${PAR_90_MIN_DAYS} AND ${PAR_90_MAX_DAYS} THEN la.outstanding_balance ELSE 0 END), 0) AS par90_balance,
+                    COALESCE(SUM(CASE WHEN la.days_overdue >= ${NPL_MIN_DAYS} THEN la.outstanding_balance ELSE 0 END), 0) AS npl_balance
+                  FROM loan_arrears la
+                  INNER JOIN branches b ON b.id = la.branch_id
+                  INNER JOIN regions r ON r.id = b.region_id
+                  GROUP BY b.id, b.name, r.name
+                  ORDER BY npl_balance DESC, par90_balance DESC, at_risk_balance DESC, b.name ASC
+                  LIMIT ${branchLimit}
+                `,
+                [arrearsSnapshotBusinessDate, ...arrearsParams, arrearsSnapshotBusinessDate],
+              ),
+            ]);
 
-            const dailyCollections = await all(
-              `
-                SELECT
-                  date(datetime(r.paid_at)) AS date,
-                  COUNT(r.id) AS repayment_count,
-                  COALESCE(SUM(r.amount), 0) AS total_collected
-                FROM repayments r
-                INNER JOIN loans l ON l.id = r.loan_id
-                ${collectionWhereSql}
-                GROUP BY date(datetime(r.paid_at))
-                ORDER BY date(datetime(r.paid_at)) ASC
-              `,
-              collectionParams,
-            );
+            const collectionsSummary = buildPeriodCollectionBreakdownSummary({
+              events: collectionEvents,
+              dateFrom: normalizedDateFromIso,
+              dateTo: normalizedDateToIso,
+            });
+            const dailyCollections = buildDailyCollectionBreakdownRows(collectionEvents);
 
             const totalOutstanding = Number(portfolio?.outstanding_balance || 0);
-            const totalCollectedInPeriod = Number(collectionsSummary?.total_collected || 0);
+            const totalCollectedInPeriod = Number(collectionsSummary.total_collected || 0);
             const totalDueInPeriod = Number(dueSummary?.total_due || 0);
             const par30Balance = Number(arrearsSummary?.par30_balance || 0);
+            const par60Balance = Number(arrearsSummary?.par60_balance || 0);
             const par90Balance = Number(arrearsSummary?.par90_balance || 0);
+            const nplBalance = Number(arrearsSummary?.npl_balance || 0);
 
             const collectionRate = totalDueInPeriod > 0
-              ? Number((totalCollectedInPeriod / totalDueInPeriod).toFixed(4))
+              ? Number((Number(collectionsSummary.period_due_collected || 0) / totalDueInPeriod).toFixed(4))
               : 0;
             const par30Ratio = totalOutstanding > 0
               ? Number((par30Balance / totalOutstanding).toFixed(4))
               : 0;
+            const par60Ratio = totalOutstanding > 0
+              ? Number((par60Balance / totalOutstanding).toFixed(4))
+              : 0;
             const par90Ratio = totalOutstanding > 0
               ? Number((par90Balance / totalOutstanding).toFixed(4))
+              : 0;
+            const nplRatio = totalOutstanding > 0
+              ? Number((nplBalance / totalOutstanding).toFixed(4))
               : 0;
 
             return {
@@ -502,16 +609,23 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                 total_arrears_amount: Number(arrearsSummary?.total_arrears_amount || 0),
                 at_risk_balance: Number(arrearsSummary?.at_risk_balance || 0),
                 par30_balance: par30Balance,
+                par60_balance: par60Balance,
                 par90_balance: par90Balance,
+                npl_balance: nplBalance,
                 par30_ratio: par30Ratio,
+                par60_ratio: par60Ratio,
                 par90_ratio: par90Ratio,
+                npl_ratio: nplRatio,
               },
               collections: {
-                repayment_count: Number(collectionsSummary?.repayment_count || 0),
-                loans_with_repayments: Number(collectionsSummary?.loans_with_repayments || 0),
+                repayment_count: Number(collectionsSummary.repayment_count || 0),
+                loans_with_repayments: Number(collectionsSummary.loans_with_repayments || 0),
                 total_collected: totalCollectedInPeriod,
                 total_due: totalDueInPeriod,
-                total_paid_against_due: Number(dueSummary?.total_paid_against_due || 0),
+                total_paid_against_due: Number(collectionsSummary.period_due_collected || 0),
+                arrears_collected: Number(collectionsSummary.arrears_collected || 0),
+                advance_collected: Number(collectionsSummary.advance_collected || 0),
+                unapplied_credit: Number(collectionsSummary.unapplied_credit || 0),
                 collection_rate: collectionRate,
               },
               sustainability: {
@@ -519,8 +633,8 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                 liquidity_from_collections_ratio: totalOutstanding > 0
                   ? Number((totalCollectedInPeriod / totalOutstanding).toFixed(4))
                   : 0,
-                risk_adjusted_collection_ratio: (1 + par30Ratio) > 0
-                  ? Number((collectionRate / (1 + par30Ratio)).toFixed(4))
+                risk_adjusted_collection_ratio: (1 + Number(portfolio?.parRatio || 0)) > 0
+                  ? Number((collectionRate / (1 + Number(portfolio?.parRatio || 0))).toFixed(4))
                   : 0,
               },
               trends: {
@@ -528,6 +642,10 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                   date: row.date,
                   repayment_count: Number(row.repayment_count || 0),
                   total_collected: Number(row.total_collected || 0),
+                  current_due_collected: Number(row.current_due_collected || 0),
+                  arrears_collected: Number(row.arrears_collected || 0),
+                  advance_collected: Number(row.advance_collected || 0),
+                  unapplied_credit: Number(row.unapplied_credit || 0),
                 })),
                 top_risk_branches: topRiskBranches.map((row: Record<string, any>) => ({
                   branch_id: Number(row.branch_id),
@@ -537,6 +655,9 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                   total_arrears_amount: Number(row.total_arrears_amount || 0),
                   at_risk_balance: Number(row.at_risk_balance || 0),
                   par30_balance: Number(row.par30_balance || 0),
+                  par60_balance: Number(row.par60_balance || 0),
+                  par90_balance: Number(row.par90_balance || 0),
+                  npl_balance: Number(row.npl_balance || 0),
                 })),
               },
             };
@@ -551,12 +672,22 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
             total_loans: payload.portfolio.total_loans,
             active_loans: payload.portfolio.active_loans,
             outstanding_balance: payload.portfolio.outstanding_balance,
+            at_risk_balance: payload.risk.at_risk_balance,
+            par30_balance: payload.risk.par30_balance,
+            par60_balance: payload.risk.par60_balance,
+            par90_balance: payload.risk.par90_balance,
+            npl_balance: payload.risk.npl_balance,
             par30_ratio: payload.risk.par30_ratio,
+            par60_ratio: payload.risk.par60_ratio,
             par90_ratio: payload.risk.par90_ratio,
+            npl_ratio: payload.risk.npl_ratio,
             collection_rate: payload.collections.collection_rate,
             risk_adjusted_collection_ratio: payload.sustainability.risk_adjusted_collection_ratio,
             top_risk_branch: payload.trends.top_risk_branches[0]?.branch_name || null,
             top_risk_branch_par30_balance: payload.trends.top_risk_branches[0]?.par30_balance || 0,
+            top_risk_branch_par60_balance: payload.trends.top_risk_branches[0]?.par60_balance || 0,
+            top_risk_branch_par90_balance: payload.trends.top_risk_branches[0]?.par90_balance || 0,
+            top_risk_branch_npl_balance: payload.trends.top_risk_branches[0]?.npl_balance || 0,
           };
           sendTabularExport(res, {
             format: requestedFormat,
@@ -711,7 +842,11 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
         return res.status(200).json({
           ...payload,
           reportRows,
-          details,
+          details: details.map((row: Record<string, any>) => ({
+            ...row,
+            phonenumber: normalizeKenyanPhone(row.phonenumber),
+            accountno: normalizeKenyanPhone(row.accountno),
+          })),
         });
       } catch (error) {
         next(error);
@@ -736,11 +871,17 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
         if (dateFrom && dateTo && new Date(dateFrom) > new Date(dateTo)) {
           return res.status(400).json({ message: "dateFrom must be before or equal to dateTo." });
         }
-        const arrearsSnapshotAt = dateTo || new Date().toISOString();
+        const arrearsSnapshotAt = resolveArrearsSnapshotIso(dateTo);
+        const arrearsSnapshotBusinessDate = resolveBusinessDateParam(arrearsSnapshotAt)
+          ?? formatUtcDateOnly(new Date(arrearsSnapshotAt));
 
         const branchFilter = parseId(req.query.branchId);
         const officerIdsFilter = resolveOfficerFilter(req.query.officerIds, req.query.officerId, res);
         if (officerIdsFilter === undefined) {
+          return;
+        }
+        const agingBucketFilter = resolveAgingBucketFilter(req.query.agingBucket, res);
+        if (agingBucketFilter === undefined) {
           return;
         }
         const cacheKeyPayload = {
@@ -749,9 +890,10 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
           arrearsSnapshotAt,
           branchId: branchFilter || null,
           officerIds: officerIdsFilter || null,
+          agingBucket: agingBucketFilter || null,
         };
         const whereBuilder = createSqlWhereBuilder();
-        whereBuilder.addClause("l.status IN ('active', 'restructured')");
+        whereBuilder.addClause("l.status IN ('active', 'restructured', 'overdue')");
         applyOfficerFilter(whereBuilder, "l.officer_id", officerIdsFilter);
         if (!applyScopeAndBranchFilter({
           whereBuilder,
@@ -771,18 +913,21 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
             SELECT
               l.id                                                               AS loan_id,
               l.branch_id,
+              LOWER(COALESCE(l.status, ''))                                      AS loan_status,
               l.balance                                                          AS outstanding_balance,
               COALESCE(SUM(i.amount_due - i.amount_paid), 0)                    AS arrears_amount,
-              CAST(julianday(?) - julianday(MIN(i.due_date)) AS INTEGER)         AS days_overdue
+              CAST(julianday(date(?)) - julianday(${businessDateSql("MIN(i.due_date)")}) AS INTEGER)         AS days_overdue
             FROM loans l
             INNER JOIN loan_installments i ON i.loan_id = l.id
             ${whereSql}
               AND i.status != 'paid'
-              AND datetime(i.due_date) < datetime(?)
-            GROUP BY l.id, l.branch_id, l.balance
+              AND ${businessDateSql("i.due_date")} < date(?)
+            GROUP BY l.id, l.branch_id, l.status, l.balance
           )
         `;
 
+        const agingBucketWhereSql = buildAgingBucketWhereSql("days_overdue", agingBucketFilter);
+        const agingBucketDetailWhereSql = buildAgingBucketWhereSql("la.days_overdue", agingBucketFilter);
         const summary = await resolveCachedReport({
           namespace: "reports:arrears:summary",
           user: req.user,
@@ -795,25 +940,49 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                 (SELECT COUNT(*) FROM loans l ${whereSql}) AS total_active_loans,
                 COUNT(*)                                    AS loans_in_arrears,
                 COALESCE(SUM(arrears_amount), 0)            AS total_arrears_amount,
+                COALESCE(SUM(CASE
+                  WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_90_MAX_DAYS}
+                    AND loan_status NOT IN ('restructured')
+                  THEN arrears_amount
+                  ELSE 0
+                END), 0)                                    AS pre_npl_arrears_amount,
                 COALESCE(SUM(outstanding_balance), 0)       AS at_risk_balance,
 
-                SUM(CASE WHEN days_overdue BETWEEN 1 AND 29  THEN 1 ELSE 0 END) AS par1_count,
-                SUM(CASE WHEN days_overdue BETWEEN 30 AND 59 THEN 1 ELSE 0 END) AS par30_count,
-                SUM(CASE WHEN days_overdue BETWEEN 60 AND 89 THEN 1 ELSE 0 END) AS par60_count,
-                SUM(CASE WHEN days_overdue >= 90             THEN 1 ELSE 0 END) AS par90_count,
+                SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN 1 ELSE 0 END) AS par1_count,
+                SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN 1 ELSE 0 END) AS par30_count,
+                SUM(CASE WHEN days_overdue BETWEEN ${PAR_60_MIN_DAYS} AND ${PAR_60_MAX_DAYS} THEN 1 ELSE 0 END) AS par60_count,
+                SUM(CASE WHEN days_overdue BETWEEN ${PAR_90_MIN_DAYS} AND ${PAR_90_MAX_DAYS} THEN 1 ELSE 0 END) AS par90_count,
+                SUM(CASE WHEN days_overdue >= ${NPL_MIN_DAYS} THEN 1 ELSE 0 END) AS npl_count,
 
-                COALESCE(SUM(CASE WHEN days_overdue BETWEEN 1 AND 29  THEN outstanding_balance ELSE 0 END), 0) AS par1_balance,
-                COALESCE(SUM(CASE WHEN days_overdue BETWEEN 30 AND 59 THEN outstanding_balance ELSE 0 END), 0) AS par30_balance,
-                COALESCE(SUM(CASE WHEN days_overdue BETWEEN 60 AND 89 THEN outstanding_balance ELSE 0 END), 0) AS par60_balance,
-                COALESCE(SUM(CASE WHEN days_overdue >= 90             THEN outstanding_balance ELSE 0 END), 0) AS par90_balance,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN outstanding_balance ELSE 0 END), 0) AS par1_balance,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN outstanding_balance ELSE 0 END), 0) AS par30_balance,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_60_MIN_DAYS} AND ${PAR_60_MAX_DAYS} THEN outstanding_balance ELSE 0 END), 0) AS par60_balance,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_90_MIN_DAYS} AND ${PAR_90_MAX_DAYS} THEN outstanding_balance ELSE 0 END), 0) AS par90_balance,
+                COALESCE(SUM(CASE WHEN days_overdue >= ${NPL_MIN_DAYS} THEN outstanding_balance ELSE 0 END), 0) AS npl_balance,
 
-                COALESCE(SUM(CASE WHEN days_overdue BETWEEN 1 AND 29  THEN arrears_amount ELSE 0 END), 0) AS par1_arrears,
-                COALESCE(SUM(CASE WHEN days_overdue BETWEEN 30 AND 59 THEN arrears_amount ELSE 0 END), 0) AS par30_arrears,
-                COALESCE(SUM(CASE WHEN days_overdue BETWEEN 60 AND 89 THEN arrears_amount ELSE 0 END), 0) AS par60_arrears,
-                COALESCE(SUM(CASE WHEN days_overdue >= 90             THEN arrears_amount ELSE 0 END), 0) AS par90_arrears
-              FROM loan_arrears
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN arrears_amount ELSE 0 END), 0) AS par1_arrears,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN arrears_amount ELSE 0 END), 0) AS par30_arrears,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_60_MIN_DAYS} AND ${PAR_60_MAX_DAYS} THEN arrears_amount ELSE 0 END), 0) AS par60_arrears,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_90_MIN_DAYS} AND ${PAR_90_MAX_DAYS} THEN arrears_amount ELSE 0 END), 0) AS par90_arrears,
+                COALESCE(SUM(CASE WHEN days_overdue >= ${NPL_MIN_DAYS} THEN arrears_amount ELSE 0 END), 0) AS npl_arrears
+              FROM loan_arrears${agingBucketWhereSql ? ` WHERE ${agingBucketWhereSql}` : ""}
             `,
-            [arrearsSnapshotAt, ...queryParams, arrearsSnapshotAt, ...queryParams],
+            [arrearsSnapshotBusinessDate, ...queryParams, arrearsSnapshotBusinessDate, ...queryParams],
+          ),
+        });
+        const totalOutstandingSummary = await resolveCachedReport({
+          namespace: "reports:arrears:outstanding-total",
+          user: req.user,
+          scope,
+          keyPayload: cacheKeyPayload,
+          compute: async () => get(
+            `
+              SELECT
+                COALESCE(SUM(l.balance), 0) AS total_outstanding_balance
+              FROM loans l
+              ${whereSql}
+            `,
+            queryParams,
           ),
         });
 
@@ -832,25 +1001,29 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                 COUNT(*)                             AS loans_in_arrears,
                 COALESCE(SUM(la.arrears_amount), 0)  AS total_arrears_amount,
                 COALESCE(SUM(la.outstanding_balance), 0) AS at_risk_balance,
-                SUM(CASE WHEN days_overdue BETWEEN 1 AND 29  THEN 1 ELSE 0 END) AS par1_count,
-                SUM(CASE WHEN days_overdue BETWEEN 30 AND 59 THEN 1 ELSE 0 END) AS par30_count,
-                SUM(CASE WHEN days_overdue BETWEEN 60 AND 89 THEN 1 ELSE 0 END) AS par60_count,
-                SUM(CASE WHEN days_overdue >= 90             THEN 1 ELSE 0 END) AS par90_count,
-                COALESCE(SUM(CASE WHEN days_overdue BETWEEN 1 AND 29  THEN la.outstanding_balance ELSE 0 END), 0) AS par1_balance,
-                COALESCE(SUM(CASE WHEN days_overdue BETWEEN 30 AND 59 THEN la.outstanding_balance ELSE 0 END), 0) AS par30_balance,
-                COALESCE(SUM(CASE WHEN days_overdue BETWEEN 60 AND 89 THEN la.outstanding_balance ELSE 0 END), 0) AS par60_balance,
-                COALESCE(SUM(CASE WHEN days_overdue >= 90             THEN la.outstanding_balance ELSE 0 END), 0) AS par90_balance,
-                COALESCE(SUM(CASE WHEN days_overdue BETWEEN 1 AND 29  THEN la.arrears_amount ELSE 0 END), 0) AS par1_arrears,
-                COALESCE(SUM(CASE WHEN days_overdue BETWEEN 30 AND 59 THEN la.arrears_amount ELSE 0 END), 0) AS par30_arrears,
-                COALESCE(SUM(CASE WHEN days_overdue BETWEEN 60 AND 89 THEN la.arrears_amount ELSE 0 END), 0) AS par60_arrears,
-                COALESCE(SUM(CASE WHEN days_overdue >= 90             THEN la.arrears_amount ELSE 0 END), 0) AS par90_arrears
+                SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN 1 ELSE 0 END) AS par1_count,
+                SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN 1 ELSE 0 END) AS par30_count,
+                SUM(CASE WHEN days_overdue BETWEEN ${PAR_60_MIN_DAYS} AND ${PAR_60_MAX_DAYS} THEN 1 ELSE 0 END) AS par60_count,
+                SUM(CASE WHEN days_overdue BETWEEN ${PAR_90_MIN_DAYS} AND ${PAR_90_MAX_DAYS} THEN 1 ELSE 0 END) AS par90_count,
+                SUM(CASE WHEN days_overdue >= ${NPL_MIN_DAYS} THEN 1 ELSE 0 END) AS npl_count,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN la.outstanding_balance ELSE 0 END), 0) AS par1_balance,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN la.outstanding_balance ELSE 0 END), 0) AS par30_balance,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_60_MIN_DAYS} AND ${PAR_60_MAX_DAYS} THEN la.outstanding_balance ELSE 0 END), 0) AS par60_balance,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_90_MIN_DAYS} AND ${PAR_90_MAX_DAYS} THEN la.outstanding_balance ELSE 0 END), 0) AS par90_balance,
+                COALESCE(SUM(CASE WHEN days_overdue >= ${NPL_MIN_DAYS} THEN la.outstanding_balance ELSE 0 END), 0) AS npl_balance,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN la.arrears_amount ELSE 0 END), 0) AS par1_arrears,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_30_MIN_DAYS} AND ${PAR_30_MAX_DAYS} THEN la.arrears_amount ELSE 0 END), 0) AS par30_arrears,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_60_MIN_DAYS} AND ${PAR_60_MAX_DAYS} THEN la.arrears_amount ELSE 0 END), 0) AS par60_arrears,
+                COALESCE(SUM(CASE WHEN days_overdue BETWEEN ${PAR_90_MIN_DAYS} AND ${PAR_90_MAX_DAYS} THEN la.arrears_amount ELSE 0 END), 0) AS par90_arrears,
+                COALESCE(SUM(CASE WHEN days_overdue >= ${NPL_MIN_DAYS} THEN la.arrears_amount ELSE 0 END), 0) AS npl_arrears
               FROM loan_arrears la
               INNER JOIN branches b ON b.id = la.branch_id
               INNER JOIN regions  r ON r.id = b.region_id
-              GROUP BY b.id
+              ${agingBucketDetailWhereSql ? `WHERE ${agingBucketDetailWhereSql}` : ""}
+              GROUP BY b.id, b.name, r.name
               ORDER BY r.name ASC, b.name ASC
             `,
-            [arrearsSnapshotAt, ...queryParams, arrearsSnapshotAt],
+            [arrearsSnapshotBusinessDate, ...queryParams, arrearsSnapshotBusinessDate],
           ),
         });
 
@@ -875,18 +1048,18 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                 la.outstanding_balance AS loanbalance,
                 COALESCE(lp.name, 'Unknown Product') AS productname,
                 CASE
-                  WHEN datetime((
+                  WHEN CAST((
                     SELECT MAX(i2.due_date)
                     FROM loan_installments i2
-                    WHERE i2.loan_id = l.id
-                  )) < datetime(?) THEN 'Matured'
+                    WHERE i2.loan_id = la.loan_id
+                  ) AS timestamp) < CAST(? AS timestamp) THEN 'Matured'
                   ELSE 'Not Matured'
                 END AS maturity,
                 b.name AS branch,
                 (
                   SELECT MAX(i2.due_date)
                   FROM loan_installments i2
-                  WHERE i2.loan_id = l.id
+                  WHERE i2.loan_id = la.loan_id
                 ) AS expectedcleardate,
                 l.disbursed_at AS borrowdate,
                 c.business_location AS businesslocation,
@@ -895,21 +1068,25 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                   SELECT GROUP_CONCAT(g.full_name, '; ')
                   FROM loan_guarantors lg
                   INNER JOIN guarantors g ON g.id = lg.guarantor_id
-                  WHERE lg.loan_id = l.id
+                    WHERE lg.loan_id = la.loan_id
                 ), '') AS guarantornames,
                 COALESCE((
                   SELECT GROUP_CONCAT(g.phone, '; ')
                   FROM loan_guarantors lg
                   INNER JOIN guarantors g ON g.id = lg.guarantor_id
-                  WHERE lg.loan_id = l.id
+                    WHERE lg.loan_id = la.loan_id
                 ), '') AS guarantorphone,
-                (CAST(julianday(?) - julianday(l.disbursed_at) AS INTEGER) - 215) AS daystonpl
+                CASE
+                  WHEN la.days_overdue >= ${NPL_MIN_DAYS} THEN 0
+                  ELSE ${NPL_MIN_DAYS} - la.days_overdue
+                END AS daystonpl
               FROM loan_arrears la
               INNER JOIN loans l ON l.id = la.loan_id
               INNER JOIN clients c ON c.id = l.client_id
               LEFT JOIN loan_products lp ON lp.id = l.product_id
               LEFT JOIN branches b ON b.id = l.branch_id
               LEFT JOIN users u ON u.id = COALESCE(l.officer_id, l.created_by_user_id)
+              ${agingBucketDetailWhereSql ? `WHERE ${agingBucketDetailWhereSql}` : ""}
               GROUP BY
                 la.loan_id,
                 l.client_id,
@@ -929,11 +1106,32 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                 u.full_name
               ORDER BY borrowerid DESC, la.loan_id DESC
             `,
-            [arrearsSnapshotAt, ...queryParams, arrearsSnapshotAt, arrearsSnapshotAt, arrearsSnapshotAt],
+            [arrearsSnapshotBusinessDate, ...queryParams, arrearsSnapshotBusinessDate, arrearsSnapshotAt],
           ),
         });
         const reportTemplate = getLegacyReportTemplate("arrears");
         const reportRows = mapLegacyArrearsRows(arrearsDetails);
+        const summaryRecord = (summary as Record<string, any> | undefined) || {};
+        const totalOutstandingBalance = Number((totalOutstandingSummary as Record<string, any> | undefined)?.total_outstanding_balance || 0);
+        const normalizedSummary = {
+          ...summaryRecord,
+          total_outstanding_balance: totalOutstandingBalance,
+          at_risk_ratio: totalOutstandingBalance > 0
+            ? Number((Number(summaryRecord.at_risk_balance || 0) / totalOutstandingBalance).toFixed(4))
+            : 0,
+          par30_ratio: totalOutstandingBalance > 0
+            ? Number((Number(summaryRecord.par30_balance || 0) / totalOutstandingBalance).toFixed(4))
+            : 0,
+          par60_ratio: totalOutstandingBalance > 0
+            ? Number((Number(summaryRecord.par60_balance || 0) / totalOutstandingBalance).toFixed(4))
+            : 0,
+          par90_ratio: totalOutstandingBalance > 0
+            ? Number((Number(summaryRecord.par90_balance || 0) / totalOutstandingBalance).toFixed(4))
+            : 0,
+          npl_ratio: totalOutstandingBalance > 0
+            ? Number((Number(summaryRecord.npl_balance || 0) / totalOutstandingBalance).toFixed(4))
+            : 0,
+        };
 
         if (format !== "json") {
           sendTabularExport(res, {
@@ -949,10 +1147,15 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
 
         return res.status(200).json({
           period: { dateFrom: dateFrom || null, dateTo: dateTo || null },
-          summary,
+          agingBucket: agingBucketFilter || null,
+          summary: normalizedSummary,
           reportRows,
           branchBreakdown,
-          arrearsDetails,
+          arrearsDetails: arrearsDetails.map((row: Record<string, any>) => ({
+            ...row,
+            phonenumber: normalizeKenyanPhone(row.phonenumber),
+            guarantorphone: normalizeKenyanPhone(row.guarantorphone),
+          })),
         });
       } catch (error) {
         next(error);
@@ -983,6 +1186,12 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
           return res.status(400).json({ message: "dateFrom must be before or equal to dateTo." });
         }
         const arrearsSnapshotAt = resolveArrearsSnapshotIso(dateTo);
+        const dateFromBusinessDate = resolveBusinessDateParam(dateFrom)
+          ?? formatUtcDateOnly(new Date(String(dateFrom)));
+        const dateToBusinessDate = resolveBusinessDateParam(dateTo)
+          ?? formatUtcDateOnly(new Date(String(dateTo)));
+        const arrearsSnapshotBusinessDate = resolveBusinessDateParam(arrearsSnapshotAt)
+          ?? formatUtcDateOnly(new Date(arrearsSnapshotAt));
 
         const branchFilter = parseId(req.query.branchId);
         const officerIdsFilter = resolveOfficerFilter(req.query.officerIds, req.query.officerId, res);
@@ -991,8 +1200,8 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
         }
         const upcomingFilterBuilder = createSqlWhereBuilder();
         upcomingFilterBuilder.addClause("i.status != 'paid'");
-        upcomingFilterBuilder.addClause("l.status IN ('active', 'restructured')");
-        upcomingFilterBuilder.addClause("datetime(i.due_date) BETWEEN datetime(?) AND datetime(?)", [dateFrom, dateTo]);
+        upcomingFilterBuilder.addClause("l.status IN ('active', 'restructured', 'overdue')");
+        upcomingFilterBuilder.addClause(`${businessDateSql("i.due_date")} BETWEEN date(?) AND date(?)`, [dateFromBusinessDate, dateToBusinessDate]);
         applyOfficerFilter(upcomingFilterBuilder, "l.officer_id", officerIdsFilter);
         if (!applyScopeAndBranchFilter({
           whereBuilder: upcomingFilterBuilder,
@@ -1006,12 +1215,28 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
         }
         const upcomingWhereSql = upcomingFilterBuilder.buildWhere();
         const upcomingParams = upcomingFilterBuilder.getParams();
+        const scheduledTotalFilterBuilder = createSqlWhereBuilder();
+        scheduledTotalFilterBuilder.addClause("l.status IN ('active', 'restructured', 'overdue')");
+        scheduledTotalFilterBuilder.addClause(`${businessDateSql("i.due_date")} BETWEEN date(?) AND date(?)`, [dateFromBusinessDate, dateToBusinessDate]);
+        applyOfficerFilter(scheduledTotalFilterBuilder, "l.officer_id", officerIdsFilter);
+        if (!applyScopeAndBranchFilter({
+          whereBuilder: scheduledTotalFilterBuilder,
+          scope,
+          branchColumnRef: "l.branch_id",
+          branchFilter,
+          tenantColumnRef: "l.tenant_id",
+          res,
+        })) {
+          return;
+        }
+        const scheduledTotalWhereSql = scheduledTotalFilterBuilder.buildWhere();
+        const scheduledTotalParams = scheduledTotalFilterBuilder.getParams();
 
         const overdueFilterBuilder = createSqlWhereBuilder();
         overdueFilterBuilder.addClause("i.status != 'paid'");
-        overdueFilterBuilder.addClause("l.status IN ('active', 'restructured')");
-        overdueFilterBuilder.addClause("datetime(i.due_date) < datetime(?)", [dateFrom]);
-        overdueFilterBuilder.addClause("datetime(i.due_date) < datetime(?)", [arrearsSnapshotAt]);
+        overdueFilterBuilder.addClause("l.status IN ('active', 'restructured', 'overdue')");
+        overdueFilterBuilder.addClause(`${businessDateSql("i.due_date")} < date(?)`, [dateFromBusinessDate]);
+        overdueFilterBuilder.addClause(`${businessDateSql("i.due_date")} < date(?)`, [arrearsSnapshotBusinessDate]);
         applyOfficerFilter(overdueFilterBuilder, "l.officer_id", officerIdsFilter);
         if (!applyScopeAndBranchFilter({
           whereBuilder: overdueFilterBuilder,
@@ -1027,8 +1252,8 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
         const overdueParams = overdueFilterBuilder.getParams();
         const detailFilterBuilder = createSqlWhereBuilder();
         detailFilterBuilder.addClause("i.status != 'paid'");
-        detailFilterBuilder.addClause("l.status IN ('active', 'restructured')");
-        detailFilterBuilder.addClause("datetime(i.due_date) BETWEEN datetime(?) AND datetime(?)", [dateFrom, dateTo]);
+        detailFilterBuilder.addClause("l.status IN ('active', 'restructured', 'overdue')");
+        detailFilterBuilder.addClause(`${businessDateSql("i.due_date")} BETWEEN date(?) AND date(?)`, [dateFromBusinessDate, dateToBusinessDate]);
         applyOfficerFilter(detailFilterBuilder, "l.officer_id", officerIdsFilter);
         if (!applyScopeAndBranchFilter({
           whereBuilder: detailFilterBuilder,
@@ -1072,6 +1297,26 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
             upcomingParams,
           ),
         });
+        const scheduledTotalDues = await resolveCachedReport({
+          namespace: "reports:dues:scheduled-total",
+          user: req.user,
+          scope,
+          keyPayload: cacheKeyPayload,
+          compute: async () => get(
+            `
+              SELECT
+                COALESCE(SUM(i.amount_due), 0) AS total_scheduled_amount
+              FROM loan_installments i
+              INNER JOIN loans l ON l.id = i.loan_id
+              ${scheduledTotalWhereSql}
+            `,
+            scheduledTotalParams,
+          ),
+        });
+        const upcomingDuesSummary = {
+          ...upcomingDues,
+          total_scheduled_amount: Number((scheduledTotalDues as Record<string, unknown> | undefined)?.total_scheduled_amount || 0),
+        };
 
         const alreadyOverdue = await resolveCachedReport({
           namespace: "reports:dues:already-overdue",
@@ -1112,7 +1357,7 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
               INNER JOIN branches b ON b.id = l.branch_id
               INNER JOIN regions  r ON r.id = b.region_id
               ${upcomingWhereSql}
-              GROUP BY b.id
+              GROUP BY b.id, b.name, r.name
               ORDER BY r.name ASC, b.name ASC
             `,
             upcomingParams,
@@ -1153,13 +1398,13 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                   COALESCE(SUM(i2.amount_due - i2.amount_paid), 0) AS arrears_amount
                 FROM loan_installments i2
                 WHERE i2.status != 'paid'
-                  AND datetime(i2.due_date) < datetime(?)
+                  AND ${businessDateSql("i2.due_date")} < date(?)
                 GROUP BY i2.loan_id
               ) ar ON ar.loan_id = l.id
               ${detailWhereSql}
-              ORDER BY c.full_name COLLATE NOCASE DESC, l.id DESC, i.installment_number ASC
+              ORDER BY LOWER(c.full_name) DESC, l.id DESC, i.installment_number ASC
             `,
-            [arrearsSnapshotAt, ...detailParams],
+            [arrearsSnapshotBusinessDate, ...detailParams],
           ),
         });
         const reportTemplate = getLegacyReportTemplate("dues");
@@ -1179,11 +1424,14 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
 
         return res.status(200).json({
           period: { dateFrom, dateTo },
-          duesInPeriod: upcomingDues,
+          duesInPeriod: upcomingDuesSummary,
           alreadyOverdueBeforePeriod: alreadyOverdue,
           reportRows,
           branchBreakdown,
-          dueItems,
+          dueItems: dueItems.map((row: Record<string, any>) => ({
+            ...row,
+            phonenumber: normalizeKenyanPhone(row.phonenumber),
+          })),
         });
       } catch (error) {
         next(error);
@@ -1222,6 +1470,10 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
           branchId: branchFilter || null,
           officerIds: officerIdsFilter || null,
         };
+        const summaryCacheKeyPayload = {
+          ...cacheKeyPayload,
+          schemaVersion: 2,
+        };
 
         const newClientsBuilder = createSqlWhereBuilder();
         newClientsBuilder.addDateRange("c.created_at", dateFrom, dateTo);
@@ -1257,7 +1509,7 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
         const activeClientsParams = activeClientsBuilder.getParams();
 
         const activeBorrowersBuilder = createSqlWhereBuilder();
-        activeBorrowersBuilder.addClause("l.status IN ('active', 'restructured')");
+        activeBorrowersBuilder.addClause("l.status IN ('active', 'restructured', 'overdue')");
         applyOfficerFilter(activeBorrowersBuilder, "COALESCE(c.officer_id, c.created_by_user_id)", officerIdsFilter);
         if (!applyScopeAndBranchFilter({
           whereBuilder: activeBorrowersBuilder,
@@ -1302,6 +1554,27 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
         }
         const repeatBorrowersWhereSql = repeatBorrowersBuilder.buildWhere();
         const repeatBorrowersParams = repeatBorrowersBuilder.getParams();
+
+        const declinedLoansBuilder = createSqlWhereBuilder();
+        declinedLoansBuilder.addClause("LOWER(COALESCE(l.status, '')) = 'rejected'");
+        declinedLoansBuilder.addDateRange("l.rejected_at", dateFrom, dateTo);
+        applyOfficerFilter(
+          declinedLoansBuilder,
+          "COALESCE(c.officer_id, c.created_by_user_id, l.officer_id, l.created_by_user_id)",
+          officerIdsFilter,
+        );
+        if (!applyScopeAndBranchFilter({
+          whereBuilder: declinedLoansBuilder,
+          scope,
+          branchColumnRef: "c.branch_id",
+          branchFilter,
+          tenantColumnRef: "c.tenant_id",
+          res,
+        })) {
+          return;
+        }
+        const declinedLoansWhereSql = declinedLoansBuilder.buildWhere();
+        const declinedLoansParams = declinedLoansBuilder.getParams();
 
         const branchScopeBuilder = createSqlWhereBuilder();
         if (!applyScopeAndBranchFilter({
@@ -1349,9 +1622,9 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
           namespace: "reports:clients:summary",
           user: req.user,
           scope,
-          keyPayload: cacheKeyPayload,
+          keyPayload: summaryCacheKeyPayload,
           compute: async () => {
-            const [newClients, activeClients, activeBorrowers, firstTimeBorrowers, repeatBorrowers] = await Promise.all([
+            const [newClients, activeClients, activeBorrowers, firstTimeBorrowers, repeatBorrowers, declinedLoans] = await Promise.all([
               get(
                 `
                   SELECT COUNT(*) AS new_clients_registered
@@ -1409,6 +1682,15 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                 `,
                 repeatBorrowersParams,
               ),
+              get(
+                `
+                  SELECT COUNT(*) AS declined_loans
+                  FROM loans l
+                  INNER JOIN clients c ON c.id = l.client_id
+                  ${declinedLoansWhereSql}
+                `,
+                declinedLoansParams,
+              ),
             ]);
 
             return {
@@ -1417,6 +1699,8 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
               active_borrowers: Number(activeBorrowers?.active_borrowers || 0),
               first_time_borrowers_in_period: Number(firstTimeBorrowers?.first_time_borrowers_in_period || 0),
               total_repeat_borrowers: Number(repeatBorrowers?.total_repeat_borrowers || 0),
+              declined_loans: Number(declinedLoans?.declined_loans || 0),
+              declined_loans_in_period: Number(declinedLoans?.declined_loans || 0),
             };
           },
         });
@@ -1467,7 +1751,7 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                   FROM loans l
                   INNER JOIN clients c ON c.id = l.client_id
                   WHERE c.branch_id = b.id
-                    AND l.status IN ('active', 'restructured')
+                    AND l.status IN ('active', 'restructured', 'overdue')
                     ${officerClientSql}
                 ) AS active_borrowers,
                 (
@@ -1574,7 +1858,9 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
             filenameBase: "clients-report",
             title: "Clients Report",
             headers: cols,
-            rows: customers.length > 0 ? customers : branchBreakdown,
+            rows: customers.length > 0
+              ? customers.map((row: Record<string, any>) => ({ ...row, phone_number: normalizeKenyanPhone(row.phone_number) }))
+              : branchBreakdown,
           });
           return;
         }
@@ -1583,7 +1869,10 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
           period: { dateFrom: dateFrom || null, dateTo: dateTo || null },
           summary,
           branchBreakdown,
-          customers,
+          customers: customers.map((row: Record<string, any>) => ({
+            ...row,
+            phone_number: normalizeKenyanPhone(row.phone_number),
+          })),
         });
       } catch (error) {
         next(error);
@@ -1753,7 +2042,7 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
             filenameBase: "guarantors-report",
             title: "Guarantors Report",
             headers: cols,
-            rows: guarantors,
+            rows: guarantors.map((row: Record<string, any>) => ({ ...row, guarantor_phone: normalizeKenyanPhone(row.guarantor_phone) })),
           });
           return;
         }
@@ -1766,7 +2055,10 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
             guaranteed_loans: Number(summary?.guaranteed_loans || 0),
             total_guarantee_amount: Number(summary?.total_guarantee_amount || 0),
           },
-          guarantors,
+          guarantors: guarantors.map((row: Record<string, any>) => ({
+            ...row,
+            guarantor_phone: normalizeKenyanPhone(row.guarantor_phone),
+          })),
         });
       } catch (error) {
         next(error);
@@ -1792,6 +2084,14 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
           return res.status(400).json({ message: "dateFrom must be before or equal to dateTo." });
         }
         const arrearsSnapshotAt = resolveArrearsSnapshotIso(dateTo);
+        const dateFromBusinessDate = dateFrom
+          ? resolveBusinessDateParam(dateFrom) ?? formatUtcDateOnly(new Date(dateFrom))
+          : null;
+        const dateToBusinessDate = dateTo
+          ? resolveBusinessDateParam(dateTo) ?? formatUtcDateOnly(new Date(dateTo))
+          : null;
+        const arrearsSnapshotBusinessDate = resolveBusinessDateParam(arrearsSnapshotAt)
+          ?? formatUtcDateOnly(new Date(arrearsSnapshotAt));
 
         const branchFilter = parseId(req.query.branchId);
         const officerIdsFilter = resolveOfficerFilter(req.query.officerIds, req.query.officerId, res);
@@ -1806,7 +2106,7 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
           officerIds: officerIdsFilter || null,
         };
         const whereBuilder = createSqlWhereBuilder();
-        whereBuilder.addClause("l.status IN ('active', 'restructured')");
+        whereBuilder.addClause("l.status IN ('active', 'restructured', 'overdue')");
         applyOfficerFilter(whereBuilder, "l.officer_id", officerIdsFilter);
         if (!applyScopeAndBranchFilter({
           whereBuilder,
@@ -1822,7 +2122,12 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
         const queryParams = whereBuilder.getParams();
 
         const dueDateBuilder = createSqlWhereBuilder();
-        dueDateBuilder.addDateRange("i.due_date", dateFrom, dateTo);
+        if (dateFromBusinessDate) {
+          dueDateBuilder.addClause(`${businessDateSql("i.due_date")} >= date(?)`, [dateFromBusinessDate]);
+        }
+        if (dateToBusinessDate) {
+          dueDateBuilder.addClause(`${businessDateSql("i.due_date")} <= date(?)`, [dateToBusinessDate]);
+        }
         const dueDateSql = dueDateBuilder.buildAnd();
         const dueDateParams = dueDateBuilder.getParams();
 
@@ -1833,12 +2138,12 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
               l.branch_id,
               l.balance                                                      AS outstanding_balance,
               COALESCE(SUM(i.amount_due - i.amount_paid), 0)                AS overdue_amount,
-              CAST(julianday(?) - julianday(MIN(i.due_date)) AS INTEGER)     AS days_overdue
+              CAST(julianday(date(?)) - julianday(${businessDateSql("MIN(i.due_date)")}) AS INTEGER)     AS days_overdue
             FROM loans l
             INNER JOIN loan_installments i ON i.loan_id = l.id
             ${whereSql}
               AND i.status != 'paid'
-              AND datetime(i.due_date) < datetime(?)
+              AND ${businessDateSql("i.due_date")} < date(?)
               ${dueDateSql}
             GROUP BY l.id, l.branch_id, l.balance
           )
@@ -1874,7 +2179,7 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                 COALESCE(SUM(CASE WHEN days_overdue >= 91 THEN outstanding_balance ELSE 0 END), 0) AS bucket_91_plus_balance
               FROM loan_aging
             `,
-            [arrearsSnapshotAt, ...queryParams, arrearsSnapshotAt, ...dueDateParams],
+            [arrearsSnapshotBusinessDate, ...queryParams, arrearsSnapshotBusinessDate, ...dueDateParams],
           ),
         });
 
@@ -1904,10 +2209,10 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
               FROM loan_aging la
               INNER JOIN branches b ON b.id = la.branch_id
               INNER JOIN regions r ON r.id = b.region_id
-              GROUP BY b.id
+              GROUP BY b.id, b.name, r.name
               ORDER BY r.name ASC, b.name ASC
             `,
-            [arrearsSnapshotAt, ...queryParams, arrearsSnapshotAt, ...dueDateParams],
+            [arrearsSnapshotBusinessDate, ...queryParams, arrearsSnapshotBusinessDate, ...dueDateParams],
           ),
         });
 
@@ -2006,7 +2311,7 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
               LEFT JOIN users u ON u.id = COALESCE(l.officer_id, l.created_by_user_id)
               ORDER BY la.days_overdue DESC, la.overdue_amount DESC, la.loan_id ASC
             `,
-            [arrearsSnapshotAt, ...queryParams, arrearsSnapshotAt, ...dueDateParams],
+            [arrearsSnapshotBusinessDate, ...queryParams, arrearsSnapshotBusinessDate, ...dueDateParams],
           ),
         });
 
@@ -2048,7 +2353,9 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
             filenameBase: "aging-report",
             title: "Aging Report",
             headers: cols,
-            rows: loanAgingDetails.length > 0 ? loanAgingDetails : branchBreakdown,
+            rows: loanAgingDetails.length > 0
+              ? loanAgingDetails.map((row: Record<string, any>) => ({ ...row, phonenumber: normalizeKenyanPhone(row.phonenumber) }))
+              : branchBreakdown,
           });
           return;
         }
@@ -2058,7 +2365,10 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
           summary: normalizedSummary,
           buckets,
           branchBreakdown,
-          loanAgingDetails,
+          loanAgingDetails: loanAgingDetails.map((row: Record<string, any>) => ({
+            ...row,
+            phonenumber: normalizeKenyanPhone(row.phonenumber),
+          })),
         });
       } catch (error) {
         next(error);
@@ -2070,3 +2380,8 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
 export {
   registerPortfolioReports,
 };
+
+
+
+
+

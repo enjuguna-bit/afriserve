@@ -222,8 +222,8 @@ const reportHubAllowedRoles = [
 const reportsHubConfigs = [
   {
     endpoint: "/api/reports/disbursements",
-    title: "Disbursment",
-    description: "Legacy disbursment export with the exact field layout used in operations.",
+    title: "Disbursement",
+    description: "Disbursement export with the exact field layout used in operations.",
     allowedRoles: reportHubAllowedRoles,
   },
   {

@@ -45,29 +45,33 @@ export type { GeneralLedgerServiceLike, JournalLine } from "./shared/types.js";
 export function createLoanLifecycleService(deps: LoanLifecycleDeps) {
   // Cast to any: each operation takes a Pick<LoanLifecycleDeps,...> subset.
   // Passing the full deps object is always safe — it is a structural superset.
-  const d = deps as any;
 
   // Wire the execute helpers, binding deps so reviewHighRisk can dispatch them
   const executeHelpers = {
-    executeWriteOffLoanFromApprovedRequest:    (a: Record<string, any>) => executeWriteOffLoanFromApprovedRequest(d, a as any),
-    executeRestructureLoanFromApprovedRequest: (a: Record<string, any>) => executeRestructureLoanFromApprovedRequest(d, a as any),
-    executeTopUpLoanFromApprovedRequest:       (a: Record<string, any>) => executeTopUpLoanFromApprovedRequest(d, a as any),
-    executeRefinanceLoanFromApprovedRequest:   (a: Record<string, any>) => executeRefinanceLoanFromApprovedRequest(d, a as any),
-    executeTermExtensionFromApprovedRequest:   (a: Record<string, any>) => executeTermExtensionFromApprovedRequest(d, a as any),
+    executeWriteOffLoanFromApprovedRequest: (args: Parameters<typeof executeWriteOffLoanFromApprovedRequest>[1]) =>
+      executeWriteOffLoanFromApprovedRequest(deps, args),
+    executeRestructureLoanFromApprovedRequest: (args: Parameters<typeof executeRestructureLoanFromApprovedRequest>[1]) =>
+      executeRestructureLoanFromApprovedRequest(deps, args),
+    executeTopUpLoanFromApprovedRequest: (args: Parameters<typeof executeTopUpLoanFromApprovedRequest>[1]) =>
+      executeTopUpLoanFromApprovedRequest(deps, args),
+    executeRefinanceLoanFromApprovedRequest: (args: Parameters<typeof executeRefinanceLoanFromApprovedRequest>[1]) =>
+      executeRefinanceLoanFromApprovedRequest(deps, args),
+    executeTermExtensionFromApprovedRequest: (args: Parameters<typeof executeTermExtensionFromApprovedRequest>[1]) =>
+      executeTermExtensionFromApprovedRequest(deps, args),
   };
 
   return {
-    approveLoan:    (args: Parameters<typeof approveLoan>[1])    => approveLoan(d, args),
-    rejectLoan:     (args: Parameters<typeof rejectLoan>[1])     => rejectLoan(d, args),
-    disburseLoan:   (args: Parameters<typeof disburseLoan>[1])   => disburseLoan(d, args),
-    writeOffLoan:   (args: Parameters<typeof writeOffLoan>[1])   => writeOffLoan(d, args),
-    restructureLoan:(args: Parameters<typeof restructureLoan>[1])=> restructureLoan(d, args),
-    topUpLoan:      (args: Parameters<typeof topUpLoan>[1])      => topUpLoan(d, args),
-    refinanceLoan:  (args: Parameters<typeof refinanceLoan>[1])  => refinanceLoan(d, args),
-    extendLoanTerm: (args: Parameters<typeof extendLoanTerm>[1]) => extendLoanTerm(d, args),
+    approveLoan:    (args: Parameters<typeof approveLoan>[1])    => approveLoan(deps, args),
+    rejectLoan:     (args: Parameters<typeof rejectLoan>[1])     => rejectLoan(deps, args),
+    disburseLoan:   (args: Parameters<typeof disburseLoan>[1])   => disburseLoan(deps, args),
+    writeOffLoan:   (args: Parameters<typeof writeOffLoan>[1])   => writeOffLoan(deps, args),
+    restructureLoan:(args: Parameters<typeof restructureLoan>[1])=> restructureLoan(deps, args),
+    topUpLoan:      (args: Parameters<typeof topUpLoan>[1])      => topUpLoan(deps, args),
+    refinanceLoan:  (args: Parameters<typeof refinanceLoan>[1])  => refinanceLoan(deps, args),
+    extendLoanTerm: (args: Parameters<typeof extendLoanTerm>[1]) => extendLoanTerm(deps, args),
     reviewHighRiskApprovalRequest: (args: Parameters<typeof reviewHighRiskApprovalRequest>[2]) =>
-      reviewHighRiskApprovalRequest(d, executeHelpers, args),
-    getDisbursementTranches:  (args: Parameters<typeof getDisbursementTranches>[1])  => getDisbursementTranches(d, args),
-    getLoanContractVersions:  (args: Parameters<typeof getLoanContractVersions>[1])  => getLoanContractVersions(d, args),
+      reviewHighRiskApprovalRequest(deps, executeHelpers as Parameters<typeof reviewHighRiskApprovalRequest>[1], args),
+    getDisbursementTranches:  (args: Parameters<typeof getDisbursementTranches>[1])  => getDisbursementTranches(deps, args),
+    getLoanContractVersions:  (args: Parameters<typeof getLoanContractVersions>[1])  => getLoanContractVersions(deps, args),
   };
 }

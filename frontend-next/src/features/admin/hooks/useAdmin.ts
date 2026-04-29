@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  activateUser,
   createTenant,
   createUser,
   deactivateUser,
@@ -22,7 +23,20 @@ import {
 } from '../../../services/adminService'
 import { queryKeys } from '../../../services/queryKeys'
 import { queryPolicies } from '../../../services/queryPolicies'
-import type { CreateTenantRequest, UpdateTenantRequest, UpdateUserRolesRequest } from '../../../types/admin'
+import type {
+  AdminResetUserPasswordRequest,
+  CreateTenantRequest,
+  UpdateTenantRequest,
+  UpdateUserRolesRequest,
+} from '../../../types/admin'
+
+declare const process:
+  | {
+      stderr?: {
+        write?: (message: string) => void
+      }
+    }
+  | undefined
 
 export function useUsers(params: Record<string, unknown>) {
   return useQuery({
@@ -92,6 +106,14 @@ export function useGrantUserPermission() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.userPermissions(variables.userId) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersLists() })
     },
+    onError: (error: unknown) => {
+      // Callers can override this via mutate(payload, { onError }) options.
+      // This default prevents silent swallowing of admin operation failures.
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (typeof process !== 'undefined' && process.stderr?.write) {
+        process.stderr.write(JSON.stringify({ level: 'warn', message: 'admin.mutation.error', error: msg ?? String(error) }) + '\n');
+      }
+    },
   })
 }
 
@@ -105,6 +127,14 @@ export function useRevokeUserPermission() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.userPermissions(variables.userId) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersLists() })
     },
+    onError: (error: unknown) => {
+      // Callers can override this via mutate(payload, { onError }) options.
+      // This default prevents silent swallowing of admin operation failures.
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (typeof process !== 'undefined' && process.stderr?.write) {
+        process.stderr.write(JSON.stringify({ level: 'warn', message: 'admin.mutation.error', error: msg ?? String(error) }) + '\n');
+      }
+    },
   })
 }
 
@@ -116,6 +146,14 @@ export function useCreateUser() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersSummary() })
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersLists() })
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.userRoles() })
+    },
+    onError: (error: unknown) => {
+      // Callers can override this via mutate(payload, { onError }) options.
+      // This default prevents silent swallowing of admin operation failures.
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (typeof process !== 'undefined' && process.stderr?.write) {
+        process.stderr.write(JSON.stringify({ level: 'warn', message: 'admin.mutation.error', error: msg ?? String(error) }) + '\n');
+      }
     },
   })
 }
@@ -131,6 +169,14 @@ export function useUpdateUserRoles() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.userSecurityState(variables.userId) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.userRoles() })
     },
+    onError: (error: unknown) => {
+      // Callers can override this via mutate(payload, { onError }) options.
+      // This default prevents silent swallowing of admin operation failures.
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (typeof process !== 'undefined' && process.stderr?.write) {
+        process.stderr.write(JSON.stringify({ level: 'warn', message: 'admin.mutation.error', error: msg ?? String(error) }) + '\n');
+      }
+    },
   })
 }
 
@@ -138,16 +184,60 @@ export function useDeactivateUser() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (userId: number) => deactivateUser(userId),
-    onSuccess: () => {
+    onSuccess: (_data, userId) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersSummary() })
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersLists() })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.userSecurityState(userId) })
+    },
+    onError: (error: unknown) => {
+      // Callers can override this via mutate(payload, { onError }) options.
+      // This default prevents silent swallowing of admin operation failures.
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (typeof process !== 'undefined' && process.stderr?.write) {
+        process.stderr.write(JSON.stringify({ level: 'warn', message: 'admin.mutation.error', error: msg ?? String(error) }) + '\n');
+      }
+    },
+  })
+}
+
+export function useActivateUser() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (userId: number) => activateUser(userId),
+    onSuccess: (_data, userId) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersSummary() })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersLists() })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.userSecurityState(userId) })
+    },
+    onError: (error: unknown) => {
+      // Callers can override this via mutate(payload, { onError }) options.
+      // This default prevents silent swallowing of admin operation failures.
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (typeof process !== 'undefined' && process.stderr?.write) {
+        process.stderr.write(JSON.stringify({ level: 'warn', message: 'admin.mutation.error', error: msg ?? String(error) }) + '\n');
+      }
     },
   })
 }
 
 export function useResetUserPassword() {
+  const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (userId: number) => resetUserPassword(userId),
+    mutationFn: ({ userId, payload }: { userId: number; payload: AdminResetUserPasswordRequest }) => (
+      resetUserPassword(userId, payload)
+    ),
+    onSuccess: (_data, variables) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.userSecurityState(variables.userId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersLists() })
+    },
+    onError: (error: unknown) => {
+      // Callers can override this via mutate(payload, { onError }) options.
+      // This default prevents silent swallowing of admin operation failures.
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (typeof process !== 'undefined' && process.stderr?.write) {
+        process.stderr.write(JSON.stringify({ level: 'warn', message: 'admin.mutation.error', error: msg ?? String(error) }) + '\n');
+      }
+    },
   })
 }
 
@@ -158,6 +248,14 @@ export function useRevokeUserSessions() {
     onSuccess: (_data, userId) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.userSecurityState(userId) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersLists() })
+    },
+    onError: (error: unknown) => {
+      // Callers can override this via mutate(payload, { onError }) options.
+      // This default prevents silent swallowing of admin operation failures.
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (typeof process !== 'undefined' && process.stderr?.write) {
+        process.stderr.write(JSON.stringify({ level: 'warn', message: 'admin.mutation.error', error: msg ?? String(error) }) + '\n');
+      }
     },
   })
 }
@@ -171,6 +269,14 @@ export function useUnlockUser() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersLists() })
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersSummary() })
     },
+    onError: (error: unknown) => {
+      // Callers can override this via mutate(payload, { onError }) options.
+      // This default prevents silent swallowing of admin operation failures.
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (typeof process !== 'undefined' && process.stderr?.write) {
+        process.stderr.write(JSON.stringify({ level: 'warn', message: 'admin.mutation.error', error: msg ?? String(error) }) + '\n');
+      }
+    },
   })
 }
 
@@ -181,6 +287,14 @@ export function useUpdateUserProfile() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersLists() })
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.usersSummary() })
+    },
+    onError: (error: unknown) => {
+      // Callers can override this via mutate(payload, { onError }) options.
+      // This default prevents silent swallowing of admin operation failures.
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (typeof process !== 'undefined' && process.stderr?.write) {
+        process.stderr.write(JSON.stringify({ level: 'warn', message: 'admin.mutation.error', error: msg ?? String(error) }) + '\n');
+      }
     },
   })
 }
@@ -202,6 +316,14 @@ export function useCreateTenant() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] })
     },
+    onError: (error: unknown) => {
+      // Callers can override this via mutate(payload, { onError }) options.
+      // This default prevents silent swallowing of admin operation failures.
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (typeof process !== 'undefined' && process.stderr?.write) {
+        process.stderr.write(JSON.stringify({ level: 'warn', message: 'admin.mutation.error', error: msg ?? String(error) }) + '\n');
+      }
+    },
   })
 }
 
@@ -212,6 +334,14 @@ export function useUpdateTenant() {
       updateTenant(tenantId, payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] })
+    },
+    onError: (error: unknown) => {
+      // Callers can override this via mutate(payload, { onError }) options.
+      // This default prevents silent swallowing of admin operation failures.
+      const msg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (typeof process !== 'undefined' && process.stderr?.write) {
+        process.stderr.write(JSON.stringify({ level: 'warn', message: 'admin.mutation.error', error: msg ?? String(error) }) + '\n');
+      }
     },
   })
 }

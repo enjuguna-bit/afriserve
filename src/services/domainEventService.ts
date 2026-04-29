@@ -38,7 +38,8 @@ function createDomainEventService(options: DomainEventServiceOptions) {
   } = options;
 
   async function publishDomainEvent(payload: PublishDomainEventPayload, tx?: any): Promise<number> {
-    const createdAt = new Date().toISOString();
+    const createdAtDate = new Date();
+    const createdAt = createdAtDate.toISOString();
     const tenantId = String(payload.tenantId || defaultTenantId || "default");
     const eventType = String(payload.eventType || "").trim();
     const aggregateType = String(payload.aggregateType || "").trim();
@@ -46,6 +47,8 @@ function createDomainEventService(options: DomainEventServiceOptions) {
     const payloadJson = JSON.stringify(payload.payload || {});
     const metadataJson = JSON.stringify(payload.metadata || {});
     const occurredAt = String(payload.occurredAt || createdAt);
+    const parsedOccurredAtDate = new Date(occurredAt);
+    const occurredAtDate = Number.isNaN(parsedOccurredAtDate.getTime()) ? createdAtDate : parsedOccurredAtDate;
 
     const isPrismaTx = Boolean(tx && typeof tx.$queryRaw === "function");
     if (isPrismaTx) {
@@ -73,9 +76,9 @@ function createDomainEventService(options: DomainEventServiceOptions) {
             ${metadataJson},
             'pending',
             0,
-            ${occurredAt},
-            ${createdAt},
-            ${createdAt}
+            ${occurredAtDate},
+            ${createdAtDate},
+            ${createdAtDate}
           )
           RETURNING id
         `;
@@ -108,14 +111,14 @@ function createDomainEventService(options: DomainEventServiceOptions) {
               ${aggregateType},
               ${aggregateId},
               ${payloadJson},
-              ${metadataJson},
-              'pending',
-              0,
-              ${occurredAt},
-              ${createdAt},
-              ${createdAt}
-            )
-          `;
+                ${metadataJson},
+                'pending',
+                0,
+                ${occurredAtDate},
+                ${createdAtDate},
+                ${createdAtDate}
+              )
+            `;
           try {
             const idRows = await tx.$queryRaw<{ id: number }[]>`
               SELECT last_insert_rowid() AS id

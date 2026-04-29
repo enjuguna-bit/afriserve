@@ -1,8 +1,10 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import {
   useActiveBranches,
+  useActivateUser,
   useCreateTenant,
   useCreateUser,
+  useDeactivateUser,
   useGrantUserPermission,
   usePermissionCatalog,
   useResetUserPassword,
@@ -21,6 +23,8 @@ import {
 import { AsyncState } from '../../../components/common/AsyncState'
 import { useToastStore } from '../../../store/toastStore'
 import type { UpdateUserRolesRequest } from '../../../types/admin'
+import { formatDisplayDate, formatDisplayDateTime } from '../../../utils/dateFormatting'
+import { formatDisplayDetails, formatDisplayText, resolveDisplayText } from '../../../utils/displayFormatting'
 import { buildBranchAreaOptions } from '../utils/branchAssignment'
 import styles from './AdminPage.module.css'
 
@@ -51,6 +55,11 @@ type CreateUserFormState = {
 type RoleAllocationFormState = {
   primaryRole: string
   roles: string[]
+}
+
+type ResetPasswordFormState = {
+  newPassword: string
+  confirmPassword: string
 }
 
 function isStrongPassword(value: string): boolean {
@@ -97,6 +106,11 @@ export function AdminPage() {
   const [createUserError, setCreateUserError] = useState<string | null>(null)
   const [roleAllocationDraft, setRoleAllocationDraft] = useState<{ userId: number; form: RoleAllocationFormState } | null>(null)
   const [roleAllocationError, setRoleAllocationError] = useState<string | null>(null)
+  const [resetPasswordForm, setResetPasswordForm] = useState<ResetPasswordFormState>({
+    newPassword: '',
+    confirmPassword: '',
+  })
+  const [resetPasswordError, setResetPasswordError] = useState<string | null>(null)
 
   const usersSummaryQuery = useUsersSummary()
   const userRolesQuery = useUserRoles()
@@ -105,7 +119,9 @@ export function AdminPage() {
   const usersQuery = useUsers({ limit: 50, offset: 0, search: search || undefined })
   const userPermissionsQuery = useUserPermissions(selectedUserId)
   const userSecurityStateQuery = useUserSecurityState(selectedUserId)
+  const activateUserMutation = useActivateUser()
   const createUserMutation = useCreateUser()
+  const deactivateUserMutation = useDeactivateUser()
   const updateUserRolesMutation = useUpdateUserRoles()
   const grantPermissionMutation = useGrantUserPermission()
   const revokePermissionMutation = useRevokeUserPermission()
@@ -139,7 +155,7 @@ export function AdminPage() {
   const branchOptions = useMemo(
     () => activeBranches.map((branch) => ({
       id: Number(branch.id),
-      label: `${branch.region_name || 'Region'} - ${branch.name}${branch.code ? ` (${branch.code})` : ''}`,
+      label: `${formatDisplayText(branch.region_name, 'Region')} - ${formatDisplayText(branch.name, `Branch #${branch.id}`)}${formatDisplayText(branch.code, '') ? ` (${formatDisplayText(branch.code, '')})` : ''}`,
     })),
     [activeBranches],
   )
@@ -228,6 +244,14 @@ export function AdminPage() {
     })
   }
 
+  function resetSelectedUserSecurityForm() {
+    setResetPasswordForm({
+      newPassword: '',
+      confirmPassword: '',
+    })
+    setResetPasswordError(null)
+  }
+
   const canGrantSelectedPermission = Boolean(
     selectedUserId
       && effectiveSelectedPermissionId
@@ -238,27 +262,77 @@ export function AdminPage() {
     if (!selectedUserId || !effectiveSelectedPermissionId) {
       return
     }
-    grantPermissionMutation.mutate({ userId: selectedUserId, permissionId: effectiveSelectedPermissionId })
+    grantPermissionMutation.mutate({ userId: selectedUserId, permissionId: effectiveSelectedPermissionId }, {
+      onError: (err) => setRoleAllocationError(getApiErrorMessage(err, 'Failed to grant permission.')),
+    })
   }
 
   const handleRevokePermission = (permissionId: string) => {
     if (!selectedUserId) {
       return
     }
-    revokePermissionMutation.mutate({ userId: selectedUserId, permissionId })
+    revokePermissionMutation.mutate({ userId: selectedUserId, permissionId }, {
+      onError: (err) => setRoleAllocationError(getApiErrorMessage(err, 'Failed to revoke permission.')),
+    })
   }
 
   const handleResetUserPassword = () => {
-    if (!selectedUserId) {
+    if (!selectedUserId || !selectedUser) {
       return
     }
-    resetUserPasswordMutation.mutate(selectedUserId, {
+
+    const nextPassword = resetPasswordForm.newPassword
+    const confirmPassword = resetPasswordForm.confirmPassword
+
+    if (!nextPassword || !confirmPassword) {
+      setResetPasswordError('Enter and confirm the new password.')
+      return
+    }
+    if (!isStrongPassword(nextPassword)) {
+      setResetPasswordError('Password must be at least 12 chars with upper, lower, number, and symbol.')
+      return
+    }
+    if (nextPassword !== confirmPassword) {
+      setResetPasswordError('Passwords do not match.')
+      return
+    }
+
+    setResetPasswordError(null)
+    resetUserPasswordMutation.mutate({ userId: selectedUserId, payload: { newPassword: nextPassword } }, {
       onSuccess: () => {
-        pushToast({ type: 'success', message: 'Password reset initiated.' })
+        resetSelectedUserSecurityForm()
+        pushToast({ type: 'success', message: `Password reset for ${selectedUser.full_name}.` })
         void userSecurityStateQuery.refetch()
       },
       onError: (error) => {
-        pushToast({ type: 'error', message: getApiErrorMessage(error, 'Failed to initiate password reset.') })
+        const message = getApiErrorMessage(error, 'Failed to reset password.')
+        setResetPasswordError(message)
+        pushToast({ type: 'error', message })
+      },
+    })
+  }
+
+  const handleToggleUserActivation = () => {
+    if (!selectedUserId || !selectedUser || !userSecurityStateQuery.data) {
+      return
+    }
+
+    const isActive = userSecurityStateQuery.data.isActive
+    const mutation = isActive ? deactivateUserMutation : activateUserMutation
+
+    mutation.mutate(selectedUserId, {
+      onSuccess: () => {
+        pushToast({
+          type: 'success',
+          message: `User ${selectedUser.full_name} ${isActive ? 'deactivated' : 'reactivated'}.`,
+        })
+        void userSecurityStateQuery.refetch()
+      },
+      onError: (error) => {
+        pushToast({
+          type: 'error',
+          message: getApiErrorMessage(error, `Failed to ${isActive ? 'deactivate' : 'reactivate'} ${selectedUser.full_name}.`),
+        })
       },
     })
   }
@@ -681,14 +755,14 @@ export function AdminPage() {
             </tr>
           </thead>
           <tbody>
-            {usersQuery.data.data.map((user) => (
+            {(usersQuery.data?.data ?? []).map((user) => (
               <tr key={user.id}>
                 <td>{user.full_name}</td>
                 <td>{user.email}</td>
                 <td>{Array.isArray(user.roles) && user.roles.length > 0 ? user.roles.join(', ') : user.role}</td>
                 <td>{user.is_active === 1 ? 'active' : 'inactive'}</td>
-                <td>{user.branch_name || '-'}</td>
-                <td>{user.region_name || '-'}</td>
+                <td>{formatDisplayText(user.branch_name)}</td>
+                <td>{formatDisplayText(user.region_name)}</td>
                 <td>
                   <button
                     type="button"
@@ -698,6 +772,7 @@ export function AdminPage() {
                       setSelectedPermissionId('')
                       setRoleAllocationDraft(null)
                       setRoleAllocationError(null)
+                      resetSelectedUserSecurityForm()
                     }}
                   >
                     Manage
@@ -821,6 +896,7 @@ export function AdminPage() {
                     setSelectedPermissionId('')
                     setRoleAllocationDraft(null)
                     setRoleAllocationError(null)
+                    resetSelectedUserSecurityForm()
                   }}
                 >
                   Close
@@ -847,7 +923,7 @@ export function AdminPage() {
                 <p className={styles.muted}>No custom permissions assigned.</p>
               ) : (
                 <ul className={styles.permissionList}>
-                  {userPermissionsQuery.data.customPermissions.map((permission) => (
+                  {(userPermissionsQuery.data?.customPermissions ?? []).map((permission) => (
                     <li key={permission.permission_id} className={styles.permissionItem}>
                       <div>
                         <div><strong>{permission.permission_id}</strong></div>
@@ -883,9 +959,9 @@ export function AdminPage() {
                   <div className={styles.permissionMeta}>
                     <div>Status: <strong>{userSecurityStateQuery.data.isActive ? 'active' : 'inactive'}</strong></div>
                     <div>Failed login attempts: <strong>{userSecurityStateQuery.data.failedLoginAttempts}</strong></div>
-                    <div>Locked until: <strong>{userSecurityStateQuery.data.lockedUntil || 'not locked'}</strong></div>
+                    <div>Locked until: <strong>{formatDisplayDateTime(userSecurityStateQuery.data.lockedUntil, 'not locked')}</strong></div>
                     <div>Token version: <strong>{userSecurityStateQuery.data.tokenVersion}</strong></div>
-                    <div>Deactivated at: <strong>{userSecurityStateQuery.data.deactivatedAt || 'n/a'}</strong></div>
+                    <div>Deactivated at: <strong>{formatDisplayDateTime(userSecurityStateQuery.data.deactivatedAt, 'n/a')}</strong></div>
                   </div>
 
                   <div className={styles.permissionActions}>
@@ -900,19 +976,65 @@ export function AdminPage() {
                     <button
                       type="button"
                       className={styles.secondaryButton}
+                      onClick={handleToggleUserActivation}
+                      disabled={activateUserMutation.isPending || deactivateUserMutation.isPending}
+                    >
+                      {activateUserMutation.isPending || deactivateUserMutation.isPending
+                        ? (userSecurityStateQuery.data.isActive ? 'Deactivating...' : 'Reactivating...')
+                        : (userSecurityStateQuery.data.isActive ? 'Deactivate user' : 'Reactivate user')}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
                       onClick={handleUnlockUser}
                       disabled={!userSecurityStateQuery.data.isLocked || unlockUserMutation.isPending}
                     >
                       {unlockUserMutation.isPending ? 'Unlocking...' : 'Unlock account'}
                     </button>
-                    <button
-                      type="button"
-                      className={styles.secondaryButton}
-                      onClick={handleResetUserPassword}
-                      disabled={!userSecurityStateQuery.data.isActive || resetUserPasswordMutation.isPending}
-                    >
-                      {resetUserPasswordMutation.isPending ? 'Sending...' : 'Send reset link'}
-                    </button>
+                  </div>
+
+                  <div className={styles.roleEditor}>
+                    <h3>Admin password reset</h3>
+                    <div className={styles.roleEditorGrid}>
+                      <label className={styles.createField}>
+                        <span className={styles.fieldLabel}>New password</span>
+                        <input
+                          className={styles.input}
+                          type="password"
+                          value={resetPasswordForm.newPassword}
+                          onChange={(event) => {
+                            setResetPasswordForm((prev) => ({ ...prev, newPassword: event.target.value }))
+                            setResetPasswordError(null)
+                          }}
+                          autoComplete="new-password"
+                        />
+                      </label>
+                      <label className={styles.createField}>
+                        <span className={styles.fieldLabel}>Confirm password</span>
+                        <input
+                          className={styles.input}
+                          type="password"
+                          value={resetPasswordForm.confirmPassword}
+                          onChange={(event) => {
+                            setResetPasswordForm((prev) => ({ ...prev, confirmPassword: event.target.value }))
+                            setResetPasswordError(null)
+                          }}
+                          autoComplete="new-password"
+                        />
+                      </label>
+                    </div>
+                    <p className={styles.muted}>Set a new password directly for the selected user. Existing sessions will be invalidated.</p>
+                    {resetPasswordError ? <p className={styles.errorText}>{resetPasswordError}</p> : null}
+                    <div className={styles.roleEditorActions}>
+                      <button
+                        type="button"
+                        className={styles.actionButton}
+                        onClick={handleResetUserPassword}
+                        disabled={resetUserPasswordMutation.isPending}
+                      >
+                        {resetUserPasswordMutation.isPending ? 'Resetting password...' : 'Reset password'}
+                      </button>
+                    </div>
                   </div>
 
                   <h3>Recent security actions</h3>
@@ -920,19 +1042,25 @@ export function AdminPage() {
                     <p className={styles.muted}>No recent security actions recorded.</p>
                   ) : (
                     <ul className={styles.permissionList}>
-                      {userSecurityStateQuery.data.recentActions.map((action) => (
-                        <li key={action.id} className={styles.permissionItem}>
-                          <div>
-                            <div><strong>{action.action}</strong></div>
-                            <div className={styles.muted}>
-                              {action.createdAt || 'unknown time'}
-                              {action.actorUserName ? ` by ${action.actorUserName}` : ''}
-                              {action.ipAddress ? ` from ${action.ipAddress}` : ''}
+                      {(userSecurityStateQuery.data?.recentActions ?? []).map((action) => {
+                        const actorName = resolveDisplayText([action.actorUserName], '')
+                        const ipAddress = resolveDisplayText([action.ipAddress], '')
+                        const detailText = formatDisplayDetails(action.details, '')
+
+                        return (
+                          <li key={action.id} className={styles.permissionItem}>
+                            <div>
+                              <div><strong>{formatDisplayText(action.action)}</strong></div>
+                              <div className={styles.muted}>
+                                {formatDisplayDateTime(action.createdAt, 'unknown time')}
+                                {actorName ? ` by ${actorName}` : ''}
+                                {ipAddress ? ` from ${ipAddress}` : ''}
+                              </div>
+                              {detailText ? <div className={`${styles.muted} ${styles.detailText}`}>{detailText}</div> : null}
                             </div>
-                            {action.details ? <div className={styles.muted}>{action.details}</div> : null}
-                          </div>
-                        </li>
-                      ))}
+                          </li>
+                        )
+                      })}
                     </ul>
                   )}
                 </>
@@ -960,6 +1088,17 @@ function TenantManagementPanel() {
 
   const tenants = tenantsQuery.data?.data ?? []
 
+  function getErrorMessage(error: unknown, fallback: string) {
+    if (error && typeof error === 'object' && 'response' in error) {
+      const response = (error as { response?: { data?: { message?: unknown } } }).response
+      const message = response?.data?.message
+      if (typeof message === 'string' && message.trim()) {
+        return message
+      }
+    }
+    return fallback
+  }
+
   function handleCreateTenant(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setCreateError(null)
@@ -982,8 +1121,8 @@ function TenantManagementPanel() {
           setNewTenantName('')
           setCreateError(null)
         },
-        onError: (error: any) => {
-          const msg = error?.response?.data?.message || 'Failed to create tenant.'
+        onError: (error: unknown) => {
+          const msg = getErrorMessage(error, 'Failed to create tenant.')
           setCreateError(msg)
           pushToast({ type: 'error', message: msg })
         },
@@ -1049,7 +1188,7 @@ function TenantManagementPanel() {
                     {tenant.status}
                   </span>
                 </td>
-                <td>{new Date(tenant.created_at).toLocaleDateString()}</td>
+                <td>{formatDisplayDate(tenant.created_at)}</td>
                 <td>
                   <div style={{ display: 'flex', gap: 8 }}>
                     {tenant.id !== 'default' && tenant.status !== 'suspended' && (

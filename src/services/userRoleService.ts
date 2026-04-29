@@ -1,4 +1,5 @@
 import { getAllowedRoles, normalizeRoleInput } from "../config/roles.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 
 type DbRun = (sql: string, params?: unknown[]) => Promise<unknown>;
 type DbGet = (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
@@ -6,6 +7,18 @@ type DbAll = (sql: string, params?: unknown[]) => Promise<Array<Record<string, a
 
 const allowedRoleSet = new Set(getAllowedRoles().map((role) => String(role).trim().toLowerCase()).filter(Boolean));
 let ensureTablePromise: Promise<void> | null = null;
+const roleScopePriority: Record<string, number> = {
+  operations_manager: 1,
+  loan_officer: 1,
+  cashier: 1,
+  area_manager: 2,
+  investor: 2,
+  partner: 2,
+  admin: 3,
+  ceo: 3,
+  finance: 3,
+  it: 3,
+};
 
 function normalizeRole(role: unknown): string | null {
   const normalized = normalizeRoleInput(role);
@@ -31,6 +44,31 @@ function normalizeRoleList(input: unknown): string[] {
   }
 
   return normalizedRoles;
+}
+
+function getRoleScopePriority(role: unknown): number {
+  const normalizedRole = normalizeRole(role);
+  if (!normalizedRole) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return roleScopePriority[normalizedRole] ?? Number.MAX_SAFE_INTEGER;
+}
+
+function selectMostRestrictiveRole(roles: unknown): string | null {
+  const normalizedRoles = normalizeRoleList(roles);
+  if (normalizedRoles.length === 0) {
+    return null;
+  }
+
+  return normalizedRoles
+    .map((role, index) => ({ role, index }))
+    .sort((left, right) => {
+      const priorityDelta = getRoleScopePriority(left.role) - getRoleScopePriority(right.role);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+      return left.index - right.index;
+    })[0]?.role || null;
 }
 
 function resolveAssignedRoles({
@@ -72,6 +110,10 @@ function resolvePrimaryRole({
   fallbackRole?: unknown;
 }): string | null {
   const normalizedRoles = normalizeRoleList(roles);
+  const mostRestrictiveRole = selectMostRestrictiveRole(normalizedRoles);
+  if (mostRestrictiveRole) {
+    return mostRestrictiveRole;
+  }
   const preferred = normalizeRole(preferredRole);
   if (preferred && normalizedRoles.includes(preferred)) {
     return preferred;
@@ -136,16 +178,21 @@ async function replaceUserRoles({
   }
 
   await ensureUserRolesTable(run);
-  await run("DELETE FROM user_roles WHERE user_id = ?", [userId]);
+  // Scope delete to tenant via user ownership check
+  await run("DELETE FROM user_roles WHERE user_id = ? AND EXISTS (SELECT 1 FROM users WHERE id = ? AND tenant_id = ?)", [userId, userId, getCurrentTenantId()]);
   const nowIso = new Date().toISOString();
   for (const role of finalRoles) {
     await run(
       `
-        INSERT INTO user_roles (user_id, role, created_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(user_id, role) DO NOTHING
+        INSERT OR IGNORE INTO user_roles (user_id, role, created_at)
+        SELECT ?, ?, ?
+        WHERE EXISTS (
+          SELECT 1
+          FROM users
+          WHERE id = ? AND tenant_id = ?
+        )
       `,
-      [userId, role, nowIso],
+      [userId, role, nowIso, userId, getCurrentTenantId()],
     );
   }
 
@@ -157,26 +204,31 @@ async function getUserRolesForUser({
   get,
   userId,
   primaryRole,
+  tenantId,
 }: {
   all: DbAll;
   get: DbGet;
   userId: number;
   primaryRole?: unknown;
+  tenantId?: string | null;
 }): Promise<string[]> {
   if (!Number.isInteger(userId) || userId <= 0) {
     return [];
   }
 
+  const effectiveTenantId = String(tenantId || getCurrentTenantId()).trim() || getCurrentTenantId();
   const fallbackRole = normalizeRole(primaryRole);
   try {
     const rows = await all(
       `
-        SELECT role
-        FROM user_roles
-        WHERE user_id = ?
-        ORDER BY role ASC
+        SELECT ur.role
+        FROM user_roles ur
+        INNER JOIN users u ON u.id = ur.user_id
+        WHERE ur.user_id = ?
+          AND u.tenant_id = ?
+        ORDER BY ur.role ASC
       `,
-      [userId],
+      [userId, effectiveTenantId],
     );
 
     const normalized = normalizeRoleList(rows.map((row) => row.role));
@@ -193,7 +245,7 @@ async function getUserRolesForUser({
     return [fallbackRole];
   }
 
-  const user = await get("SELECT role FROM users WHERE id = ? LIMIT 1", [userId]);
+  const user = await get("SELECT role FROM users WHERE id = ? AND tenant_id = ? LIMIT 1", [userId, effectiveTenantId]);
   const roleFromUser = normalizeRole(user?.role);
   return roleFromUser ? [roleFromUser] : [];
 }
@@ -202,11 +254,14 @@ async function mapUserRolesByUserId({
   all,
   userIds,
   fallbackRoleByUserId = new Map<number, unknown>(),
+  tenantId,
 }: {
   all: DbAll;
   userIds: number[];
   fallbackRoleByUserId?: Map<number, unknown>;
+  tenantId?: string | null;
 }): Promise<Map<number, string[]>> {
+  const effectiveTenantId = String(tenantId || getCurrentTenantId()).trim() || getCurrentTenantId();
   const normalizedIds = [...new Set(userIds.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
   const result = new Map<number, string[]>();
   for (const userId of normalizedIds) {
@@ -222,12 +277,14 @@ async function mapUserRolesByUserId({
     const placeholders = normalizedIds.map(() => "?").join(", ");
     const rows = await all(
       `
-        SELECT user_id, role
-        FROM user_roles
-        WHERE user_id IN (${placeholders})
-        ORDER BY user_id ASC, role ASC
+        SELECT ur.user_id, ur.role
+        FROM user_roles ur
+        INNER JOIN users u ON u.id = ur.user_id
+        WHERE ur.user_id IN (${placeholders})
+          AND u.tenant_id = ?
+        ORDER BY ur.user_id ASC, ur.role ASC
       `,
-      normalizedIds,
+      [...normalizedIds, effectiveTenantId],
     );
 
     for (const row of rows) {
@@ -252,6 +309,7 @@ export {
   normalizeRoleList,
   resolveAssignedRoles,
   resolvePrimaryRole,
+  selectMostRestrictiveRole,
   sameRoleList,
   ensureUserRolesTable,
   replaceUserRoles,

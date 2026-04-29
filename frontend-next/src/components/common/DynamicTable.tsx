@@ -134,7 +134,10 @@ class InlineTableErrorBoundary extends Component<InlineBoundaryProps, InlineBoun
   }
 
   componentDidCatch(error: Error) {
-    console.error('DynamicTable render error:', error)
+    // Error is surfaced via the error boundary UI; suppress noisy console output in production
+    if (import.meta.env.DEV) {
+      console.error('DynamicTable render error:', error)
+    }
   }
 
   private handleReset = () => {

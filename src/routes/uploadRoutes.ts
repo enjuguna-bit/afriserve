@@ -1,4 +1,5 @@
 import multer from "multer";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 import type { NextFunction, Request, Response } from "express";
 import type { RouteRegistrar, UploadRouteDeps } from "../types/routeDeps.js";
 
@@ -40,15 +41,25 @@ function parseClientId(value: unknown): number | null {
   return parsed;
 }
 
-function parseDocumentType(value: unknown): "photo" | "id_document" | null {
+function parseDocumentType(
+  value: unknown,
+): "photo" | "id_document" | "guarantor_id_document" | "collateral_document" | null {
   const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "photo" || normalized === "id_document") {
+  if (
+    normalized === "photo"
+    || normalized === "id_document"
+    || normalized === "guarantor_id_document"
+    || normalized === "collateral_document"
+  ) {
     return normalized;
   }
   return null;
 }
 
-function isAllowedMimeTypeForDocument(documentType: "photo" | "id_document", mimeType: string): boolean {
+function isAllowedMimeTypeForDocument(
+  documentType: "photo" | "id_document" | "guarantor_id_document" | "collateral_document",
+  mimeType: string,
+): boolean {
   const normalizedMimeType = String(mimeType || "").toLowerCase();
   if (documentType === "photo") {
     return normalizedMimeType.startsWith("image/");
@@ -95,7 +106,7 @@ function registerUploadRoutes(app: RouteRegistrar, deps: UploadRouteDeps) {
   app.post(
     "/api/uploads/client-document",
     authenticate,
-    authorize("admin", "operations_manager"),
+    authorize("admin", "operations_manager", "loan_officer"),
     (req: Request, res: Response, next: NextFunction) => {
       uploadMiddleware(req, res, async (uploadError: unknown) => {
         const typedReq = req as UploadRequest;
@@ -123,7 +134,9 @@ function registerUploadRoutes(app: RouteRegistrar, deps: UploadRouteDeps) {
 
           const documentType = parseDocumentType(typedReq.body?.documentType);
           if (!documentType) {
-            res.status(400).json({ message: "documentType must be one of: photo, id_document" });
+            res.status(400).json({
+              message: "documentType must be one of: photo, id_document, guarantor_id_document, collateral_document",
+            });
             return;
           }
 
@@ -136,13 +149,13 @@ function registerUploadRoutes(app: RouteRegistrar, deps: UploadRouteDeps) {
             res.status(400).json({
               message: documentType === "photo"
                 ? "photo uploads must be image files"
-                : "id_document uploads must be image or PDF files",
+                : "document uploads must be image or PDF files",
             });
             return;
           }
 
           const scope = await hierarchyService.resolveHierarchyScope(typedReq.user);
-          const client = await get("SELECT id, branch_id FROM clients WHERE id = ?", [clientId]);
+          const client = await get("SELECT id, branch_id FROM clients WHERE id = ? AND tenant_id = ?", [clientId, getCurrentTenantId()]);
           if (!client) {
             res.status(404).json({ message: "Client not found" });
             return;
@@ -160,18 +173,27 @@ function registerUploadRoutes(app: RouteRegistrar, deps: UploadRouteDeps) {
             originalName: typedReq.file.originalname,
           });
           const resolvedDocumentUrl = buildAbsoluteUrl(typedReq, uploadedDocument.url);
-          const targetColumn = documentType === "photo" ? "photo_url" : "id_document_url";
+          const targetColumn = documentType === "photo"
+            ? "photo_url"
+            : documentType === "id_document"
+              ? "id_document_url"
+              : null;
 
-          await run(
-            `
-              UPDATE clients
-              SET ${targetColumn} = ?, updated_at = datetime('now')
-              WHERE id = ?
-            `,
-            [resolvedDocumentUrl, clientId],
-          );
+          if (targetColumn) {
+            const updatedAt = new Date().toISOString();
+            await run(
+              `
+                UPDATE clients
+                SET ${targetColumn} = ?, updated_at = ?
+                WHERE id = ? AND tenant_id = ?
+              `,
+              [resolvedDocumentUrl, updatedAt, clientId, getCurrentTenantId()],
+            );
+          }
 
-          const updatedClient = await get("SELECT * FROM clients WHERE id = ?", [clientId]);
+          const updatedClient = targetColumn
+            ? await get("SELECT * FROM clients WHERE id = ? AND tenant_id = ?", [clientId, getCurrentTenantId()])
+            : null;
           await writeAuditLog({
             userId: typedReq.user.sub,
             action: "client.document_uploaded",

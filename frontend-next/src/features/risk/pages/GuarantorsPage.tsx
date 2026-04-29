@@ -5,6 +5,8 @@ import { listBranches } from '../../../services/branchService'
 import { queryPolicies } from '../../../services/queryPolicies'
 import { createGuarantor, listGuarantors } from '../../../services/riskService'
 import { useToastStore } from '../../../store/toastStore'
+import { formatDisplayDateTime } from '../../../utils/dateFormatting'
+import { formatDisplayText, resolveDisplayText } from '../../../utils/displayFormatting'
 import styles from '../../shared/styles/EntityPage.module.css'
 
 type GuarantorFormState = {
@@ -203,22 +205,22 @@ export function GuarantorsPage() {
               </tr>
             </thead>
             <tbody>
-              {guarantorsQuery.data.data.map((row) => (
+              {(guarantorsQuery.data?.data ?? []).map((row) => (
                 <tr key={row.id}>
                   <td>{row.id}</td>
-                  <td>{row.full_name}</td>
+                  <td>{formatDisplayText(row.full_name, `Guarantor #${row.id}`)}</td>
                   <td>
-                    <div>{row.phone || '-'}</div>
-                    <div className={styles.muted}>{row.national_id || '-'}</div>
+                    <div>{formatDisplayText(row.phone)}</div>
+                    <div className={styles.muted}>{formatDisplayText(row.national_id)}</div>
                   </td>
                   <td>
-                    <div>{row.occupation || '-'}</div>
-                    <div className={styles.muted}>{row.employer_name || '-'}</div>
+                    <div>{formatDisplayText(row.occupation)}</div>
+                    <div className={styles.muted}>{formatDisplayText(row.employer_name)}</div>
                     <div className={styles.muted}>Income: {formatMoney(row.monthly_income)}</div>
                   </td>
-                  <td>{row.branch_name || row.branch_id}</td>
+                  <td>{resolveDisplayText([row.branch_name, row.branch_id])}</td>
                   <td>{Number(row.linked_loan_count || 0)}</td>
-                  <td>{new Date(row.created_at).toLocaleString()}</td>
+                  <td>{formatDisplayDateTime(row.created_at)}</td>
                 </tr>
               ))}
             </tbody>

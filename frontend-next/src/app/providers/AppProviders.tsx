@@ -3,12 +3,20 @@ import { QueryClientProvider, useQueryClient } from '@tanstack/react-query'
 import { queryClient } from '../../services/queryClient'
 import { AppErrorBoundary } from '../../components/common/AppErrorBoundary'
 import { prefetchWorkspaceWarmup } from '../../services/prefetch'
+import { useAuthStore } from '../../store/authStore'
 import { ThemeSync } from './ThemeSync'
 
 function QueryWarmup() {
   const client = useQueryClient()
+  const token = useAuthStore((state) => state.token)
+  const user = useAuthStore((state) => state.user)
+  const isWarmupEnabled = Boolean(token && user)
 
   useEffect(() => {
+    if (!isWarmupEnabled) {
+      return
+    }
+
     let cancelled = false
     let idleHandle: number | null = null
     let timeoutHandle: number | null = null
@@ -20,6 +28,9 @@ function QueryWarmup() {
       : null
     const scheduleWarmup = () => {
       if (cancelled) {
+        return
+      }
+      if (win?.location?.pathname === '/login') {
         return
       }
       void prefetchWorkspaceWarmup(client)
@@ -59,7 +70,7 @@ function QueryWarmup() {
         win.clearTimeout(timeoutHandle)
       }
     }
-  }, [client])
+  }, [client, isWarmupEnabled])
 
   return null
 }

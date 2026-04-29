@@ -1,5 +1,6 @@
 ﻿import type { RouteRegistrar } from "../../types/routeDeps.js";
 import { createSqlWhereBuilder } from "../../utils/sqlBuilder.js";
+import type { ClientHierarchyServiceLike } from "../../types/routeDeps.js";
 
 interface AppContext {
   authenticate: any;
@@ -17,7 +18,7 @@ interface AppContext {
   parseDateParam: (value: unknown, fieldName: string, res: any) => string | null | undefined;
   resolveFormat: (rawFormat: unknown, res: any) => "json" | "csv" | "pdf" | "xlsx" | null;
   sendTabularExport: (res: any, options: any) => boolean;
-  hierarchyService: any;
+  hierarchyService: ClientHierarchyServiceLike;
   incomeTrackingService: any;
 }
 
@@ -47,7 +48,12 @@ export function registerPerformanceReports(app: RouteRegistrar, context: AppCont
       const month = parseDateParam(rawMonth, "month", res);
       if (month === undefined) return;
 
-      const branchId = req.query.branchId ? parseId(req.query.branchId) : null;
+      const rawBranchId = req.query.branchId;
+      const branchId = rawBranchId ? parseId(rawBranchId) : null;
+      if (rawBranchId && branchId === null) {
+        res.status(400).json({ message: "Invalid branchId parameter." });
+        return;
+      }
       if (branchId !== null) {
         const wb = createSqlWhereBuilder();
         if (!applyScopeAndBranchFilter({ whereBuilder: wb, scope, branchColumnRef: "branch_id", branchFilter: branchId, res })) {
@@ -89,9 +95,17 @@ export function registerPerformanceReports(app: RouteRegistrar, context: AppCont
   app.get("/api/reports/performance/cashflow", authenticate, authorize(...reportRoles), async (req, res, next) => {
     try {
       const scope = await hierarchyService.resolveHierarchyScope(req.user);
-      const branchId = req.query.branchId ? parseId(req.query.branchId) : null;
-      if (branchId !== null && !applyScopeAndBranchFilter({ whereBuilder: { addCondition: () => {}, addEquals: () => {} } as any, scope, branchColumnRef: "", branchFilter: branchId, res })) {
+      const rawBranchId = req.query.branchId;
+      const branchId = rawBranchId ? parseId(rawBranchId) : null;
+      if (rawBranchId && branchId === null) {
+        res.status(400).json({ message: "Invalid branchId parameter." });
         return;
+      }
+      if (branchId !== null) {
+        const scopeCheckBuilder = createSqlWhereBuilder();
+        if (!applyScopeAndBranchFilter({ whereBuilder: scopeCheckBuilder, scope, branchColumnRef: "branch_id", branchFilter: branchId, res })) {
+          return;
+        }
       }
 
       const cashFlow = await incomeTrackingService.getCashFlowStatus(scope, branchId);

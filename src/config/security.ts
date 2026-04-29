@@ -6,9 +6,11 @@ import cors from "cors";
 import helmet from "helmet";
 import { requestContext } from "../middleware/requestContext.js";
 import { tenantContext } from "../middleware/tenantContext.js";
+import { createHttpTracingMiddleware } from "../observability/tracing.js";
 import { parseBooleanEnv } from "../utils/env.js";
 import { resolveRepoRoot } from "../utils/projectPaths.js";
 import { createDistributedRateLimiter } from "../services/rateLimitRedis.js";
+import { getApiRateLimitRequesterKey, getAuthRateLimitRequesterKey } from "../utils/rateLimitKeys.js";
 import type {
   CorsOriginCallbackLike,
   ExpressLikeApp,
@@ -106,6 +108,7 @@ function createAuthLimiter() {
     max: 20,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: (req: RequestLike) => getAuthRateLimitRequesterKey(req),
     message: { message: "Too many authentication requests. Please try again later." },
   });
 }
@@ -113,8 +116,11 @@ function createAuthLimiter() {
 function createGeneralApiLimiter() {
   const nodeEnv = String(process.env.NODE_ENV || "").trim().toLowerCase();
   const disableGeneralRateLimit = parseBooleanEnv(process.env.DISABLE_GENERAL_RATE_LIMIT, false);
+  // Allow tests to explicitly opt-in to rate limit enforcement so the
+  // security-hardening test can verify 429 behaviour without needing production mode.
+  const enforceInTest = parseBooleanEnv(process.env.ENFORCE_GENERAL_RATE_LIMIT, false);
 
-  if (disableGeneralRateLimit || nodeEnv !== "production") {
+  if (disableGeneralRateLimit || (nodeEnv !== "production" && !enforceInTest)) {
     return (_req: RequestLike, _res: ResponseLike, next: NextFunctionLike) => {
       next();
     };
@@ -126,6 +132,7 @@ function createGeneralApiLimiter() {
     max: 200,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: (req: RequestLike) => getApiRateLimitRequesterKey(req),
     message: { message: "Too many API requests. Please try again shortly." },
   });
 }
@@ -151,7 +158,9 @@ function buildImageSourceList(): string[] {
     })
     .filter((value): value is string => Boolean(value));
 
-  return [...new Set(["'self'", "data:", ...origins])];
+  // Client-side image optimization and camera capture use blob URLs briefly
+  // before upload, so allow blob: images without relaxing script policy.
+  return [...new Set(["'self'", "data:", "blob:", ...origins])];
 }
 
 function sanitizeForLogs(value: unknown): unknown {
@@ -254,6 +263,16 @@ function applySecurityMiddleware(
   }
   app.use(requestContext);
   app.use(tenantContext);
+  app.use(createHttpTracingMiddleware());
+  const corsMiddleware = cors(buildCorsOptions());
+  const corsBypassPaths = new Set([
+    "/health",
+    "/health/details",
+    "/ready",
+    "/metrics",
+    "/api/ready",
+    "/api/system/health",
+  ]);
   /** @type {(req: RequestLike, res: ResponseLike, next: NextFunctionLike) => void} */
   const observeRequestMiddleware = (req: RequestLike, res: ResponseLike, next: NextFunctionLike) => {
     const startedAtMs = Date.now();
@@ -282,6 +301,7 @@ function applySecurityMiddleware(
 
         logger.info("http.request.completed", {
           requestId: req.requestId || null,
+          traceId: req.traceId || null,
           method: req.method,
           route: routePath,
           statusCode: res.statusCode,
@@ -297,9 +317,23 @@ function applySecurityMiddleware(
   };
 
   app.use(observeRequestMiddleware);
-  app.use(cors(buildCorsOptions()));
+  app.use((req: RequestLike, res: ResponseLike, next: NextFunctionLike) => {
+    if (corsBypassPaths.has(String(req.path || "").trim())) {
+      next();
+      return;
+    }
+
+    corsMiddleware(req as never, res as never, next as never);
+  });
   app.use(
     helmet({
+      // HSTS: Enforce HTTPS for 1 year, include subdomains, preload
+      hsts: {
+        maxAge: 31536000, // 1 year in seconds
+        includeSubDomains: true,
+        preload: true,
+      },
+      // Content Security Policy
       contentSecurityPolicy: {
         directives: {
           defaultSrc: ["'self'"],
@@ -307,19 +341,43 @@ function applySecurityMiddleware(
           objectSrc: ["'none'"],
           frameAncestors: ["'none'"],
           scriptSrc: ["'self'"],
+          scriptSrcAttr: ["'none'"], // Disallow inline event handlers
           styleSrc: ["'self'", "https://fonts.googleapis.com"],
+          styleSrcAttr: ["'self'"], // Disallow inline styles
           fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
           imgSrc: buildImageSourceList(),
           connectSrc: ["'self'"],
+          // Form action restrictions
+          formAction: ["'self'"],
+          // Restrict frame sources
+          frameSrc: ["'none'"],
+          workerSrc: ["'self'"],
+          manifestSrc: ["'self'"],
         },
       },
+      // Cross-Origin policies
       crossOriginResourcePolicy: { policy: "same-origin" },
+      crossOriginOpenerPolicy: { policy: "same-origin" },
+      crossOriginEmbedderPolicy: false, // Required for Google Fonts
+      // Referrer policy
+      referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+      // X-Content-Type-Options: Prevent MIME sniffing
+      noSniff: true,
+      // X-Frame-Options: Prevent clickjacking
+      frameguard: { action: "deny" },
+      // X-XSS-Protection (legacy, but still useful for older browsers)
+      xssFilter: true,
     }),
   );
   // Keep the body limit tight — 256 kb is ample for any financial API payload.
   // Upload endpoints use Multer with their own (higher) limits; those routes
   // are registered AFTER this middleware so Multer wins for multipart.
-  app.use(express.json({ limit: "256kb" }));
+  app.use(express.json({
+    limit: "256kb",
+    verify: (req, _res, buf) => {
+      (req as unknown as Record<string, unknown>).rawBody = buf.toString("utf8");
+    },
+  }));
   app.use(express.urlencoded({ extended: true, limit: "256kb" }));
   app.use(express.static(resolveStaticAppDir()));
 }
@@ -331,7 +389,3 @@ export {
   resolveStaticAppDir,
   resolveStaticAppIndexPath,
 };
-
-
-
-

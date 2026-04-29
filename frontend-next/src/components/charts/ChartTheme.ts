@@ -23,7 +23,8 @@ export const CHART_COLORS = {
 export const PAR_COLORS = {
   par30:      CHART_COLORS.gold,
   par60:      '#f97316',
-  par90:      CHART_COLORS.red,
+  par90:      '#ef4444',
+  npl:        '#991b1b',
   writtenOff: '#9333ea',
 } as const
 
@@ -79,3 +80,4 @@ export function fmtAxis(value: number): string {
   if (value >= 1_000)     return `${(value / 1_000).toFixed(0)}K`
   return String(value)
 }
+

@@ -4,6 +4,7 @@ import { AsyncState } from '../../../components/common/AsyncState'
 import { useToastStore } from '../../../store/toastStore'
 import { useCollectionsSummary, useCreateCollectionAction, useOverdueCollections } from '../hooks/useCollections'
 import type { CollectionOverdueRow } from '../../../types/collection'
+import { formatDisplayDate } from '../../../utils/dateFormatting'
 import styles from './CollectionsPage.module.css'
 
 type ActionKind = 'call' | 'visit' | 'notice'
@@ -26,9 +27,9 @@ function formatLoanRef(id: number) {
 }
 
 function getBadgeClass(dpd: number) {
-  if (dpd >= 90) return styles.dpdCritical
-  if (dpd >= 60) return styles.dpdHigh
-  if (dpd >= 30) return styles.dpdMid
+  if (dpd >= 91) return styles.dpdCritical
+  if (dpd >= 61) return styles.dpdHigh
+  if (dpd >= 31) return styles.dpdMid
   return styles.dpdLow
 }
 
@@ -56,7 +57,7 @@ export function CollectionsPage() {
     return Array.from(groups.entries())
       .map(([officer, rows]) => {
         const totalAmount = rows.reduce((acc, row) => acc + Number(row.overdue_amount || 0), 0)
-        const criticalCount = rows.filter((r) => Number(r.days_overdue || 0) >= 90).length
+        const criticalCount = rows.filter((r) => Number(r.days_overdue || 0) >= 91).length
         return { officer, rows, totalAmount, criticalCount }
       })
       .sort((a, b) => b.totalAmount - a.totalAmount)
@@ -122,23 +123,23 @@ export function CollectionsPage() {
             <h2>Risk Buckets</h2>
             <div className={styles.bucketGrid}>
               <div className={`${styles.bucket} ${styles.sev1}`}>
-                <span className={styles.bucketLabel}>PAR 1-29</span>
-                <span className={styles.bucketCount}>{groupedOverdue.map(g => g.rows).flat().filter(r => Number(r.days_overdue) < 30).length}</span>
+                <span className={styles.bucketLabel}>PAR 30</span>
+                <span className={styles.bucketCount}>{groupedOverdue.map(g => g.rows).flat().filter(r => Number(r.days_overdue) >= 1 && Number(r.days_overdue) <= 30).length}</span>
                 <span className={styles.bucketAmount}>Early warning</span>
               </div>
               <div className={`${styles.bucket} ${styles.sev2}`}>
-                <span className={styles.bucketLabel}>PAR 30-59</span>
-                <span className={styles.bucketCount}>{groupedOverdue.map(g => g.rows).flat().filter(r => Number(r.days_overdue) >= 30 && Number(r.days_overdue) < 60).length}</span>
+                <span className={styles.bucketLabel}>PAR 60</span>
+                <span className={styles.bucketCount}>{groupedOverdue.map(g => g.rows).flat().filter(r => Number(r.days_overdue) >= 31 && Number(r.days_overdue) <= 60).length}</span>
                 <span className={styles.bucketAmount}>Monitoring</span>
               </div>
               <div className={`${styles.bucket} ${styles.sev3}`}>
-                <span className={styles.bucketLabel}>PAR 60-89</span>
-                <span className={styles.bucketCount}>{groupedOverdue.map(g => g.rows).flat().filter(r => Number(r.days_overdue) >= 60 && Number(r.days_overdue) < 90).length}</span>
+                <span className={styles.bucketLabel}>PAR 90</span>
+                <span className={styles.bucketCount}>{groupedOverdue.map(g => g.rows).flat().filter(r => Number(r.days_overdue) >= 61 && Number(r.days_overdue) <= 90).length}</span>
                 <span className={styles.bucketAmount}>Intensive</span>
               </div>
               <div className={`${styles.bucket} ${styles.sev4}`}>
-                <span className={styles.bucketLabel}>PAR 90+</span>
-                <span className={styles.bucketCount}>{groupedOverdue.map(g => g.rows).flat().filter(r => Number(r.days_overdue) >= 90).length}</span>
+                <span className={styles.bucketLabel}>NPL</span>
+                <span className={styles.bucketCount}>{groupedOverdue.map(g => g.rows).flat().filter(r => Number(r.days_overdue) >= 91).length}</span>
                 <span className={styles.bucketAmount}>Critical recovery</span>
               </div>
             </div>
@@ -184,7 +185,7 @@ export function CollectionsPage() {
                   </span>
                   {group.criticalCount > 0 && (
                     <span className={styles.officerStatAlert}>
-                      (<strong>{group.criticalCount}</strong> in 90+)
+                      (<strong>{group.criticalCount}</strong> in NPL)
                     </span>
                   )}
                   <span className={`${styles.chevron} ${isExpanded ? styles.chevronOpen : ''}`}>▼</span>
@@ -223,7 +224,7 @@ export function CollectionsPage() {
                               <span>{row.branch_code || 'No branch info'}</span>
                             </td>
                             <td className={styles.amountCell}>Ksh {formatCurrency(row.overdue_amount)}</td>
-                            <td>{row.due_date ? new Date(row.due_date).toLocaleDateString() : '-'}</td>
+                            <td>{formatDisplayDate(row.due_date, '-')}</td>
                             <td>
                               <button
                                 type="button"

@@ -33,6 +33,8 @@ import { queryPolicies } from '../../../services/queryPolicies'
 import { listCollateralAssets, listGuarantors } from '../../../services/riskService'
 import { useToastStore } from '../../../store/toastStore'
 import type { LoanRefinancePayload, LoanTopUpPayload } from '../../../types/loan'
+import { formatDisplayDate, formatDisplayDateTime } from '../../../utils/dateFormatting'
+import { formatDisplayLabel, formatDisplayText, resolveDisplayText } from '../../../utils/displayFormatting'
 import { getLoanActionState } from '../utils/workflow'
 import styles from './LoanDetailPage.module.css'
 
@@ -42,29 +44,11 @@ type RepaymentForm = {
 }
 
 function formatDateTime(value: string | null | undefined): string {
-  if (!value) {
-    return '-'
-  }
-
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return String(value)
-  }
-
-  return date.toLocaleString()
+  return formatDisplayDateTime(value)
 }
 
 function formatDate(value: string | null | undefined): string {
-  if (!value) {
-    return '-'
-  }
-
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return String(value)
-  }
-
-  return date.toLocaleDateString()
+  return formatDisplayDate(value)
 }
 
 function formatMoney(value: unknown): string {
@@ -81,11 +65,7 @@ function formatPercent(value: number | null | undefined): string {
 }
 
 function formatStageLabel(value: string | null | undefined): string {
-  return String(value || '')
-    .split('_')
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(' ')
+  return formatDisplayLabel(value)
 }
 
 function getApiErrorMessage(error: unknown, fallback: string) {
@@ -257,15 +237,15 @@ export function LoanDetailPage() {
     return guarantorsQuery.data.map((row) => ({
       loan_guarantor_id: row.loan_guarantor_id,
       guarantor_id: row.guarantor_id,
-      full_name: row.full_name ?? '-',
+      full_name: row.full_name,
       guarantee_amount: row.guarantee_amount,
-      liability_type: row.liability_type ?? '-',
-      relationship_to_client: row.relationship_to_client ?? '-',
-      monthly_income: row.monthly_income ?? '-',
-      phone: row.phone ?? '-',
-      national_id: row.national_id ?? '-',
-      note: row.note ?? '-',
-      created_at: row.created_at ?? '-',
+      liability_type: row.liability_type,
+      relationship_to_client: row.relationship_to_client,
+      monthly_income: row.monthly_income,
+      phone: row.phone,
+      national_id: row.national_id,
+      note: row.note,
+      created_at: row.created_at,
     }))
   }, [guarantorsQuery.data])
   const collateralRows = useMemo(() => {
@@ -295,12 +275,15 @@ export function LoanDetailPage() {
   }
 
   if (statementQuery.isLoading || statementQuery.isError || !statementQuery.data) {
+    const statementErrorText = statementQuery.isError
+      ? getApiErrorMessage(statementQuery.error, 'Unable to load loan statement.')
+      : 'Unable to load loan statement.'
     return (
       <AsyncState
         loading={statementQuery.isLoading}
         error={statementQuery.isError || !statementQuery.data}
         loadingText="Loading loan statement..."
-        errorText="Unable to load loan statement."
+        errorText={statementErrorText}
         onRetry={() => {
           void statementQuery.refetch()
         }}
@@ -326,8 +309,8 @@ export function LoanDetailPage() {
     principal_amount: Number(repayment.principal_amount ?? 0),
     overpayment_amount: Number(repayment.overpayment_amount ?? 0),
     paid_at: repayment.paid_at ? String(repayment.paid_at) : null,
-    channel: String(repayment.channel || repayment.payment_channel || repayment.source || '-'),
-    recorded_by: String(repayment.recorded_by_name || repayment.recorded_by || '-'),
+    channel: resolveDisplayText([repayment.channel, repayment.payment_channel, repayment.source]),
+    recorded_by: resolveDisplayText([repayment.recorded_by_name, repayment.recorded_by]),
   }))
   const disbursementHistory = disbursementHistoryQuery.data
   const contractHistory = contractHistoryQuery.data
@@ -407,9 +390,9 @@ export function LoanDetailPage() {
           <div>
             <h1 className={styles.heroTitle}>Loan #{statement.loan.id}</h1>
             <div className={styles.heroMeta}>
-              <span>{statement.loan.client_name || 'Borrower not captured'}</span>
-              <span>Officer: {statement.loan.officer_name || '-'}</span>
-              <span>Branch: {statement.loan.branch_code || '-'}</span>
+              <span>{resolveDisplayText([statement.loan.client_name], 'Borrower not captured')}</span>
+              <span>Officer: {formatDisplayText(statement.loan.officer_name)}</span>
+              <span>Branch: {formatDisplayText(statement.loan.branch_code)}</span>
             </div>
           </div>
           <div className={`${styles.loanStatusBadge} ${loanStatusClass(normalizedStatus)}`}>
@@ -693,7 +676,7 @@ export function LoanDetailPage() {
             <p>Policy: {formatStageLabel(underwriting.policy_decision)}</p>
             <p>Risk band: {formatStageLabel(underwriting.risk_band)}</p>
             <p>KYC: {formatStageLabel(underwriting.kyc_status)}</p>
-            <p>Assessed: {formatDateTime(underwriting.updated_at || underwriting.assessed_at)}</p>
+            <p>Assessed: {formatDateTime(resolveDisplayText([underwriting.updated_at, underwriting.assessed_at], ''))}</p>
           </div>
           <div className={styles.card}>
             <h3>Affordability</h3>
@@ -754,14 +737,15 @@ export function LoanDetailPage() {
               </thead>
               <tbody>
                 {scheduleInstallments.map((row) => {
-                  const status = String(row.status || 'pending')
+                  const status = formatDisplayText(row.status, 'pending')
+                  const installmentNumber = formatDisplayText(row.installment_number)
                   return (
-                    <tr key={`${String(row.installment_number || '-')}-${String(row.due_date || '-')}`}>
-                      <td>{String(row.installment_number || '-')}</td>
-                      <td>{row.due_date ? new Date(String(row.due_date)).toLocaleDateString() : '-'}</td>
-                      <td>{String(row.amount_due ?? '-')}</td>
-                      <td>{String(row.amount_paid ?? '-')}</td>
-                      <td>{String(row.amount_outstanding ?? '-')}</td>
+                    <tr key={`${installmentNumber}-${formatDisplayText(row.due_date)}`}>
+                      <td>{installmentNumber}</td>
+                      <td>{formatDate(typeof row.due_date === 'string' ? row.due_date : row.due_date ? String(row.due_date) : null)}</td>
+                      <td>{formatDisplayText(row.amount_due)}</td>
+                      <td>{formatDisplayText(row.amount_paid)}</td>
+                      <td>{formatDisplayText(row.amount_outstanding)}</td>
                       <td>
                         <span className={`${styles.statusBadge} ${installmentStatusClass(status)}`}>
                           {status}
@@ -813,7 +797,7 @@ export function LoanDetailPage() {
                       <td>{formatMoney(repayment.amount)}</td>
                       <td>{formatMoney(repayment.applied_amount)}</td>
                       <td>{allocationLabel}</td>
-                      <td>{repayment.paid_at ? new Date(repayment.paid_at).toLocaleString() : '-'}</td>
+                      <td>{formatDateTime(repayment.paid_at)}</td>
                       <td>{repayment.channel}</td>
                       <td>{repayment.recorded_by}</td>
                     </tr>
@@ -854,7 +838,7 @@ export function LoanDetailPage() {
                         <td>{formatMoney(tranche.amount)}</td>
                         <td>{formatDateTime(tranche.disbursed_at)}</td>
                         <td>{tranche.is_final ? 'Yes' : 'No'}</td>
-                        <td>{tranche.note || '-'}</td>
+                        <td>{formatDisplayText(tranche.note)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -887,7 +871,7 @@ export function LoanDetailPage() {
                     <td>{formatMoney(version.expected_total)}</td>
                     <td>{formatMoney(version.balance)}</td>
                     <td>{formatDateTime(version.created_at)}</td>
-                    <td>{version.note || '-'}</td>
+                    <td>{formatDisplayText(version.note)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -927,8 +911,8 @@ export function LoanDetailPage() {
               <tbody>
                 {collateralRows.map((item, index) => (
                   <tr key={String(item.id || item.collateral_asset_id || index)}>
-                    <td>{String(item.asset_type || item.type || item.collateral_type || 'Unknown')}</td>
-                    <td>{String(item.forced_sale_value || item.market_value || item.value || '-')}</td>
+                    <td>{resolveDisplayText([item.asset_type, item.type, item.collateral_type], 'Unknown')}</td>
+                    <td>{resolveDisplayText([item.forced_sale_value, item.market_value, item.value])}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1083,9 +1067,9 @@ export function LoanDetailPage() {
                 <h3>Current focus</h3>
                 <p>{focusMessage}</p>
                 <div className={styles.infoList}>
-                  <span>Funding stage: {workflow?.funding_stage_label || '-'}</span>
-                  <span>Servicing stage: {workflow?.servicing_stage_label || '-'}</span>
-                  <span>Recovery stage: {workflow?.recovery_stage_label || '-'}</span>
+                  <span>Funding stage: {formatStageLabel(workflow?.funding_stage_label)}</span>
+                  <span>Servicing stage: {formatStageLabel(workflow?.servicing_stage_label)}</span>
+                  <span>Recovery stage: {formatStageLabel(workflow?.recovery_stage_label)}</span>
                 </div>
               </div>
             </div>
@@ -1465,15 +1449,15 @@ export function LoanDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {guarantorLookupQuery.data.data.map((row) => {
+                {(guarantorLookupQuery.data?.data ?? []).map((row) => {
                   const isLinked = linkedGuarantorIds.has(Number(row.id))
                   return (
                     <tr key={row.id}>
                       <td>{row.id}</td>
-                      <td>{row.full_name}</td>
+                      <td>{formatDisplayText(row.full_name, `Guarantor #${row.id}`)}</td>
                       <td>
-                        <div>{row.phone || '-'}</div>
-                        <div>{row.national_id || '-'}</div>
+                        <div>{formatDisplayText(row.phone)}</div>
+                        <div>{formatDisplayText(row.national_id)}</div>
                       </td>
                       <td>{formatMoney(row.monthly_income)}</td>
                       <td>
@@ -1482,7 +1466,7 @@ export function LoanDetailPage() {
                           disabled={isLinked}
                           onClick={() => {
                             setGuarantorId(String(row.id))
-                            setGuarantorSearch(String(row.full_name || row.id))
+                            setGuarantorSearch(formatDisplayText(row.full_name, String(row.id)))
                           }}
                         >
                           {isLinked ? 'Linked' : 'Use'}
@@ -1513,18 +1497,18 @@ export function LoanDetailPage() {
             {guarantorRows.map((row) => (
               <tr key={String(row.loan_guarantor_id || row.guarantor_id)}>
                 <td>
-                  <div>{String(row.full_name || '-')}</div>
-                  <div>{String(row.relationship_to_client || '-')}</div>
+                  <div>{formatDisplayText(row.full_name)}</div>
+                  <div>{formatDisplayText(row.relationship_to_client)}</div>
                 </td>
                 <td>
                   <div>{formatMoney(row.guarantee_amount)}</div>
-                  <div>{String(row.liability_type || '-')}</div>
+                  <div>{formatDisplayText(row.liability_type)}</div>
                 </td>
                 <td>
-                  <div>{String(row.phone || '-')}</div>
-                  <div>{String(row.national_id || '-')}</div>
+                  <div>{formatDisplayText(row.phone)}</div>
+                  <div>{formatDisplayText(row.national_id)}</div>
                 </td>
-                <td>{String(row.note || '-')}</td>
+                <td>{formatDisplayText(row.note)}</td>
                 <td>
                   <button
                     type="button"
@@ -1623,18 +1607,18 @@ export function LoanDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {collateralLookupQuery.data.data.map((row) => {
+                {(collateralLookupQuery.data?.data ?? []).map((row) => {
                   const isLinked = linkedCollateralIds.has(Number(row.id))
                   return (
                     <tr key={row.id}>
                       <td>{row.id}</td>
                       <td>
-                        <div>{String(row.asset_type || '-')}</div>
-                        <div>{row.description}</div>
+                        <div>{formatDisplayText(row.asset_type)}</div>
+                        <div>{formatDisplayText(row.description)}</div>
                       </td>
                       <td>
-                        <div>{row.owner_name || '-'}</div>
-                        <div>{String(row.ownership_type || '-')}</div>
+                        <div>{formatDisplayText(row.owner_name)}</div>
+                        <div>{formatDisplayText(row.ownership_type)}</div>
                       </td>
                       <td>{formatMoney(row.estimated_value)}</td>
                       <td>
@@ -1643,7 +1627,7 @@ export function LoanDetailPage() {
                           disabled={isLinked}
                           onClick={() => {
                             setCollateralAssetId(String(row.id))
-                            setCollateralSearch(String(row.description || row.id))
+                            setCollateralSearch(formatDisplayText(row.description, String(row.id)))
                           }}
                         >
                           {isLinked ? 'Linked' : 'Use'}
@@ -1674,18 +1658,18 @@ export function LoanDetailPage() {
             {collateralRows.map((item, index) => (
               <tr key={String(item.loan_collateral_id || item.collateral_asset_id || index)}>
                 <td>
-                  <div>{String(item.asset_type || item.type || item.collateral_type || 'Unknown')}</div>
-                  <div>{String(item.description || '-')}</div>
+                  <div>{resolveDisplayText([item.asset_type, item.type, item.collateral_type], 'Unknown')}</div>
+                  <div>{formatDisplayText(item.description)}</div>
                 </td>
                 <td>
-                  <div>{String(item.forced_sale_value || item.market_value || item.value || '-')}</div>
-                  <div>Lien rank: {String(item.lien_rank || '-')}</div>
+                  <div>{resolveDisplayText([item.forced_sale_value, item.market_value, item.value])}</div>
+                  <div>Lien rank: {formatDisplayText(item.lien_rank)}</div>
                 </td>
                 <td>
-                  <div>{String(item.owner_name || '-')}</div>
-                  <div>{String(item.ownership_type || '-')}</div>
+                  <div>{formatDisplayText(item.owner_name)}</div>
+                  <div>{formatDisplayText(item.ownership_type)}</div>
                 </td>
-                <td>{String(item.status || '-')}</td>
+                <td>{formatDisplayText(item.status)}</td>
                 <td>
                   <div className={styles.inlineActions}>
                     <button

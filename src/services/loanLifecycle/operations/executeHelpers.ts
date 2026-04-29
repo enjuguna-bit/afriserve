@@ -36,10 +36,12 @@ import {
 } from "../../loanContractVersioning.js";
 import { appendDisbursementTrancheTx } from "../../loanLifecycleDisbursementSupport.js";
 import {
+  getScheduleMaturityIso,
   nowIso,
   moneyToNumber,
   estimateOutstandingPrincipalForRepricing,
   normalizeInterestAccrualMethod,
+  resolveLoanRepaymentCadence,
 } from "../shared/helpers.js";
 import {
   assertLoanSnapshotMatchesCurrent,
@@ -131,7 +133,7 @@ export async function executeWriteOffLoanFromApprovedRequest(
 
   const result = transactionClient
     ? await runMutation(transactionClient)
-    : await prisma.$transaction(async (tx: any) => runMutation(tx), { maxWait: 10000, timeout: 20000 });
+    : await prisma.$transaction(async (tx: PrismaTransactionClient) => runMutation(tx), { maxWait: 10000, timeout: 20000 });
 
   // ── Post-commit: publish loan.written_off domain event (outbox-backed) ──
   // The Prisma transaction has committed. Publish outside the tx so the outbox
@@ -176,7 +178,7 @@ export async function executeRestructureLoanFromApprovedRequest(
     transactionClient?: PrismaTransactionClient;
   },
 ): Promise<Record<string, any>> {
-  const { generalLedgerService, calculateExpectedTotal, addWeeksIso } = deps;
+  const { calculateExpectedTotal, addWeeksIso } = deps;
   const publishDomainEvent = deps.publishDomainEvent ?? (async () => 0);
   const { loanId, newTermWeeks, waiveInterest, note, executedByUserId, requestSnapshot, transactionClient } = args;
 
@@ -219,7 +221,20 @@ export async function executeRestructureLoanFromApprovedRequest(
 
     const contractualInterest = moneyToNumber(new Decimal(newOutstandingTotal).minus(repricingPrincipal));
     const accrualMethod = normalizeInterestAccrualMethod(productConfig.interest_accrual_method);
-    await upsertInterestProfileTx(tx, { loanId, accrualMethod, accrualBasis: "flat", accrualStartAt: scheduleStartDate, maturityAt: addWeeksIso(scheduleStartDate, newTermWeeks), totalContractualInterest: contractualInterest, accruedInterest: accrualMethod === "daily_eod" ? 0 : contractualInterest });
+    await upsertInterestProfileTx(tx, {
+      loanId,
+      accrualMethod,
+      accrualBasis: "flat",
+      accrualStartAt: scheduleStartDate,
+      maturityAt: getScheduleMaturityIso({
+        startIso: scheduleStartDate,
+        termWeeks: newTermWeeks,
+        cadence: resolveLoanRepaymentCadence(productConfig.interest_accrual_method),
+        addWeeksIso,
+      }),
+      totalContractualInterest: contractualInterest,
+      accruedInterest: accrualMethod === "daily_eod" ? 0 : contractualInterest,
+    });
 
     const updatedLoan = await tx.loans.findUnique({ where: { id: loanId } });
     const contractSnapshot = await buildLoanContractSnapshotTx(tx, loanId, { previousLoan: loan, newTermWeeks, waiveInterest: shouldWaiveInterest, repricingPrincipal, transactionId: Number(restructureTx.id || 0) });
@@ -230,7 +245,7 @@ export async function executeRestructureLoanFromApprovedRequest(
 
   const result = transactionClient
     ? await runMutation(transactionClient)
-    : await prisma.$transaction(async (tx: any) => runMutation(tx), { maxWait: 10000, timeout: 20000 });
+    : await prisma.$transaction(async (tx: PrismaTransactionClient) => runMutation(tx), { maxWait: 10000, timeout: 20000 });
 
   // ── Post-commit: publish loan.restructured domain event (outbox-backed) ──
   try {
@@ -322,12 +337,29 @@ export async function executeTopUpLoanFromApprovedRequest(
       ],
     });
 
-    const profileRows = await (tx as any).$queryRawUnsafe("SELECT total_contractual_interest, accrued_interest FROM loan_interest_profiles WHERE loan_id = ? LIMIT 1", loanId);
-    const currentTotalContractInterest = moneyToNumber(profileRows?.[0]?.total_contractual_interest || 0);
-    const currentAccruedInterest = moneyToNumber(profileRows?.[0]?.accrued_interest || 0);
+    const interestProfile = await (tx as any).loan_interest_profiles.findUnique({
+      where: { loan_id: Number(loanId) },
+      select: { total_contractual_interest: true, accrued_interest: true },
+    });
+    const currentTotalContractInterest = moneyToNumber(interestProfile?.total_contractual_interest || 0);
+    const currentAccruedInterest = moneyToNumber(interestProfile?.accrued_interest || 0);
     const nextTotalContractInterest = moneyToNumber(new Decimal(currentTotalContractInterest).plus(additionalInterest));
 
-    await upsertInterestProfileTx(tx, { loanId, accrualMethod, accrualBasis: "flat", accrualStartAt: nowIso(), maturityAt: addWeeksIso(nowIso(), targetTermWeeks), totalContractualInterest: nextTotalContractInterest, accruedInterest: accrualMethod === "daily_eod" ? currentAccruedInterest : nextTotalContractInterest });
+    const topUpAccrualStartAt = nowIso();
+    await upsertInterestProfileTx(tx, {
+      loanId,
+      accrualMethod,
+      accrualBasis: "flat",
+      accrualStartAt: topUpAccrualStartAt,
+      maturityAt: getScheduleMaturityIso({
+        startIso: topUpAccrualStartAt,
+        termWeeks: targetTermWeeks,
+        cadence: resolveLoanRepaymentCadence(productConfig.interest_accrual_method),
+        addWeeksIso,
+      }),
+      totalContractualInterest: nextTotalContractInterest,
+      accruedInterest: accrualMethod === "daily_eod" ? currentAccruedInterest : nextTotalContractInterest,
+    });
 
     const lastRep = await tx.repayments.findFirst({ where: { loan_id: loanId }, orderBy: [{ paid_at: "desc" }, { id: "desc" }], select: { paid_at: true } });
     const anchor = lastRep?.paid_at ? new Date(String(lastRep.paid_at)).toISOString() : nowIso();
@@ -342,7 +374,7 @@ export async function executeTopUpLoanFromApprovedRequest(
 
   return transactionClient
     ? await runMutation(transactionClient)
-    : await prisma.$transaction(async (tx: any) => runMutation(tx), { maxWait: 10000, timeout: 20000 });
+    : await prisma.$transaction(async (tx: PrismaTransactionClient) => runMutation(tx), { maxWait: 10000, timeout: 20000 });
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +435,21 @@ export async function executeRefinanceLoanFromApprovedRequest(
     await postReceivableInterestAdjustmentTx(tx, generalLedgerService, { referenceType: "loan_refinance_interest_adjustment", referenceId: Number(refinanceTx.id || 0), loanId, clientId: loan.client_id, branchId: loan.branch_id, amount: interestAdjustment, interestAccountCode, description: "Refinance interest adjustment posted", note: note || null, postedByUserId: executedByUserId || null });
 
     const contractualInterest = moneyToNumber(new Decimal(nextExpectedTotal).minus(basePrincipal));
-    await upsertInterestProfileTx(tx, { loanId, accrualMethod, accrualBasis: "flat", accrualStartAt: nowIso(), maturityAt: addWeeksIso(nowIso(), newTermWeeks), totalContractualInterest: contractualInterest, accruedInterest: accrualMethod === "daily_eod" ? 0 : contractualInterest });
+    const refinanceAccrualStartAt = nowIso();
+    await upsertInterestProfileTx(tx, {
+      loanId,
+      accrualMethod,
+      accrualBasis: "flat",
+      accrualStartAt: refinanceAccrualStartAt,
+      maturityAt: getScheduleMaturityIso({
+        startIso: refinanceAccrualStartAt,
+        termWeeks: newTermWeeks,
+        cadence: resolveLoanRepaymentCadence(productConfig.interest_accrual_method),
+        addWeeksIso,
+      }),
+      totalContractualInterest: contractualInterest,
+      accruedInterest: accrualMethod === "daily_eod" ? 0 : contractualInterest,
+    });
 
     const lastRep = await tx.repayments.findFirst({ where: { loan_id: loanId }, orderBy: [{ paid_at: "desc" }, { id: "desc" }], select: { paid_at: true } });
     const anchor = lastRep?.paid_at ? new Date(String(lastRep.paid_at)).toISOString() : nowIso();
@@ -418,7 +464,7 @@ export async function executeRefinanceLoanFromApprovedRequest(
 
   return transactionClient
     ? await runMutation(transactionClient)
-    : await prisma.$transaction(async (tx: any) => runMutation(tx), { maxWait: 10000, timeout: 20000 });
+    : await prisma.$transaction(async (tx: PrismaTransactionClient) => runMutation(tx), { maxWait: 10000, timeout: 20000 });
 }
 
 // ---------------------------------------------------------------------------
@@ -471,7 +517,21 @@ export async function executeTermExtensionFromApprovedRequest(
     await postReceivableInterestAdjustmentTx(tx, generalLedgerService, { referenceType: "loan_term_extension_interest_adjustment", referenceId: Number(extensionTx.id || 0), loanId, clientId: loan.client_id, branchId: loan.branch_id, amount: interestAdjustment, interestAccountCode, description: "Term extension interest adjustment posted", note: note || null, postedByUserId: executedByUserId || null });
 
     const contractualInterest = moneyToNumber(new Decimal(nextExpectedTotal).minus(outstandingPrincipal));
-    await upsertInterestProfileTx(tx, { loanId, accrualMethod, accrualBasis: "flat", accrualStartAt: nowIso(), maturityAt: addWeeksIso(nowIso(), newTermWeeks), totalContractualInterest: contractualInterest, accruedInterest: accrualMethod === "daily_eod" ? 0 : contractualInterest });
+    const extensionAccrualStartAt = nowIso();
+    await upsertInterestProfileTx(tx, {
+      loanId,
+      accrualMethod,
+      accrualBasis: "flat",
+      accrualStartAt: extensionAccrualStartAt,
+      maturityAt: getScheduleMaturityIso({
+        startIso: extensionAccrualStartAt,
+        termWeeks: newTermWeeks,
+        cadence: resolveLoanRepaymentCadence(productConfig.interest_accrual_method),
+        addWeeksIso,
+      }),
+      totalContractualInterest: contractualInterest,
+      accruedInterest: accrualMethod === "daily_eod" ? 0 : contractualInterest,
+    });
 
     const lastRep = await tx.repayments.findFirst({ where: { loan_id: loanId }, orderBy: [{ paid_at: "desc" }, { id: "desc" }], select: { paid_at: true } });
     const anchor = lastRep?.paid_at ? new Date(String(lastRep.paid_at)).toISOString() : nowIso();
@@ -486,5 +546,5 @@ export async function executeTermExtensionFromApprovedRequest(
 
   return transactionClient
     ? await runMutation(transactionClient)
-    : await prisma.$transaction(async (tx: any) => runMutation(tx), { maxWait: 10000, timeout: 20000 });
+    : await prisma.$transaction(async (tx: PrismaTransactionClient) => runMutation(tx), { maxWait: 10000, timeout: 20000 });
 }

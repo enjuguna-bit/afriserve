@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
-import type { PrismaClientLike } from "../db/prismaClient.js";
+import { run } from "../db/connection.js";
 import { parseBooleanEnv } from "../utils/env.js";
 import type { LoggerLike } from "../types/runtime.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 
 interface CreatePasswordResetServiceOptions {
-  prisma: PrismaClientLike;
   writeAuditLog: (payload: {
     userId?: number | null;
     action: string;
@@ -16,7 +16,7 @@ interface CreatePasswordResetServiceOptions {
   logger?: LoggerLike | null;
 }
 
-function createPasswordResetService({ prisma, writeAuditLog, logger = null }: CreatePasswordResetServiceOptions) {
+function createPasswordResetService({ writeAuditLog, logger = null }: CreatePasswordResetServiceOptions) {
   function getWebhookTimeoutMs() {
     const configuredTimeoutMs = Number(process.env.PASSWORD_RESET_WEBHOOK_TIMEOUT_MS);
     if (Number.isFinite(configuredTimeoutMs)) {
@@ -105,36 +105,30 @@ function createPasswordResetService({ prisma, writeAuditLog, logger = null }: Cr
     ipAddress,
     requestedByUserId = null,
     requestedBy = "self",
+    tenantId = getCurrentTenantId(),
   }: {
     userId: number;
     userEmail?: string | null;
     ipAddress?: string | null;
     requestedByUserId?: number | null;
     requestedBy?: string;
+    tenantId?: string;
   }): Promise<{ expiresAt: string; deliveryChannel: "webhook" | "console" }> {
     const rawToken = crypto.randomBytes(32).toString("hex");
     const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
     const expiresAt = new Date(Date.now() + 1000 * 60 * 30).toISOString();
 
     const usedAt = new Date().toISOString();
-    await prisma.password_resets.updateMany({
-      where: {
-        user_id: userId,
-        used_at: null,
-      },
-      data: {
-        used_at: usedAt,
-      },
-    });
+    // Invalidate any existing active reset tokens for this user before issuing a new one.
+    await run(
+      "UPDATE password_resets SET used_at = ? WHERE tenant_id = ? AND user_id = ? AND used_at IS NULL",
+      [usedAt, tenantId, userId],
+    );
 
-    await prisma.password_resets.create({
-      data: {
-        user_id: userId,
-        token_hash: tokenHash,
-        expires_at: expiresAt,
-        created_at: new Date().toISOString(),
-      },
-    });
+    await run(
+      "INSERT INTO password_resets (tenant_id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+      [tenantId, userId, tokenHash, expiresAt, new Date().toISOString()],
+    );
 
     let deliveryChannel: "webhook" | "console";
     try {
@@ -146,16 +140,11 @@ function createPasswordResetService({ prisma, writeAuditLog, logger = null }: Cr
         requestedBy,
       });
     } catch (deliveryError: unknown) {
-      await prisma.password_resets.updateMany({
-        where: {
-          user_id: userId,
-          token_hash: tokenHash,
-          used_at: null,
-        },
-      data: {
-        used_at: usedAt,
-      },
-    });
+      // Delivery failed — revoke the just-created token so it cannot be used.
+      await run(
+        "UPDATE password_resets SET used_at = ? WHERE tenant_id = ? AND user_id = ? AND token_hash = ? AND used_at IS NULL",
+        [usedAt, tenantId, userId, tokenHash],
+      );
       throw deliveryError;
     }
 

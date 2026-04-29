@@ -1,7 +1,8 @@
-import { parsePaginationQuery, parseSortQuery, createPagedResponse } from "../../utils/http.js";
+import type { AuthSessionUser } from "../../types/auth.js";
+import type { HierarchyServiceLike } from "../../types/serviceContracts.js";
+import { getCurrentTenantId } from "../../utils/tenantStore.js";
 
-type UserLike = Record<string, any>;
-type QueryLike = Record<string, any>;
+type UserLike = AuthSessionUser & Record<string, unknown>;
 type DbRow = Record<string, any>;
 type DbGetLike = (sql: string, params?: unknown[]) => Promise<DbRow | null | undefined>;
 type DbAllLike = (sql: string, params?: unknown[]) => Promise<DbRow[]>;
@@ -34,7 +35,7 @@ export function createClientPortfolioService(deps: {
   get: DbGetLike;
   all: DbAllLike;
   run: DbRunLike;
-  hierarchyService: any;
+  hierarchyService: HierarchyServiceLike;
   writeAuditLog: any;
   invalidateReportCaches: any;
   resolveClientScopeClient: (clientId: number, user: UserLike) => Promise<{ status: number; body?: any; scope?: any; client?: any }>;
@@ -54,6 +55,7 @@ export function createClientPortfolioService(deps: {
   async function computeGraduatedLimitForClient(
     clientId: number,
   ): Promise<number> {
+    const tenantId = getCurrentTenantId();
     const rows = await all(
       `
         SELECT
@@ -65,13 +67,14 @@ export function createClientPortfolioService(deps: {
           MIN(r.paid_at)              AS first_paid_at,
           MAX(r.paid_at)              AS last_paid_at
         FROM loans l
-        LEFT JOIN repayments r ON r.loan_id = l.id
+        LEFT JOIN repayments r ON r.loan_id = l.id AND r.tenant_id = l.tenant_id
         WHERE l.client_id = ?
+          AND l.tenant_id = ?
           AND l.status = 'closed'
         GROUP BY l.id, l.principal, l.expected_total
         ORDER BY l.disbursed_at ASC, l.id ASC
       `,
-      [clientId],
+      [clientId, tenantId],
     );
     if (!rows || rows.length === 0) return 0;
 
@@ -99,6 +102,7 @@ export function createClientPortfolioService(deps: {
   }
 
   async function listAssignableOfficers(user: UserLike) {
+    const tenantId = getCurrentTenantId();
     const scope = await hierarchyService.resolveHierarchyScope(user);
     const officers = await all(
       `
@@ -112,12 +116,14 @@ export function createClientPortfolioService(deps: {
         FROM users u
         LEFT JOIN branches b ON b.id = u.branch_id
         LEFT JOIN regions r ON r.id = COALESCE(u.primary_region_id, b.region_id)
-        LEFT JOIN clients c ON c.officer_id = u.id AND c.deleted_at IS NULL
+        LEFT JOIN clients c ON c.officer_id = u.id AND c.deleted_at IS NULL AND c.tenant_id = u.tenant_id
         WHERE LOWER(u.role) = 'loan_officer'
+          AND u.tenant_id = ?
           AND u.is_active = 1
         GROUP BY u.id, u.full_name, u.branch_id, b.name, r.name
         ORDER BY u.full_name ASC, u.id ASC
       `,
+      [tenantId],
     );
 
     return {
@@ -137,14 +143,15 @@ export function createClientPortfolioService(deps: {
   }
 
   async function reallocatePortfolio(payload: Record<string, any>, user: UserLike, ipAddress: string) {
+    const tenantId = getCurrentTenantId();
     const scope = await hierarchyService.resolveHierarchyScope(user);
     const fromOfficerId = Number(payload.fromOfficerId || 0);
     const toOfficerId = Number(payload.toOfficerId || 0);
     const note = String(payload.note || '').trim() || null;
 
     const [fromOfficer, toOfficer] = await Promise.all([
-      get(`SELECT id, full_name, role, is_active, branch_id FROM users WHERE id = ?`, [fromOfficerId]),
-      get(`SELECT id, full_name, role, is_active, branch_id FROM users WHERE id = ?`, [toOfficerId]),
+      get(`SELECT id, full_name, role, is_active, branch_id FROM users WHERE id = ? AND tenant_id = ?`, [fromOfficerId, tenantId]),
+      get(`SELECT id, full_name, role, is_active, branch_id FROM users WHERE id = ? AND tenant_id = ?`, [toOfficerId, tenantId]),
     ]);
 
     if (!fromOfficer || String(fromOfficer.role || '').trim().toLowerCase() !== 'loan_officer' || Number(fromOfficer.is_active || 0) !== 1) {
@@ -161,8 +168,8 @@ export function createClientPortfolioService(deps: {
     }
 
     const portfolioCountRow = await get(
-      `SELECT COUNT(*) AS total FROM clients c WHERE c.officer_id = ? AND c.deleted_at IS NULL AND c.branch_id = ?`,
-      [fromOfficerId, Number(fromOfficer.branch_id || 0)],
+      `SELECT COUNT(*) AS total FROM clients c WHERE c.officer_id = ? AND c.deleted_at IS NULL AND c.branch_id = ? AND c.tenant_id = ?`,
+      [fromOfficerId, Number(fromOfficer.branch_id || 0), tenantId],
     );
 
     const totalClients = Number(portfolioCountRow?.total || 0);
@@ -180,8 +187,8 @@ export function createClientPortfolioService(deps: {
 
     const updatedAt = new Date().toISOString();
     const updateResult = await run(
-      `UPDATE clients SET officer_id = ?, updated_at = ? WHERE officer_id = ? AND deleted_at IS NULL AND branch_id = ?`,
-      [toOfficerId, updatedAt, fromOfficerId, Number(fromOfficer.branch_id || 0)],
+      `UPDATE clients SET officer_id = ?, updated_at = ? WHERE officer_id = ? AND deleted_at IS NULL AND branch_id = ? AND tenant_id = ?`,
+      [toOfficerId, updatedAt, fromOfficerId, Number(fromOfficer.branch_id || 0), tenantId],
     );
 
     const movedClients = Number(updateResult?.changes || totalClients || 0);
@@ -209,6 +216,7 @@ export function createClientPortfolioService(deps: {
   }
 
   async function getClientWithLoans(clientId: number, user: UserLike) {
+    const tenantId = getCurrentTenantId();
     const resolved = await resolveClientScopeClient(clientId, user);
     if (resolved.status !== 200) {
       return { status: resolved.status, body: resolved.body };
@@ -218,16 +226,17 @@ export function createClientPortfolioService(deps: {
       `
         SELECT id, principal, interest_rate, term_months, term_weeks, registration_fee, processing_fee, expected_total, repaid_total, balance, status, disbursed_at, branch_id
         FROM loans
-        WHERE client_id = ?
+        WHERE client_id = ? AND tenant_id = ?
         ORDER BY id DESC
       `,
-      [clientId],
+      [clientId, tenantId],
     );
 
     return { status: 200, body: { ...resolved.client, loans } };
   }
 
   async function getClientHistory(clientId: number, user: UserLike) {
+    const tenantId = getCurrentTenantId();
     const scope = await hierarchyService.resolveHierarchyScope(user);
     const client = await get(
       `
@@ -243,11 +252,11 @@ export function createClientPortfolioService(deps: {
         FROM clients c
         LEFT JOIN branches b ON b.id = c.branch_id
         LEFT JOIN regions r ON r.id = b.region_id
-        LEFT JOIN users officer ON officer.id = c.officer_id
-        LEFT JOIN users creator ON creator.id = c.created_by_user_id
-        WHERE c.id = ?
+        LEFT JOIN users officer ON officer.id = c.officer_id AND officer.tenant_id = c.tenant_id
+        LEFT JOIN users creator ON creator.id = c.created_by_user_id AND creator.tenant_id = c.tenant_id
+        WHERE c.id = ? AND c.tenant_id = ?
       `,
-      [clientId],
+      [clientId, tenantId],
     );
 
     if (!client) {
@@ -272,7 +281,7 @@ export function createClientPortfolioService(deps: {
             SUM(CASE WHEN l.status = 'pending_approval' THEN 1 ELSE 0 END) AS pending_approval_loans,
             SUM(CASE WHEN l.status = 'approved' THEN 1 ELSE 0 END) AS approved_loans,
             SUM(CASE WHEN l.status = 'rejected' THEN 1 ELSE 0 END) AS rejected_loans,
-            COALESCE(SUM(l.principal), 0) AS total_principal_disbursed,
+            COALESCE(SUM(CASE WHEN l.disbursed_at IS NOT NULL THEN l.principal ELSE 0 END), 0) AS total_principal_disbursed,
             COALESCE(SUM(l.expected_total), 0) AS total_expected_total,
             COALESCE(SUM(l.repaid_total), 0) AS total_repaid,
             COALESCE(SUM(CASE WHEN l.status IN ('active', 'restructured') THEN l.balance ELSE 0 END), 0) AS total_outstanding_balance,
@@ -280,23 +289,24 @@ export function createClientPortfolioService(deps: {
             MAX(l.disbursed_at) AS latest_disbursed_at
           FROM loans l
           WHERE l.client_id = ?
+            AND l.tenant_id = ?
         `,
-        [clientId],
+        [clientId, tenantId],
       ),
       get(
         `
           SELECT
             COUNT(i.id) AS total_installments,
             COUNT(DISTINCT CASE
-              WHEN i.status != 'paid' AND datetime(i.due_date) < datetime('now') THEN l.id
+              WHEN i.status != 'paid' AND date(i.due_date) < date('now') THEN l.id
               ELSE NULL
             END) AS currently_overdue_loans,
             SUM(CASE
-              WHEN i.status != 'paid' AND datetime(i.due_date) < datetime('now') THEN 1
+              WHEN i.status != 'paid' AND date(i.due_date) < date('now') THEN 1
               ELSE 0
             END) AS currently_overdue_installments,
             COALESCE(SUM(CASE
-              WHEN i.status != 'paid' AND datetime(i.due_date) < datetime('now')
+              WHEN i.status != 'paid' AND date(i.due_date) < date('now')
                 THEN i.amount_due - i.amount_paid
               ELSE 0
             END), 0) AS currently_overdue_amount,
@@ -310,15 +320,16 @@ export function createClientPortfolioService(deps: {
               ELSE NULL
             END), 2), 0) AS avg_days_late_paid_installments,
             COALESCE(MAX(CASE
-              WHEN i.status != 'paid' AND datetime(i.due_date) < datetime('now')
-                THEN CAST(julianday('now') - julianday(i.due_date) AS INTEGER)
+              WHEN i.status != 'paid' AND date(i.due_date) < date('now')
+                THEN CAST(julianday(date('now')) - julianday(date(i.due_date)) AS INTEGER)
               ELSE NULL
             END), 0) AS max_current_days_overdue
           FROM loans l
-          LEFT JOIN loan_installments i ON i.loan_id = l.id
+          LEFT JOIN loan_installments i ON i.loan_id = l.id AND i.tenant_id = l.tenant_id
           WHERE l.client_id = ?
+            AND l.tenant_id = ?
         `,
-        [clientId],
+        [clientId, tenantId],
       ),
       all(
         `
@@ -343,20 +354,21 @@ export function createClientPortfolioService(deps: {
             officer.full_name AS officer_name,
             COUNT(i.id) AS installment_count,
             SUM(CASE WHEN i.status = 'paid' THEN 1 ELSE 0 END) AS paid_installment_count,
-            SUM(CASE WHEN i.status != 'paid' AND datetime(i.due_date) < datetime('now') THEN 1 ELSE 0 END) AS overdue_installment_count,
+            SUM(CASE WHEN i.status != 'paid' AND date(i.due_date) < date('now') THEN 1 ELSE 0 END) AS overdue_installment_count,
             COALESCE(SUM(CASE
-              WHEN i.status != 'paid' AND datetime(i.due_date) < datetime('now')
+              WHEN i.status != 'paid' AND date(i.due_date) < date('now')
                 THEN i.amount_due - i.amount_paid
               ELSE 0
             END), 0) AS overdue_amount
           FROM loans l
-          LEFT JOIN users officer ON officer.id = l.officer_id
-          LEFT JOIN loan_installments i ON i.loan_id = l.id
+          LEFT JOIN users officer ON officer.id = l.officer_id AND officer.tenant_id = l.tenant_id
+          LEFT JOIN loan_installments i ON i.loan_id = l.id AND i.tenant_id = l.tenant_id
           WHERE l.client_id = ?
+            AND l.tenant_id = ?
           GROUP BY l.id
           ORDER BY datetime(l.disbursed_at) DESC, l.id DESC
         `,
-        [clientId],
+        [clientId, tenantId],
       ),
       // Bounded: never load more than HISTORY_QUERY_LIMIT rows (default 200, env-configurable)
       all(
@@ -372,12 +384,14 @@ export function createClientPortfolioService(deps: {
             l.status AS loan_status
           FROM repayments r
           INNER JOIN loans l ON l.id = r.loan_id
-          LEFT JOIN users recorder ON recorder.id = r.recorded_by_user_id
+          LEFT JOIN users recorder ON recorder.id = r.recorded_by_user_id AND recorder.tenant_id = l.tenant_id
           WHERE l.client_id = ?
+            AND l.tenant_id = ?
+            AND r.tenant_id = l.tenant_id
           ORDER BY datetime(r.paid_at) DESC, r.id DESC
           LIMIT ?
         `,
-        [clientId, HISTORY_QUERY_LIMIT],
+        [clientId, tenantId, HISTORY_QUERY_LIMIT],
       ),
       // Bounded: never load more than HISTORY_QUERY_LIMIT rows (default 200, env-configurable)
       all(
@@ -397,12 +411,14 @@ export function createClientPortfolioService(deps: {
             l.status AS loan_status
           FROM collection_actions ca
           INNER JOIN loans l ON l.id = ca.loan_id
-          LEFT JOIN users creator ON creator.id = ca.created_by_user_id
+          LEFT JOIN users creator ON creator.id = ca.created_by_user_id AND creator.tenant_id = l.tenant_id
           WHERE l.client_id = ?
+            AND l.tenant_id = ?
+            AND ca.tenant_id = l.tenant_id
           ORDER BY datetime(ca.created_at) DESC, ca.id DESC
           LIMIT ?
         `,
-        [clientId, HISTORY_QUERY_LIMIT],
+        [clientId, tenantId, HISTORY_QUERY_LIMIT],
       ),
     ]);
 

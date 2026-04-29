@@ -1,11 +1,12 @@
 import type { NextFunction, Request, Response } from "express";
 import { RATE_LIMITS, resolveRateLimitBucket } from "../config/rateLimit.js";
 import { createDistributedRateLimiter, incrementDistributedRateLimitCounter } from "../services/rateLimitRedis.js";
+import { getApiRateLimitRequesterKey, getAuthRateLimitRequesterKey } from "../utils/rateLimitKeys.js";
 import { parseBooleanEnv } from "../utils/env.js";
 
 
 function getRequesterKey(req: Request): string {
-  return `ip:${String(req.ip || "unknown")}`;
+  return getApiRateLimitRequesterKey(req);
 }
 
 function getAuthenticatedRequesterKey(req: Request): string {
@@ -24,7 +25,11 @@ function getAuthenticatedRequesterKey(req: Request): string {
 
 const disableUserRateLimit = parseBooleanEnv(process.env.DISABLE_USER_RATE_LIMIT, false);
 const nodeEnv = String(process.env.NODE_ENV || "").trim().toLowerCase();
-const isNonProduction = nodeEnv !== "production";
+// Only bypass rate limiting in the test runner — staging and development servers
+// that are externally reachable (or behind a same-host reverse proxy) must still
+// enforce limits. Using isNonProduction here caused the rate limiter to silently
+// no-op on any staging/deployed server whose requests arrived via 127.0.0.1.
+const isTestEnv = nodeEnv === "test";
 
 function isLocalRequest(req: Request): boolean {
   const ip = String(req.ip || "").trim();
@@ -32,14 +37,16 @@ function isLocalRequest(req: Request): boolean {
 }
 
 async function userRateLimit(req: Request, res: Response, next: NextFunction) {
-  if (disableUserRateLimit || (isNonProduction && isLocalRequest(req))) {
+  if (disableUserRateLimit || (isTestEnv && isLocalRequest(req))) {
     next();
     return;
   }
 
   const bucket = resolveRateLimitBucket(req.path);
   const config = RATE_LIMITS[bucket];
-  const requesterKey = getRequesterKey(req);
+  const requesterKey = bucket === "login"
+    ? getAuthRateLimitRequesterKey(req)
+    : getRequesterKey(req);
   const key = `${bucket}:${requesterKey}`;
   const now = Date.now();
 

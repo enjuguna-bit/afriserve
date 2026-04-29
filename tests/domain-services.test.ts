@@ -176,6 +176,19 @@ test("checkHardDuplicates excludes self when excludeClientId provided", async ()
 
 const schedule = new RepaymentScheduleService();
 
+function addBusinessDaysIso(iso: string, businessDays: number) {
+  const d = new Date(iso);
+  let counted = 0;
+  while (counted < businessDays) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    if (d.getUTCDay() === 0) {
+      continue;
+    }
+    counted += 1;
+  }
+  return d.toISOString();
+}
+
 test("buildInstallmentAmounts returns correct number of entries", () => {
   const amounts = schedule.buildInstallmentAmounts(Money.fromNumber(1200), LoanTerm.fromWeeks(4));
   assert.equal(amounts.length, 4);
@@ -212,15 +225,47 @@ test("generateSchedule returns entries with correct installmentNumbers", () => {
   assert.equal(entries[0].status, "pending");
 });
 
+test("buildInstallmentAmounts supports business-daily cadence across the loan term", () => {
+  const amounts = schedule.buildInstallmentAmounts(
+    Money.fromNumber(1200),
+    LoanTerm.fromWeeks(2),
+    "business_daily",
+  );
+  assert.equal(amounts.length, 12);
+  const sum = amounts.reduce((a, b) => a + b, 0);
+  assert.equal(Math.round(sum * 100), Math.round(1200 * 100));
+});
+
+test("generateSchedule supports business-daily cadence and skips Sundays", () => {
+  const addWeeksIso = (iso: string, w: number) => {
+    const d = new Date(iso);
+    d.setUTCDate(d.getUTCDate() + (w * 7));
+    return d.toISOString();
+  };
+
+  const entries = schedule.generateSchedule({
+    expectedTotal: Money.fromNumber(600),
+    term: LoanTerm.fromWeeks(1),
+    startDate: new Date("2025-06-20T08:00:00.000Z"),
+    addWeeksIso,
+    cadence: "business_daily",
+    addBusinessDaysIso,
+  });
+
+  assert.equal(entries.length, 6);
+  assert.equal(entries[0].dueDate.slice(0, 10), "2025-06-21");
+  assert.equal(entries[1].dueDate.slice(0, 10), "2025-06-23");
+  assert.equal(entries[5].dueDate.slice(0, 10), "2025-06-27");
+});
+
 test("calculateFlatInterest computes P * R * T", () => {
-  const { InterestRate: IR } = { InterestRate: { fromPercentage: (p: number) => ({ percentage: p, asFactor: () => p / 100 }) } };
   const interest = schedule.calculateFlatInterest(
     Money.fromNumber(1000),
     { percentage: 10, asFactor: () => 0.1 } as any,
     LoanTerm.fromWeeks(4),
   );
-  // 1000 * 0.1 * 4 = 400
-  assert.equal(interest.amount, 400);
+  // 1000 * 0.1 * (4 / 52) = 7.69
+  assert.equal(interest.amount, 7.69);
 });
 
 // ── PenaltyCalculationService ─────────────────────────────────────────────────

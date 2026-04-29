@@ -142,7 +142,9 @@ function buildImageSourceList(): string[] {
     })
     .filter((value): value is string => Boolean(value));
 
-  return [...new Set(["'self'", "data:", ...origins])];
+  // Client-side image optimization and camera capture use blob URLs briefly
+  // before upload, so allow blob: images without relaxing script policy.
+  return [...new Set(["'self'", "data:", "blob:", ...origins])];
 }
 
 function sanitizeForLogs(value: unknown): unknown {

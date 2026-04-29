@@ -1,7 +1,8 @@
 import type { GetLoanDetailsQuery, LoanDetailsDto, LoanInstallmentDto } from "../queries/LoanQueries.js";
 
-type DbGet = (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
-type DbAll = (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
+type DbRow = Record<string, unknown>;
+type DbGet = (sql: string, params?: unknown[]) => Promise<DbRow | null | undefined>;
+type DbAll = (sql: string, params?: unknown[]) => Promise<DbRow[]>;
 
 /**
  * Query handler: GetLoanDetails
@@ -45,7 +46,7 @@ export class GetLoanDetailsHandler {
        WHERE loan_id = ?
        ORDER BY installment_number ASC`,
       [query.loanId],
-    ).catch(() => [] as Array<Record<string, any>>);   // graceful if table absent
+    ).catch(() => [] as DbRow[]);   // graceful if table absent
 
     const schedule: LoanInstallmentDto[] = scheduleRows.map((s) => ({
       installmentNumber: Number(s["installment_number"]),

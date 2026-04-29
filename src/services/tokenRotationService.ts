@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 import jwt from "jsonwebtoken";
 import { Redis } from "ioredis";
 import type { LoggerLike } from "../types/runtime.js";
@@ -9,6 +10,7 @@ type RefreshPayload = {
   tokenVersion: number;
   jti: string;
   typ: "refresh";
+  tenantId: string;
 };
 
 type StorageAdapter = {
@@ -94,8 +96,12 @@ async function createTokenRotationService({
   const { adapter, strategy } = await createStorageAdapter(String(redisUrl || "").trim(), logger);
   const refreshTokenExpirySeconds = 7 * 24 * 60 * 60;
 
-  function buildRefreshKey(userId: number, jti: string): string {
-    return `refresh:${userId}:${jti}`;
+  function normalizeTenantId(tenantId?: string | null): string {
+    return String(tenantId || getCurrentTenantId() || "").trim() || "default";
+  }
+
+  function buildRefreshKey(userId: number, jti: string, tenantId?: string | null): string {
+    return `refresh:${normalizeTenantId(tenantId)}:${userId}:${jti}`;
   }
 
   function verifyRefreshToken(refreshToken: string): jwt.JwtPayload {
@@ -116,20 +122,26 @@ async function createTokenRotationService({
     throw lastError || new Error("Invalid token secret configuration");
   }
 
-  async function issueRefreshToken(userId: number, tokenVersion: number): Promise<string> {
+  async function issueRefreshToken(
+    userId: number,
+    tokenVersion: number,
+    options: { tenantId?: string | null } = {},
+  ): Promise<string> {
     const jti = crypto.randomUUID();
+    const tenantId = normalizeTenantId(options.tenantId);
     const payload: RefreshPayload = {
       sub: userId,
       tokenVersion,
       jti,
       typ: "refresh",
+      tenantId,
     };
 
     const refreshToken = jwt.sign(payload, activeSecret, {
       expiresIn: refreshTokenExpirySeconds,
     });
 
-    await adapter.setex(buildRefreshKey(userId, jti), refreshTokenExpirySeconds, "1");
+    await adapter.setex(buildRefreshKey(userId, jti, tenantId), refreshTokenExpirySeconds, "1");
     return refreshToken;
   }
 
@@ -137,6 +149,7 @@ async function createTokenRotationService({
     userId: number;
     tokenVersion: number;
     refreshToken: string;
+    tenantId: string;
   }> {
     const decoded = verifyRefreshToken(refreshToken);
     if (!decoded || decoded.typ !== "refresh") {
@@ -146,12 +159,19 @@ async function createTokenRotationService({
     const userId = Number(decoded.sub);
     const tokenVersion = Number(decoded.tokenVersion || 0);
     const jti = String(decoded.jti || "").trim();
+    const tenantId = normalizeTenantId(
+      typeof decoded.tenantId === "string" ? decoded.tenantId : undefined,
+    );
 
     if (!Number.isInteger(userId) || userId <= 0 || !jti) {
       throw new Error("Invalid refresh token");
     }
 
-    const key = buildRefreshKey(userId, jti);
+    if (tenantId !== normalizeTenantId()) {
+      throw new Error("Invalid refresh token");
+    }
+
+    const key = buildRefreshKey(userId, jti, tenantId);
     const existing = await adapter.get(key);
     if (existing !== "1") {
       if (logger && typeof logger.warn === "function") {
@@ -165,12 +185,13 @@ async function createTokenRotationService({
     }
 
     await adapter.del(key);
-    const nextRefreshToken = await issueRefreshToken(userId, tokenVersion);
+    const nextRefreshToken = await issueRefreshToken(userId, tokenVersion, { tenantId });
 
     return {
       userId,
       tokenVersion,
       refreshToken: nextRefreshToken,
+      tenantId,
     };
   }
 
@@ -179,11 +200,14 @@ async function createTokenRotationService({
       const decoded = verifyRefreshToken(refreshToken);
       const userId = Number(decoded.sub);
       const jti = String(decoded.jti || "").trim();
+      const tenantId = normalizeTenantId(
+        typeof decoded.tenantId === "string" ? decoded.tenantId : undefined,
+      );
       if (!Number.isInteger(userId) || userId <= 0 || !jti) {
         return;
       }
 
-      await adapter.del(buildRefreshKey(userId, jti));
+      await adapter.del(buildRefreshKey(userId, jti, tenantId));
     } catch (_error) {
     }
   }

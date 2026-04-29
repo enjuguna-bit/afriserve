@@ -17,6 +17,10 @@ import { run,
 import { createClientSchema,
   updateClientSchema,
   updateClientKycSchema,
+  createClientProfileRefreshSchema,
+  updateClientProfileRefreshDraftSchema,
+  listClientProfileRefreshesQuerySchema,
+  reviewClientProfileRefreshSchema,
   createClientGuarantorSchema,
   updateClientGuarantorSchema,
   createClientCollateralSchema,
@@ -29,6 +33,7 @@ import { createClientSchema,
   createRepaymentSchema,
   createGuarantorSchema,
   createCollateralAssetSchema,
+  updateCollateralAssetSchema,
   linkLoanGuarantorSchema,
   linkLoanCollateralSchema,
   loanLifecycleActionSchema,
@@ -80,7 +85,6 @@ import { createAfricasTalkingSmsService } from "../infrastructure/notifications/
 import { LoanNotificationSubscriber } from "../infrastructure/notifications/LoanNotificationSubscriber.js";
 import { createRabbitMqConsumer } from "../infrastructure/events/RabbitMqConsumer.js";
 import { AccountingGlSubscriber } from "../infrastructure/accounting/AccountingGlSubscriber.js";
-import { ClientOnboardingSaga } from "../application/client/sagas/ClientOnboardingSaga.js";
 import { getAuthSessionCacheStatus } from "../services/authSessionCache.js";
 import { getRateLimitBackendStatus } from "../services/rateLimitRedis.js";
 import { getAllowedRoles, getRoleCatalog, normalizeRoleInput } from "./roles.js";
@@ -90,7 +94,9 @@ import { calculateExpectedTotal,
   addWeeksIso,
   createHttpError, } from "../utils/helpers.js";
 import { parseBooleanEnv } from "../utils/env.js";
+import { redactDatabasePathForStatus } from "../utils/redaction.js";
 import { resolveDefaultBackupDir } from "../utils/projectPaths.js";
+import type { AuthUserRow, CreateAuthMiddlewareOptions } from "../types/auth.js";
 
 const appVersion = packageJson.version;
 type BootstrapContextOptions = {
@@ -111,7 +117,10 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
     .map((value) => value.trim())
     .filter(Boolean);
   const jwtSecrets = [...new Set([String(jwtSecret || "").trim(), ...configuredJwtSecrets].filter(Boolean))];
-  const tokenExpiry = "12h";
+  // Token expiry — configurable for different deployment requirements
+  // Default: 12h for balance of security and UX
+  const rawTokenExpiry = String(process.env.JWT_TOKEN_EXPIRY || "").trim();
+  const tokenExpiry = rawTokenExpiry && /^\d+[smhd]$/.test(rawTokenExpiry) ? rawTokenExpiry : "12h";
   const loginMaxFailedAttempts = 5;
   const loginLockMinutes = 15;
 
@@ -157,8 +166,10 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
   const jobQueueSchedulerEnabled = jobQueueEnabled && jobQueueRole !== "worker";
   const jobQueueWorkerEnabled = jobQueueEnabled && jobQueueRole !== "scheduler";
   const jobQueueName = String(env.JOB_QUEUE_NAME || "afriserve-system-jobs").trim() || "afriserve-system-jobs";
-  const jobQueueDeadLetterQueueName = String(env.JOB_QUEUE_DLQ_NAME || `${jobQueueName}:dead-letter`).trim()
-    || `${jobQueueName}:dead-letter`;
+  const defaultJobQueueDeadLetterQueueName = `${jobQueueName}-dead-letter`;
+  const jobQueueDeadLetterQueueName = String(
+    env.JOB_QUEUE_DLQ_NAME || defaultJobQueueDeadLetterQueueName,
+  ).trim() || defaultJobQueueDeadLetterQueueName;
   const configuredJobQueueConcurrency = Number(env.JOB_QUEUE_CONCURRENCY);
   const jobQueueConcurrency = Number.isFinite(configuredJobQueueConcurrency) && configuredJobQueueConcurrency >= 1
     ? Math.floor(configuredJobQueueConcurrency)
@@ -217,6 +228,15 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
     : 5000;
   const reportDeliveryEnabled = reportDeliveryRequested && Boolean(reportDeliveryRecipientEmail);
   const uptimeHeartbeatUrl = String(env.UPTIME_HEARTBEAT_URL || "").trim();
+  const otelExporterEndpoint = String(
+    env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || env.OTEL_EXPORTER_OTLP_ENDPOINT || "",
+  ).trim();
+  const configuredOtelTraceSampleRatio = Number(env.OTEL_TRACE_SAMPLE_RATIO);
+  const otelTraceSampleRatio = Number.isFinite(configuredOtelTraceSampleRatio)
+    ? Math.min(Math.max(configuredOtelTraceSampleRatio, 0), 1)
+    : 1;
+  const otelServiceName = String(env.OTEL_SERVICE_NAME || "").trim() || null;
+  const otelTracingEnabled = Boolean(otelExporterEndpoint) && otelTraceSampleRatio > 0;
   const configuredUptimeHeartbeatIntervalMs = Number(env.UPTIME_HEARTBEAT_INTERVAL_MS);
   const uptimeHeartbeatIntervalMs = Number.isFinite(configuredUptimeHeartbeatIntervalMs)
     && configuredUptimeHeartbeatIntervalMs >= 10000
@@ -316,7 +336,7 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
     metrics,
   });
   const documentStorage = createDocumentStorageService({ logger });
-  const scheduledReportService = createScheduledReportService({ prisma });
+  const scheduledReportService = createScheduledReportService();
   const mobileMoneyProvider = createMobileMoneyProvider({ env, logger });
   const domainEventService = createDomainEventService({
     run,
@@ -335,7 +355,7 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
 
   const authLimiter = createAuthLimiter();
   const generalApiLimiter = createGeneralApiLimiter();
-  const { writeAuditLog } = createAuditService({ prisma });
+  const { writeAuditLog } = createAuditService();
   const tokenBlacklist = await createTokenBlacklistService({
     redisUrl: tokenStoreRedisUrl,
     logger,
@@ -347,21 +367,28 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
     logger,
   });
 
+  const authMiddlewareGet: CreateAuthMiddlewareOptions["get"] = async (sql, params) => (
+    await get(sql, params)
+  ) as AuthUserRow | null | undefined;
+  const authMiddlewareAll: NonNullable<CreateAuthMiddlewareOptions["all"]> = async (sql, params) => (
+    await all(sql, params)
+  ) as Array<Record<string, unknown>>;
+
   const { createToken, verifyToken, authenticate, authorize } = createAuthMiddleware({
     jwtSecret,
     jwtSecrets,
     tokenExpiry,
-    get: get as any,
-    all: all as any,
+    get: authMiddlewareGet,
+    all: authMiddlewareAll,
     isTokenBlacklisted: tokenBlacklist.isTokenBlacklisted,
   });
-  const { issuePasswordResetToken } = createPasswordResetService({ prisma, writeAuditLog, logger: logger as any });
+  const { issuePasswordResetToken } = createPasswordResetService({ writeAuditLog, logger });
   const hierarchyService = createHierarchyService({ get, all, executeTransaction });
-  const hierarchyEventService = createHierarchyEventService({ prisma });
+  const hierarchyEventService = createHierarchyEventService();
   const errorHandler = createErrorHandler({
     ZodError,
     logger,
-    metrics: metrics as any,
+    metrics,
     errorTracker,
   });
 
@@ -415,11 +442,7 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
     notificationSubscriber.register(serviceRegistry.loan.eventBus);
   }
 
-  // 2. Client onboarding saga
-  const clientOnboardingSaga = new ClientOnboardingSaga(get, run);
-  clientOnboardingSaga.register(serviceRegistry.loan.eventBus);
-
-  // 3. Accounting GL subscriber
+  // 2. Accounting GL subscriber
   //    Shadow mode (default): reconciles whether in-process GL already posted.
   //    Active mode: IS the GL posting path — set ACCOUNTING_GL_SHADOW_MODE=false
   //    after shadow parity is proven in staging.
@@ -497,7 +520,7 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
   }
 
   // ── Route dependencies ────────────────────────────────────────────────────
-  const routeDepsBase: Record<string, any> = {
+  const routeDepsBase: Record<string, unknown> = {
     run,
     get,
     all,
@@ -523,6 +546,10 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
     createClientSchema,
     updateClientSchema,
     updateClientKycSchema,
+    createClientProfileRefreshSchema,
+    updateClientProfileRefreshDraftSchema,
+    listClientProfileRefreshesQuerySchema,
+    reviewClientProfileRefreshSchema,
     createClientGuarantorSchema,
     updateClientGuarantorSchema,
     createClientCollateralSchema,
@@ -535,6 +562,7 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
     createRepaymentSchema,
     createGuarantorSchema,
     createCollateralAssetSchema,
+    updateCollateralAssetSchema,
     linkLoanGuarantorSchema,
     linkLoanCollateralSchema,
     loanLifecycleActionSchema,
@@ -591,6 +619,7 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
       .split(",")
       .map((item: string) => item.trim())
       .filter(Boolean);
+    const redactedDatabasePath = redactDatabasePathForStatus(databasePath, databaseClient);
 
     return {
       NODE_ENV: env.NODE_ENV || "development",
@@ -605,9 +634,10 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
       AUTH_SESSION_CACHE_STRATEGY: authSessionCacheStatus.strategy,
       AUTH_SESSION_CACHE_REDIS_URL_SET: authSessionCacheStatus.redisUrlConfigured,
       AUTH_SESSION_CACHE_TTL_SECONDS: authSessionCacheStatus.ttlSeconds,
+      AUTH_SESSION_CACHE_REVALIDATE_AFTER_SECONDS: authSessionCacheStatus.revalidateAfterSeconds,
       RATE_LIMIT_STRATEGY: rateLimitBackendStatus.strategy,
       RATE_LIMIT_REDIS_URL_SET: rateLimitBackendStatus.redisUrlConfigured,
-      DB_PATH: databasePath,
+      DB_PATH: redactedDatabasePath,
       DB_CLIENT: databaseClient,
       DB_IS_IN_MEMORY: isInMemoryDb,
       OVERDUE_SYNC_INTERVAL_MS: overdueSyncIntervalMs,
@@ -693,6 +723,10 @@ async function createBootstrapContext(options: BootstrapContextOptions = {}) {
       SENTRY_ENABLED: errorTracker.enabled,
       SENTRY_PROVIDER: errorTracker.provider,
       SENTRY_DSN_SET: Boolean(String(env.SENTRY_DSN || "").trim()),
+      OTEL_TRACING_ENABLED: otelTracingEnabled,
+      OTEL_EXPORTER_OTLP_ENDPOINT_SET: Boolean(otelExporterEndpoint),
+      OTEL_TRACE_SAMPLE_RATIO: otelTraceSampleRatio,
+      OTEL_SERVICE_NAME: otelServiceName,
       UPTIME_HEARTBEAT_ENABLED: Boolean(uptimeHeartbeatUrl),
       UPTIME_HEARTBEAT_URL_SET: Boolean(uptimeHeartbeatUrl),
       UPTIME_HEARTBEAT_INTERVAL_MS: uptimeHeartbeatIntervalMs,

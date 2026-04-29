@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import Database from "better-sqlite3";
 import {
   startServer,
   api,
@@ -101,7 +102,7 @@ test("income statement, daily collections, write-offs, and portfolio report retu
   try {
     const adminToken = await loginAsAdmin(baseUrl);
     const checkerToken = await createHighRiskReviewerToken(baseUrl, adminToken);
-    const financeToken = await createHighRiskReviewerToken(baseUrl, adminToken, { role: "finance" });
+    await createHighRiskReviewerToken(baseUrl, adminToken, { role: "finance" });
 
     const branches = await api(baseUrl, "/api/branches?limit=1&sortBy=id&sortOrder=asc", {
       token: adminToken,
@@ -235,6 +236,8 @@ test("income statement, daily collections, write-offs, and portfolio report retu
     assert.ok(repaymentDayRow, "Expected a daily collection row for the seeded repayment");
     assert.ok(Number(repaymentDayRow.repayment_count || 0) >= 1);
     assert.ok(Number(repaymentDayRow.unique_loans || 0) >= 1);
+    assert.ok(Number(repaymentDayRow.current_due_collected || 0) >= 0);
+    assert.ok(Number(repaymentDayRow.arrears_collected || 0) >= 0);
 
     // 5. Verify Write-offs Report
     const writeOffReport = await api(baseUrl, "/api/reports/write-offs", {
@@ -250,6 +253,140 @@ test("income statement, daily collections, write-offs, and portfolio report retu
     assert.ok(Number(seededWriteOff.outstanding_balance_at_write_off || 0) > 0);
 
   } finally {
+    await stop();
+  }
+});
+
+test("daily and summary collections classify overdue recoveries separately from today's dues", async () => {
+  const { baseUrl, stop, dbFilePath } = await startServer();
+  const suffix = uniqueSuffix();
+  let db: Database.Database | null = null;
+
+  try {
+    assert.ok(dbFilePath, "Expected sqlite-backed test run to expose dbFilePath");
+
+    const adminToken = await loginAsAdmin(baseUrl);
+    const checkerToken = await createHighRiskReviewerToken(baseUrl, adminToken);
+
+    const branches = await api(baseUrl, "/api/branches?limit=1&sortBy=id&sortOrder=asc", {
+      token: adminToken,
+    });
+    assert.equal(branches.status, 200);
+    const branchId = Number(branches.data.data[0].id);
+    assert.ok(branchId > 0);
+
+    const seededLoan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      approvalToken: checkerToken,
+      fullName: `Collections Allocation Client ${suffix}`,
+      phone: `+254735${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      principal: 1200,
+      termWeeks: 6,
+      branchId,
+      approvalNotes: "Approve loan for collection allocation test",
+    });
+
+    db = new Database(String(dbFilePath));
+    db.pragma("busy_timeout = 5000");
+
+    const installments = db.prepare(
+      `
+        SELECT id, installment_number, amount_due
+        FROM loan_installments
+        WHERE loan_id = ?
+        ORDER BY installment_number ASC, id ASC
+      `,
+    ).all(seededLoan.loanId) as Array<{ id: number; installment_number: number; amount_due: number }>;
+
+    assert.ok(installments.length >= 2, "Expected at least two installments for seeded loan");
+
+    const now = new Date();
+    const overdueDueDate = new Date(now);
+    overdueDueDate.setDate(overdueDueDate.getDate() - 7);
+    overdueDueDate.setHours(9, 0, 0, 0);
+
+    const todayDueDate = new Date(now);
+    todayDueDate.setHours(12, 0, 0, 0);
+
+    const resetInstallment = db.prepare(
+      `
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'pending', paid_at = NULL
+        WHERE id = ?
+      `,
+    );
+
+    resetInstallment.run(overdueDueDate.toISOString(), installments[0].id);
+    resetInstallment.run(todayDueDate.toISOString(), installments[1].id);
+    db.close();
+    db = null;
+
+    const repaymentAmount = Number(installments[0].amount_due || 0);
+    assert.ok(repaymentAmount > 0);
+
+    const repayment = await api(baseUrl, `/api/loans/${seededLoan.loanId}/repayments`, {
+      method: "POST",
+      token: adminToken,
+      body: {
+        amount: repaymentAmount,
+        note: "Repayment that should clear only prior arrears",
+      },
+    });
+    assert.equal(repayment.status, 201);
+
+    const reportDateFrom = new Date(now);
+    reportDateFrom.setHours(0, 0, 0, 0);
+    const reportDateTo = new Date(now);
+    reportDateTo.setHours(23, 59, 59, 999);
+
+    const dailyCollections = await api(
+      baseUrl,
+      `/api/reports/daily-collections?dateFrom=${encodeURIComponent(reportDateFrom.toISOString())}&dateTo=${encodeURIComponent(reportDateTo.toISOString())}`,
+      {
+        token: adminToken,
+      },
+    );
+    assert.equal(dailyCollections.status, 200);
+    assert.ok(Array.isArray(dailyCollections.data.dailyCollections));
+
+    const repaymentDayRow = dailyCollections.data.dailyCollections.find(
+      (row: any) => Number(row.total_collected || 0) >= repaymentAmount,
+    );
+    assert.ok(repaymentDayRow, "Expected a daily collection row for the overdue-clearing repayment");
+    assertApprox(Number(repaymentDayRow.total_collected || 0), repaymentAmount);
+    assertApprox(Number(repaymentDayRow.arrears_collected || 0), repaymentAmount);
+    assertApprox(Number(repaymentDayRow.current_due_collected || 0), 0);
+
+    const collectionsSummary = await api(
+      baseUrl,
+      `/api/reports/collections?dateFrom=${encodeURIComponent(reportDateFrom.toISOString())}&dateTo=${encodeURIComponent(reportDateTo.toISOString())}`,
+      {
+        token: adminToken,
+      },
+    );
+    assert.equal(collectionsSummary.status, 200);
+    assertApprox(Number(collectionsSummary.data.summary.total_collected || 0), repaymentAmount);
+    assertApprox(Number(collectionsSummary.data.summary.arrears_collected || 0), repaymentAmount);
+    assertApprox(Number(collectionsSummary.data.summary.period_due_collected || 0), 0);
+    assertApprox(Number(collectionsSummary.data.summary.collection_rate || 0), 0);
+
+    const focusedCollectionsSummary = await api(
+      baseUrl,
+      `/api/reports/collections?dateFrom=${encodeURIComponent(reportDateFrom.toISOString())}&dateTo=${encodeURIComponent(reportDateTo.toISOString())}&collectionFocus=arrears_only`,
+      {
+        token: adminToken,
+      },
+    );
+    assert.equal(focusedCollectionsSummary.status, 200);
+    assertApprox(Number(focusedCollectionsSummary.data.summary.total_collected || 0), repaymentAmount);
+    assertApprox(Number(focusedCollectionsSummary.data.summary.arrears_collected || 0), repaymentAmount);
+    assert.equal(Number(focusedCollectionsSummary.data.summary.period_due_collected || 0), 0);
+    assert.ok(Array.isArray(focusedCollectionsSummary.data.payments));
+    assert.ok(focusedCollectionsSummary.data.payments.length >= 1);
+    assert.ok(focusedCollectionsSummary.data.payments.every((row: any) => Number(row.arrears_collected || 0) > 0));
+  } finally {
+    db?.close();
     await stop();
   }
 });
@@ -574,3 +711,6 @@ test("GL reporting endpoints expose trial balance, account statement, income sta
     await stop();
   }
 });
+
+
+

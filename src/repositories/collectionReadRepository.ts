@@ -1,4 +1,5 @@
 import { createSqlWhereBuilder } from "../utils/sqlBuilder.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 
 type DbAll = (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
 type DbGet = (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
@@ -45,9 +46,10 @@ function createCollectionReadRepository(deps: CollectionReadRepositoryDeps) {
 
   async function listOverdueLoans(filters: ListOverdueFilters) {
     const where = createSqlWhereBuilder();
+    where.addEquals("l.tenant_id", getCurrentTenantId());
     where.addClause("i.status != 'paid'");
-    where.addClause("l.status IN ('active', 'restructured')");
-    where.addClause("datetime(i.due_date) < datetime('now')");
+    where.addClause("l.status IN ('active', 'restructured', 'overdue')");
+    where.addClause("date(i.due_date) < date('now')");
 
     if (filters.scopeCondition?.sql) {
       where.addCondition(filters.scopeCondition);
@@ -73,14 +75,14 @@ function createCollectionReadRepository(deps: CollectionReadRepositoryDeps) {
           COUNT(i.id) AS overdue_installments,
           ROUND(COALESCE(SUM(i.amount_due - i.amount_paid), 0), 2) AS overdue_amount,
           MIN(i.due_date) AS oldest_due_date,
-          CAST(julianday('now') - julianday(MIN(i.due_date)) AS INTEGER) AS days_overdue,
+          CAST(julianday(date('now')) - julianday(date(MIN(i.due_date))) AS INTEGER) AS days_overdue,
           (
             SELECT i2.id
             FROM loan_installments i2
             WHERE i2.loan_id = l.id
               AND i2.status != 'paid'
-              AND datetime(i2.due_date) < datetime('now')
-            ORDER BY datetime(i2.due_date) ASC, i2.id ASC
+              AND date(i2.due_date) < date('now')
+            ORDER BY date(i2.due_date) ASC, i2.id ASC
             LIMIT 1
           ) AS oldest_overdue_installment_id,
           (
@@ -93,7 +95,7 @@ function createCollectionReadRepository(deps: CollectionReadRepositoryDeps) {
         INNER JOIN loan_installments i ON i.loan_id = l.id
         ${whereSql}
         GROUP BY l.id, l.client_id, c.full_name, c.phone, l.balance
-        HAVING CAST(julianday('now') - julianday(MIN(i.due_date)) AS INTEGER) >= ?
+        HAVING CAST(julianday(date('now')) - julianday(date(MIN(i.due_date))) AS INTEGER) >= ?
         ORDER BY ${sortColumn} ${sortOrder}, l.id DESC
         LIMIT ? OFFSET ?
       `,
@@ -109,7 +111,7 @@ function createCollectionReadRepository(deps: CollectionReadRepositoryDeps) {
           INNER JOIN loan_installments i ON i.loan_id = l.id
           ${whereSql}
           GROUP BY l.id
-          HAVING CAST(julianday('now') - julianday(MIN(i.due_date)) AS INTEGER) >= ?
+          HAVING CAST(julianday(date('now')) - julianday(date(MIN(i.due_date))) AS INTEGER) >= ?
         ) overdue_loans
       `,
       [...queryParams, filters.minDaysOverdue],
@@ -123,6 +125,7 @@ function createCollectionReadRepository(deps: CollectionReadRepositoryDeps) {
 
   async function listCollectionActions(filters: ListCollectionActionsFilters) {
     const where = createSqlWhereBuilder();
+    where.addEquals("l.tenant_id", getCurrentTenantId());
 
     if (Number.isInteger(filters.loanId) && Number(filters.loanId) > 0) {
       where.addEquals("ca.loan_id", Number(filters.loanId));

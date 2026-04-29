@@ -204,6 +204,7 @@ export function useCreateClient() {
         ...createdClient,
         loans: [],
       })
+      queryClient.invalidateQueries({ queryKey: queryKeys.clients.detail(createdClient.id), exact: true })
     },
     onSettled: (_data, _error, _payload, context) => {
       if (context?.temporaryId) {
@@ -246,6 +247,12 @@ export function useUpdateClient(clientId: number) {
           ...(payload.businessYears !== undefined ? { business_years: payload.businessYears } : {}),
           ...(payload.businessLocation !== undefined ? { business_location: payload.businessLocation } : {}),
           ...(payload.residentialAddress !== undefined ? { residential_address: payload.residentialAddress } : {}),
+          ...(payload.photoUrl !== undefined ? { photo_url: payload.photoUrl } : {}),
+          ...(payload.idDocumentUrl !== undefined ? { id_document_url: payload.idDocumentUrl } : {}),
+          ...(payload.latitude !== undefined ? { latitude: payload.latitude } : {}),
+          ...(payload.longitude !== undefined ? { longitude: payload.longitude } : {}),
+          ...(payload.locationAccuracyMeters !== undefined ? { location_accuracy_meters: payload.locationAccuracyMeters } : {}),
+          ...(payload.locationCapturedAt !== undefined ? { location_captured_at: payload.locationCapturedAt } : {}),
           ...(payload.officerId !== undefined ? { officer_id: payload.officerId } : {}),
           ...(payload.isActive !== undefined ? { is_active: payload.isActive ? 1 : 0 } : {}),
           updated_at: new Date().toISOString(),
@@ -269,6 +276,10 @@ export function useUpdateClient(clientId: number) {
               ...(payload.fullName !== undefined ? { full_name: payload.fullName } : {}),
               ...(payload.phone !== undefined ? { phone: payload.phone } : {}),
               ...(payload.nationalId !== undefined ? { national_id: payload.nationalId } : {}),
+              ...(payload.photoUrl !== undefined ? { photo_url: payload.photoUrl } : {}),
+              ...(payload.idDocumentUrl !== undefined ? { id_document_url: payload.idDocumentUrl } : {}),
+              ...(payload.latitude !== undefined ? { latitude: payload.latitude } : {}),
+              ...(payload.longitude !== undefined ? { longitude: payload.longitude } : {}),
               ...(payload.isActive !== undefined ? { is_active: payload.isActive ? 1 : 0 } : {}),
             }
           }),
@@ -359,12 +370,21 @@ export function useUpdateClientKyc(clientId: number) {
 export function useUploadClientDocument(clientId: number) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ file, documentType }: { file: File; documentType?: 'photo' | 'id_document' }) => (
+    mutationFn: ({
+      file,
+      documentType,
+    }: {
+      file: File
+      documentType?: 'photo' | 'id_document' | 'guarantor_id_document' | 'collateral_document'
+    }) => (
       uploadClientDocument(clientId, file, documentType)
     ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.clients.detail(clientId), exact: true, refetchType: 'active' })
       queryClient.invalidateQueries({ queryKey: queryKeys.clients.history(clientId), exact: true, refetchType: 'active' })
+      queryClient.invalidateQueries({ queryKey: queryKeys.clients.onboardingStatus(clientId), exact: true, refetchType: 'active' })
+      queryClient.invalidateQueries({ queryKey: queryKeys.clients.guarantors(clientId), exact: true, refetchType: 'active' })
+      queryClient.invalidateQueries({ queryKey: queryKeys.clients.collaterals(clientId), exact: true, refetchType: 'active' })
       queryClient.invalidateQueries({ queryKey: queryKeys.clients.lists(), refetchType: 'active' })
     },
   })

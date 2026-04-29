@@ -22,6 +22,11 @@ test("loan lifecycle remains continuous from client onboarding through arrears t
       body: {
         fullName: "Lifecycle Continuity Client",
         phone: "+254700003001",
+        photoUrl: "https://example.com/uploads/lifecycle-continuity-client.jpg",
+        latitude: -1.286389,
+        longitude: 36.817223,
+        locationAccuracyMeters: 8,
+        locationCapturedAt: "2026-04-26T14:00:00.000Z",
       },
     });
     assert.equal(createClient.status, 201);
@@ -57,6 +62,7 @@ test("loan lifecycle remains continuous from client onboarding through arrears t
         nationalId: "LCG-3001",
         monthlyIncome: 52000,
         guaranteeAmount: 30000,
+        idDocumentUrl: "https://example.com/uploads/lifecycle-guarantor-id.jpg",
       },
     });
     assert.equal(addGuarantor.status, 201);
@@ -70,9 +76,24 @@ test("loan lifecycle remains continuous from client onboarding through arrears t
         estimatedValue: 780000,
         registrationNumber: "KCY3001",
         logbookNumber: "LC-3001",
+        documentUrl: "https://example.com/uploads/lifecycle-collateral-vehicle.jpg",
       },
     });
     assert.equal(addCollateral.status, 201);
+
+    const addCollateralTwo = await api(baseUrl, `/api/clients/${clientId}/collaterals`, {
+      method: "POST",
+      token: adminToken,
+      body: {
+        assetType: "equipment",
+        description: "Lifecycle workflow milling machine",
+        estimatedValue: 420000,
+        registrationNumber: "KCY3001EQ",
+        logbookNumber: "LC-3001-EQ",
+        documentUrl: "https://example.com/uploads/lifecycle-collateral-equipment.jpg",
+      },
+    });
+    assert.equal(addCollateralTwo.status, 201);
 
     const recordFees = await api(baseUrl, `/api/clients/${clientId}/fees`, {
       method: "POST",
@@ -130,7 +151,7 @@ test("loan lifecycle remains continuous from client onboarding through arrears t
     assert.equal(createdLoanDetail.status, 200);
     assert.equal(String(createdLoanDetail.data.workflow.lifecycle_stage), "loan_application");
     assert.equal(Number(createdLoanDetail.data.workflow.guarantor_count || 0), 1);
-    assert.equal(Number(createdLoanDetail.data.workflow.collateral_count || 0), 1);
+    assert.equal(Number(createdLoanDetail.data.workflow.collateral_count || 0), 2);
 
     const linkedGuarantors = await api(baseUrl, `/api/loans/${loanId}/guarantors`, {
       token: adminToken,

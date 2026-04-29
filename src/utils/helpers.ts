@@ -73,6 +73,43 @@ function createHttpError(status: number, message: string): Error & { status: num
   return error;
 }
 
+/**
+ * Normalizes a Kenyan phone number to E.164-style (no '+') international format.
+ *
+ * Handles all common DB variants:
+ *   07XXXXXXXX   → 2547XXXXXXXX
+ *   7XXXXXXXX    → 2547XXXXXXXX
+ *   +2547XXXXXXXX / 2547XXXXXXXX → 2547XXXXXXXX (pass-through)
+ *
+ * Returns the normalized digits, or the original string if it cannot be
+ * confidently recognized as a Kenyan mobile number.
+ */
+function normalizeKenyanPhone(value: unknown): string {
+  if (value == null) return "";
+  const raw = String(value).trim();
+  if (!raw) return "";
+  const digits = raw.replace(/\D+/g, "");
+  // Already 254-prefixed (12 digits): 2547XXXXXXXX or 2541XXXXXXXX
+  if (digits.length === 12 && digits.startsWith("254")) return digits;
+  // Local 10-digit format: 07XXXXXXXX or 01XXXXXXXX
+  if (digits.length === 10 && digits.startsWith("0")) return `254${digits.slice(1)}`;
+  // Short 9-digit without leading zero: 7XXXXXXXX or 1XXXXXXXX
+  if (digits.length === 9 && /^[71]/.test(digits)) return `254${digits}`;
+  // Fallback: return stripped digits if long enough, otherwise keep raw
+  return digits.length >= 7 ? digits : raw;
+}
+
+function formatKenyanPhoneDisplay(value: unknown): string | null {
+  const normalized = normalizeKenyanPhone(value);
+  if (!normalized) {
+    return null;
+  }
+  if (/^254\d{9}$/.test(normalized)) {
+    return `+${normalized}`;
+  }
+  return normalized;
+}
+
 export {
   calculateExpectedTotal,
   normalizeEmail,
@@ -80,4 +117,6 @@ export {
   addMonthsIso,
   addWeeksIso,
   createHttpError,
+  normalizeKenyanPhone,
+  formatKenyanPhoneDisplay,
 };

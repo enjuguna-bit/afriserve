@@ -156,3 +156,59 @@ test("permission catalog endpoint returns live permission metadata for IT admini
     await stop();
   }
 });
+
+test("custom permission routes do not cross tenant boundaries", async () => {
+  const { baseUrl, stop, dbFilePath } = await startServer();
+  const suffix = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+
+  try {
+    const adminToken = await loginAsAdmin(baseUrl);
+
+    const createTenantBUser = await api(baseUrl, "/api/users", {
+      method: "POST",
+      token: adminToken,
+      headers: {
+        "X-Tenant-ID": "tenant_b",
+      },
+      body: {
+        fullName: `Tenant B Permission Target ${suffix}`,
+        email: `tenantb.permission.target.${suffix}@example.com`,
+        password: "Password@123",
+        role: "ceo",
+      },
+    });
+    assert.equal(createTenantBUser.status, 201);
+    const tenantBUserId = Number(createTenantBUser.data?.id || 0);
+    assert.ok(tenantBUserId > 0);
+
+    const crossTenantView = await api(baseUrl, `/api/users/${tenantBUserId}/permissions`, {
+      token: adminToken,
+    });
+    assert.equal(crossTenantView.status, 404);
+
+    const crossTenantGrant = await api(baseUrl, `/api/users/${tenantBUserId}/permissions`, {
+      method: "POST",
+      token: adminToken,
+      body: {
+        permissionId: "user.permission.manage",
+      },
+    });
+    assert.equal(crossTenantGrant.status, 404);
+
+    assert.ok(dbFilePath);
+    const database = new Database(dbFilePath, { readonly: true });
+    try {
+      const customPermissionCount = database.prepare(`
+        SELECT COUNT(*) AS total
+        FROM user_custom_permissions
+        WHERE user_id = ?
+      `).get(tenantBUserId) as { total: number } | undefined;
+
+      assert.equal(Number(customPermissionCount?.total || 0), 0);
+    } finally {
+      database.close();
+    }
+  } finally {
+    await stop();
+  }
+});

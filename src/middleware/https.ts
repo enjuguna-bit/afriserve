@@ -68,6 +68,19 @@ function enforceHttps(req: Request, res: Response, next: NextFunction) {
     return;
   }
 
+  const normalizedPath = String(req.path || req.originalUrl || "").trim();
+  if (
+    normalizedPath === "/health" ||
+    normalizedPath === "/health/details" ||
+    normalizedPath === "/ready" ||
+    normalizedPath === "/metrics" ||
+    normalizedPath === "/api/ready" ||
+    normalizedPath === "/api/system/health"
+  ) {
+    next();
+    return;
+  }
+
   if (!isSecureRequest(req)) {
     const mode = String(process.env.HTTPS_ENFORCEMENT_MODE || "reject").trim().toLowerCase();
     if (mode === "redirect") {

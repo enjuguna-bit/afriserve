@@ -13,7 +13,8 @@ export class LoanTerm {
   }
 
   static fromWeeks(weeks: number, months?: number | null): LoanTerm {
-    return new LoanTerm(weeks, months ?? null);
+    const derivedMonths = Math.max(1, Math.round((weeks * 12) / 52));
+    return new LoanTerm(weeks, months ?? derivedMonths);
   }
 
   static fromMonths(months: number): LoanTerm {

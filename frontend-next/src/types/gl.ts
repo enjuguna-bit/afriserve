@@ -36,6 +36,7 @@ export type GlAccountStatementEntry = {
   id: number
   journal_id: number
   posted_at: string
+  business_date?: string | null
   reference_type: string | null
   reference_id: string | number | null
   loan_id: number | null
@@ -58,6 +59,19 @@ export type GlAccountStatementEntry = {
   note: string | null
 }
 
+export type GlAccountStatementDailyGroup = {
+  business_date: string | null
+  reference_type: string | null
+  branch_label: string | null
+  branch_count: number
+  journal_count: number
+  entry_count: number
+  total_debits: number
+  total_credits: number
+  net_effect: number
+  closing_balance: number
+}
+
 export type GlAccountStatementPayload = {
   period: {
     dateFrom: string | null
@@ -77,7 +91,9 @@ export type GlAccountStatementPayload = {
     total_credits: number
     closing_balance: number
     entry_count: number
+    group_count?: number
   }
+  daily_groups: GlAccountStatementDailyGroup[]
   entries: GlAccountStatementEntry[]
 }
 

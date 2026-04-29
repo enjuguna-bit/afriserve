@@ -1,7 +1,21 @@
-import type { GetClientQuery, GetClientHistoryQuery, GetClientOnboardingStatusQuery } from "../queries/ClientQueries.js";
+import type {
+  ClientDto,
+  ClientOnboardingStatusDto,
+  GetClientQuery,
+  GetClientHistoryQuery,
+  GetClientOnboardingStatusQuery,
+} from "../queries/ClientQueries.js";
+import { getCurrentTenantId } from "../../../utils/tenantStore.js";
 
-type DbGet = (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
-type DbAll = (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
+type DbRow = Record<string, unknown>;
+type DbGet = (sql: string, params?: unknown[]) => Promise<DbRow | null | undefined>;
+type DbAll = (sql: string, params?: unknown[]) => Promise<DbRow[]>;
+
+interface ClientHistoryDto {
+  clientId: number;
+  summary: DbRow;
+  loans: DbRow[];
+}
 
 /**
  * Query handler: read-side client data.
@@ -19,7 +33,8 @@ export class GetClientDetailsHandler {
   // -----------------------------------------------------------------------
   // GetClient — single client with branch + officer joins
   // -----------------------------------------------------------------------
-  async getClient(query: GetClientQuery): Promise<Record<string, any> | null> {
+  async getClient(query: GetClientQuery): Promise<ClientDto | null> {
+    const tenantId = getCurrentTenantId();
     return this.get(
       `SELECT
          c.*,
@@ -33,27 +48,28 @@ export class GetClientDetailsHandler {
        FROM clients c
        LEFT JOIN branches b ON b.id = c.branch_id
        LEFT JOIN regions  r ON r.id = b.region_id
-       LEFT JOIN users officer ON officer.id = c.officer_id
-       LEFT JOIN users creator ON creator.id = c.created_by_user_id
-       WHERE c.id = ?`,
-      [query.clientId],
-    ) as Promise<Record<string, any> | null>;
+       LEFT JOIN users officer ON officer.id = c.officer_id AND officer.tenant_id = c.tenant_id
+       LEFT JOIN users creator ON creator.id = c.created_by_user_id AND creator.tenant_id = c.tenant_id
+       WHERE c.id = ? AND c.tenant_id = ?`,
+      [query.clientId, tenantId],
+    ) as Promise<ClientDto | null>;
   }
 
   // -----------------------------------------------------------------------
   // GetClientOnboardingStatus — lightweight onboarding snapshot
   // -----------------------------------------------------------------------
-  async getOnboardingStatus(query: GetClientOnboardingStatusQuery): Promise<Record<string, any> | null> {
+  async getOnboardingStatus(query: GetClientOnboardingStatusQuery): Promise<ClientOnboardingStatusDto | null> {
+    const tenantId = getCurrentTenantId();
     const client = await this.get(
       `SELECT id, kyc_status, onboarding_status, fee_payment_status, fees_paid_at
-       FROM clients WHERE id = ?`,
-      [query.clientId],
+       FROM clients WHERE id = ? AND tenant_id = ?`,
+      [query.clientId, tenantId],
     );
     if (!client) return null;
 
     const [guarantorRow, collateralRow] = await Promise.all([
-      this.get("SELECT COUNT(*) AS cnt FROM guarantors WHERE client_id = ? AND is_active = 1", [query.clientId]),
-      this.get("SELECT COUNT(*) AS cnt FROM collateral_assets WHERE client_id = ? AND status = 'active'", [query.clientId]),
+      this.get("SELECT COUNT(*) AS cnt FROM guarantors WHERE client_id = ? AND tenant_id = ? AND is_active = 1", [query.clientId, tenantId]),
+      this.get("SELECT COUNT(*) AS cnt FROM collateral_assets WHERE client_id = ? AND tenant_id = ? AND status = 'active'", [query.clientId, tenantId]),
     ]);
 
     const guarantorCount  = Number(guarantorRow?.cnt  ?? 0);
@@ -71,7 +87,7 @@ export class GetClientDetailsHandler {
       onboarding_status:      String(client.onboarding_status || "registered"),
       kyc_status:             String(client.kyc_status || "pending"),
       fee_payment_status:     String(client.fee_payment_status || "unpaid"),
-      fees_paid_at:           client.fees_paid_at ?? null,
+      fees_paid_at:           client.fees_paid_at ? String(client.fees_paid_at) : null,
       ready_for_loan_application: blockers.length === 0,
       blockers,
       guarantor_count:        guarantorCount,
@@ -82,8 +98,9 @@ export class GetClientDetailsHandler {
   // -----------------------------------------------------------------------
   // GetClientHistory — loans, repayments, overdue summary
   // -----------------------------------------------------------------------
-  async getClientHistory(query: GetClientHistoryQuery): Promise<Record<string, any> | null> {
-    const client = await this.get("SELECT id, branch_id FROM clients WHERE id = ?", [query.clientId]);
+  async getClientHistory(query: GetClientHistoryQuery): Promise<ClientHistoryDto | null> {
+    const tenantId = getCurrentTenantId();
+    const client = await this.get("SELECT id, branch_id FROM clients WHERE id = ? AND tenant_id = ?", [query.clientId, tenantId]);
     if (!client) return null;
 
     const [loanSummary, loans] = await Promise.all([
@@ -94,20 +111,21 @@ export class GetClientDetailsHandler {
            SUM(CASE WHEN status = 'closed'        THEN 1 ELSE 0 END) AS closed_loans,
            SUM(CASE WHEN status = 'written_off'   THEN 1 ELSE 0 END) AS written_off_loans,
            SUM(CASE WHEN status = 'pending_approval' THEN 1 ELSE 0 END) AS pending_approval_loans,
-           COALESCE(SUM(principal),    0) AS total_principal_disbursed,
+           COALESCE(SUM(CASE WHEN disbursed_at IS NOT NULL THEN principal ELSE 0 END), 0)
+             AS total_principal_disbursed,
            COALESCE(SUM(repaid_total), 0) AS total_repaid,
            COALESCE(SUM(CASE WHEN status IN ('active','restructured') THEN balance ELSE 0 END), 0)
              AS total_outstanding_balance,
            MIN(disbursed_at) AS first_disbursed_at,
            MAX(disbursed_at) AS latest_disbursed_at
-         FROM loans WHERE client_id = ?`,
-        [query.clientId],
+         FROM loans WHERE client_id = ? AND tenant_id = ?`,
+        [query.clientId, tenantId],
       ),
       this.all(
         `SELECT id, status, principal, expected_total, repaid_total, balance,
                 interest_rate, term_weeks, disbursed_at, created_at
-         FROM loans WHERE client_id = ? ORDER BY id DESC LIMIT 50`,
-        [query.clientId],
+         FROM loans WHERE client_id = ? AND tenant_id = ? ORDER BY id DESC LIMIT 50`,
+        [query.clientId, tenantId],
       ),
     ]);
 

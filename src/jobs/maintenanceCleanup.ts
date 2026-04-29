@@ -1,4 +1,5 @@
 import type { DbRunResult } from "../types/dataLayer.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 import type { LoggerLike, MetricsLike } from "../types/runtime.js";
 
 import { getConfiguredDbClient } from "../utils/env.js";
@@ -71,7 +72,6 @@ function createMaintenanceCleanupJob(options: MaintenanceCleanupJobOptions) {
       );
       return Boolean(row?.table_name);
     }
-    // SQLite
     const row = await get(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
       [tableName],
@@ -87,12 +87,10 @@ function createMaintenanceCleanupJob(options: MaintenanceCleanupJobOptions) {
       );
       return Boolean(row?.column_name);
     }
-    // SQLite
     const columns = await all(`PRAGMA table_info(${tableName})`);
     return columns.some((column) => String(column.name || "").toLowerCase() === columnName.toLowerCase());
   }
 
-  // Keep backward-compatible aliases so the rest of the function body is unchanged.
   const sqliteTableExists = tableExists;
   const sqliteColumnExists = columnExists;
 
@@ -113,11 +111,16 @@ function createMaintenanceCleanupJob(options: MaintenanceCleanupJobOptions) {
 
     runtimeState.inProgress = true;
     const startedAtMs = Date.now();
+    const tenantId = getCurrentTenantId();
 
     try {
       const now = Date.now();
-      const archiveCutoffIso = new Date(now - (Math.max(1, archiveClosedLoansOlderThanYears) * 365 * 24 * 60 * 60 * 1000)).toISOString();
-      const softDeleteCutoffIso = new Date(now - (Math.max(1, purgeSoftDeletedClientsOlderThanDays) * 24 * 60 * 60 * 1000)).toISOString();
+      const archiveCutoffIso = new Date(
+        now - (Math.max(1, archiveClosedLoansOlderThanYears) * 365 * 24 * 60 * 60 * 1000),
+      ).toISOString();
+      const softDeleteCutoffIso = new Date(
+        now - (Math.max(1, purgeSoftDeletedClientsOlderThanDays) * 24 * 60 * 60 * 1000),
+      ).toISOString();
 
       let expiredResetsChanges = 0;
       const passwordResetsTableExists = await sqliteTableExists("password_resets");
@@ -125,11 +128,13 @@ function createMaintenanceCleanupJob(options: MaintenanceCleanupJobOptions) {
         const expiredResets = await run(
           `
             DELETE FROM password_resets
-            WHERE
-              (expires_at IS NOT NULL AND expires_at < ?)
-              OR (used_at IS NOT NULL AND used_at < ?)
+            WHERE tenant_id = ?
+              AND (
+                (expires_at IS NOT NULL AND expires_at < ?)
+                OR (used_at IS NOT NULL AND used_at < ?)
+              )
           `,
-          [new Date().toISOString(), softDeleteCutoffIso],
+          [tenantId, new Date().toISOString(), softDeleteCutoffIso],
         );
         expiredResetsChanges = Number(expiredResets?.changes || 0);
       }
@@ -145,20 +150,18 @@ function createMaintenanceCleanupJob(options: MaintenanceCleanupJobOptions) {
           `
             UPDATE loans
             SET archived_at = ?
-            WHERE
-              status = 'closed'
+            WHERE tenant_id = ?
+              AND status = 'closed'
               AND archived_at IS NULL
               AND COALESCE(disbursed_at, created_at) < ?
           `,
-          [new Date().toISOString(), archiveCutoffIso],
+          [new Date().toISOString(), tenantId, archiveCutoffIso],
         );
         archivedLoansChanges = Number(archivedLoans?.changes || 0);
-      } else {
-        if (logger && typeof logger.warn === "function") {
-          logger.warn("maintenance.cleanup.archive_skipped_schema_incomplete", {
-            reason: "missing_loans_archive_columns",
-          });
-        }
+      } else if (logger && typeof logger.warn === "function") {
+        logger.warn("maintenance.cleanup.archive_skipped_schema_incomplete", {
+          reason: "missing_loans_archive_columns",
+        });
       }
 
       let purgedClientsChanges = 0;
@@ -171,21 +174,20 @@ function createMaintenanceCleanupJob(options: MaintenanceCleanupJobOptions) {
         const purgedClients = await run(
           `
             DELETE FROM clients
-            WHERE deleted_at IS NOT NULL
+            WHERE tenant_id = ?
+              AND deleted_at IS NOT NULL
               AND deleted_at < ?
               AND NOT EXISTS (SELECT 1 FROM loans l WHERE l.client_id = clients.id)
               AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.client_id = clients.id)
               AND NOT EXISTS (SELECT 1 FROM gl_journals g WHERE g.client_id = clients.id)
           `,
-          [softDeleteCutoffIso],
+          [tenantId, softDeleteCutoffIso],
         );
         purgedClientsChanges = Number(purgedClients?.changes || 0);
-      } else {
-        if (logger && typeof logger.warn === "function") {
-          logger.warn("maintenance.cleanup.purge_skipped_schema_incomplete", {
-            reason: "missing_client_purge_schema",
-          });
-        }
+      } else if (logger && typeof logger.warn === "function") {
+        logger.warn("maintenance.cleanup.purge_skipped_schema_incomplete", {
+          reason: "missing_client_purge_schema",
+        });
       }
 
       const durationMs = Date.now() - startedAtMs;
@@ -216,20 +218,22 @@ function createMaintenanceCleanupJob(options: MaintenanceCleanupJobOptions) {
         purgedClients: purgedClientsChanges,
       };
     } catch (error) {
-      const durationMs = Date.now() - startedAtMs;
-      const nowIso = new Date().toISOString();
-      runtimeState.lastRunAt = nowIso;
-      runtimeState.lastFailureAt = nowIso;
-      runtimeState.lastDurationMs = durationMs;
-      runtimeState.lastError = error instanceof Error ? error.message : String(error);
-      runtimeState.consecutiveFailures += 1;
+      if (!isSqliteMissingSchemaError(error)) {
+        const durationMs = Date.now() - startedAtMs;
+        const nowIso = new Date().toISOString();
+        runtimeState.lastRunAt = nowIso;
+        runtimeState.lastFailureAt = nowIso;
+        runtimeState.lastDurationMs = durationMs;
+        runtimeState.lastError = error instanceof Error ? error.message : String(error);
+        runtimeState.consecutiveFailures += 1;
 
-      if (metrics && typeof metrics.observeBackgroundTask === "function") {
-        metrics.observeBackgroundTask("maintenance_cleanup", {
-          success: false,
-          durationMs,
-          errorMessage: runtimeState.lastError,
-        });
+        if (metrics && typeof metrics.observeBackgroundTask === "function") {
+          metrics.observeBackgroundTask("maintenance_cleanup", {
+            success: false,
+            durationMs,
+            errorMessage: runtimeState.lastError,
+          });
+        }
       }
 
       throw error;

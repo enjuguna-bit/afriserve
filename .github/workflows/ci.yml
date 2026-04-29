@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 on:
   push:
@@ -10,6 +10,20 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: afriserve_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d afriserve_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       JWT_SECRET: ci-test-secret
 
@@ -18,13 +32,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
         run: npm ci
-
-      # ── Static analysis ───────────────────────────────────────────────────
 
       - name: Lint
         run: npm run lint
@@ -32,12 +44,8 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
-      # ── Build ─────────────────────────────────────────────────────────────
-
       - name: Build server
         run: npm run build:server
-
-      # ── Schema integrity ──────────────────────────────────────────────────
 
       - name: Verify runtime migrations (SQLite)
         env:
@@ -46,20 +54,24 @@ jobs:
           DATABASE_URL: file:./data/ci-migrations.db
         run: node dist/scripts/verify_runtime_migrations.js
 
-      - name: Check Postgres schema drift
-        # Fails the build if prisma/postgres/schema.prisma is out of sync with
-        # the migration history — catches forgotten migration files.
-        run: npm run ci:prisma-check
-        continue-on-error: false
-
-      # ── Tests with coverage ───────────────────────────────────────────────
-
-      - name: Run tests with coverage
+      - name: Check SQLite schema drift
         env:
           DB_CLIENT: sqlite
-        # c8 wraps node --test and instruments the compiled JS under dist/.
-        # Reports: text summary to stdout, lcov for upload, html for the artifact.
-        run: npm run test:coverage
+          DATABASE_URL: file:./data/ci-migrations.db
+        run: npm run ci:prisma-check:sqlite
+
+      - name: Check Postgres schema drift
+        env:
+          DB_CLIENT: postgres
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/afriserve_ci?schema=public
+          SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/afriserve_ci?schema=shadow
+        run: npm run ci:prisma-check:postgres
+
+      - name: Run tests with coverage on Postgres
+        env:
+          DB_CLIENT: postgres
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/afriserve_ci?schema=public
+        run: npm run test:coverage:ci
 
       - name: Upload coverage report
         if: always()
@@ -69,7 +81,6 @@ jobs:
           path: coverage/
           retention-days: 14
 
-      # ── Docker build check ────────────────────────────────────────────────
-
       - name: Build production image
         run: docker build --target production .
+

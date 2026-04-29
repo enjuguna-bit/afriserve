@@ -5,16 +5,12 @@ type ReportRow = Record<string, any>;
 
 function registerGlReports(app: RouteRegistrar, context: Record<string, any>) {
   const {
-    run,
     get,
     all,
-    executeTransaction,
     authenticate,
     authorize,
     parseId,
     writeAuditLog,
-    logger,
-    metrics,
     hierarchyService,
     fxRateService,
     suspenseAccountingService,
@@ -118,7 +114,7 @@ function registerGlReports(app: RouteRegistrar, context: Record<string, any>) {
     async (req, res, next) => {
       try {
         const batchType = String(req.query.batchType || "").trim().toLowerCase() || undefined;
-        const limit = Number(req.query.limit || 30);
+        const limit = Math.min(Math.max(1, Number(req.query.limit || 30)), 500);
         const rows = await accountingBatchService.listBatchRuns({
           batchType,
           limit,
@@ -155,7 +151,7 @@ function registerGlReports(app: RouteRegistrar, context: Record<string, any>) {
     async (req, res, next) => {
       try {
         const lockType = String(req.query.lockType || "").trim().toLowerCase() || undefined;
-        const limit = Number(req.query.limit || 30);
+        const limit = Math.min(Math.max(1, Number(req.query.limit || 30)), 500);
         const rows = await accountingBatchService.listPeriodLocks({
           lockType,
           limit,
@@ -360,8 +356,8 @@ function registerGlReports(app: RouteRegistrar, context: Record<string, any>) {
       try {
         const status = String(req.query.status || "").trim().toLowerCase() || undefined;
         const branchId = parseId(req.query.branchId);
-        const limit = Number(req.query.limit || 50);
-        const offset = Number(req.query.offset || 0);
+        const limit = Math.min(Math.max(1, Number(req.query.limit || 50)), 500);
+        const offset = Math.max(0, Number(req.query.offset || 0));
 
         const rows = await suspenseAccountingService.listCases({
           status,
@@ -688,6 +684,7 @@ function registerGlReports(app: RouteRegistrar, context: Record<string, any>) {
               e.id,
               e.journal_id,
               j.posted_at,
+              date(datetime(j.posted_at, '+3 hours')) AS business_date,
               j.reference_type,
               j.reference_id,
               j.loan_id,
@@ -750,9 +747,74 @@ function registerGlReports(app: RouteRegistrar, context: Record<string, any>) {
             exchange_rate: Number(entry.exchange_rate || 1),
             entry_effect: entryEffect,
             running_balance: runningBalance,
+            business_date: entry.business_date || null,
             memo: entry.memo,
             description: entry.description,
             note: entry.note,
+          };
+        });
+
+        const groupedMap = new Map<string, {
+          business_date: string | null;
+          reference_type: string | null;
+          branch_names: Set<string>;
+          journal_ids: Set<number>;
+          entry_count: number;
+          total_debits: number;
+          total_credits: number;
+          net_effect: number;
+          closing_balance: number;
+        }>();
+
+        for (const entry of ledgerEntries) {
+          const businessDate = entry.business_date || null;
+          const referenceType = entry.reference_type || null;
+          const key = `${businessDate || "unknown"}::${referenceType || "unclassified"}`;
+          const existing = groupedMap.get(key);
+
+          if (existing) {
+            existing.entry_count += 1;
+            existing.total_debits = Number((existing.total_debits + Number(entry.debit_amount || 0)).toFixed(2));
+            existing.total_credits = Number((existing.total_credits + Number(entry.credit_amount || 0)).toFixed(2));
+            existing.net_effect = Number((existing.net_effect + Number(entry.entry_effect || 0)).toFixed(2));
+            existing.closing_balance = Number(entry.running_balance || 0);
+            if (entry.branch_name) {
+              existing.branch_names.add(String(entry.branch_name));
+            }
+            existing.journal_ids.add(Number(entry.journal_id));
+            continue;
+          }
+
+          groupedMap.set(key, {
+            business_date: businessDate,
+            reference_type: referenceType,
+            branch_names: entry.branch_name ? new Set([String(entry.branch_name)]) : new Set<string>(),
+            journal_ids: new Set([Number(entry.journal_id)]),
+            entry_count: 1,
+            total_debits: Number(entry.debit_amount || 0),
+            total_credits: Number(entry.credit_amount || 0),
+            net_effect: Number(entry.entry_effect || 0),
+            closing_balance: Number(entry.running_balance || 0),
+          });
+        }
+
+        const dailyGroups = Array.from(groupedMap.values()).map((group) => {
+          const branchNames = Array.from(group.branch_names);
+          return {
+            business_date: group.business_date,
+            reference_type: group.reference_type,
+            branch_label: branchNames.length === 0
+              ? null
+              : branchNames.length === 1
+                ? branchNames[0]
+                : `${branchNames.length} branches`,
+            branch_count: branchNames.length,
+            journal_count: group.journal_ids.size,
+            entry_count: group.entry_count,
+            total_debits: Number(group.total_debits.toFixed(2)),
+            total_credits: Number(group.total_credits.toFixed(2)),
+            net_effect: Number(group.net_effect.toFixed(2)),
+            closing_balance: Number(group.closing_balance.toFixed(2)),
           };
         });
 
@@ -812,7 +874,9 @@ function registerGlReports(app: RouteRegistrar, context: Record<string, any>) {
             ...totals,
             closing_balance: runningBalance,
             entry_count: ledgerEntries.length,
+            group_count: dailyGroups.length,
           },
+          daily_groups: dailyGroups,
           entries: ledgerEntries,
         });
       } catch (error) {
@@ -949,6 +1013,8 @@ function registerGlReports(app: RouteRegistrar, context: Record<string, any>) {
         })) {
           return;
         }
+        // Narrow to CASH-account entries only — added after scope so tenant + branch are anchored.
+        whereBuilder.addClause("a.code = 'CASH'");
 
         const whereSql = whereBuilder.buildWhere();
         const queryParams = whereBuilder.getParams();
@@ -956,7 +1022,7 @@ function registerGlReports(app: RouteRegistrar, context: Record<string, any>) {
         const rows = await all(
           `
             SELECT
-              date(j.posted_at) AS flow_date,
+              date(datetime(j.posted_at, '+3 hours')) AS flow_date,
               ROUND(COALESCE(SUM(CASE
                 WHEN j.reference_type = 'loan_disbursement' AND e.side = 'credit' THEN e.amount
                 ELSE 0 END), 0), 2) AS disbursements,
@@ -966,8 +1032,8 @@ function registerGlReports(app: RouteRegistrar, context: Record<string, any>) {
             FROM gl_entries e
             INNER JOIN gl_journals j ON j.id = e.journal_id
             INNER JOIN gl_accounts a ON a.id = e.account_id
-            ${whereSql}${whereSql ? " AND" : " WHERE"} a.code = 'CASH'
-            GROUP BY date(j.posted_at)
+            ${whereSql}
+            GROUP BY date(datetime(j.posted_at, '+3 hours'))
             ORDER BY flow_date ASC
           `,
           queryParams,

@@ -1,5 +1,4 @@
-﻿import { createSqlWhereBuilder } from "../utils/sqlBuilder.js";
-import { createReportQueryService } from "../services/reportQueryService.js";
+import { createSqlWhereBuilder } from "../utils/sqlBuilder.js";
 import { buildTabularExport } from "../services/reportExportService.js";
 import { createAppServiceRegistry } from "../services/serviceRegistry.js";
 import { createLoanProductCatalogService } from "../services/loanProductCatalogService.js";
@@ -22,14 +21,6 @@ interface ReportResponse {
     send: (body: string | Buffer) => unknown;
   };
   setHeader: (name: string, value: string) => void;
-}
-
-interface ScopeCachePayload {
-  level: string | null;
-  role: string | null;
-  branchId: number | null;
-  regionId: number | null;
-  branchIds: number[];
 }
 
 interface ReportFilterCatalogEntry {
@@ -123,7 +114,7 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
     {
       id: "operations-loans-due",
       label: "Loans Due Report",
-      description: "Legacy Cemes loans-due export for unpaid installments on loans with scheduled dues inside the selected period.",
+      description: "Loans-due export for unpaid installments on loans with scheduled dues inside the selected period.",
       category: "operations",
       endpoint: "/api/reports/dues",
       allowedRoles: reportRoles,
@@ -131,7 +122,7 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
     {
       id: "operations-disbursement",
       label: "Disbursment Report",
-      description: "Legacy Cemes disbursment export for loans disbursed in the period with branch, product, officer, and new-versus-repeat borrower classification.",
+      description: "Disbursement export for loans disbursed in the period with branch, product, officer, and new-versus-repeat borrower classification.",
       category: "operations",
       endpoint: "/api/reports/disbursements",
       allowedRoles: reportRoles,
@@ -187,7 +178,7 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
     {
       id: "operations-red-flag",
       label: "Arrears Report",
-      description: "Legacy Cemes arrears export for overdue borrowers with maturity, guarantees, and aging indicators for intervention.",
+      description: "Arrears export for overdue borrowers with maturity, guarantees, and aging indicators for intervention.",
       category: "operations",
       endpoint: "/api/reports/arrears",
       allowedRoles: reportRoles,
@@ -203,14 +194,6 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
     {
       id: "risk-arrears",
       label: "Arrears Report",
-      description: "Legacy Cemes arrears export for all overdue loans as of the selected report snapshot date.",
-      category: "risk",
-      endpoint: "/api/reports/arrears",
-      allowedRoles: reportRoles,
-    },
-    {
-      id: "risk-npl",
-      label: "Non-Performing Loans",
       description: "Risk-focused arrears view highlighting loans approaching or crossing non-performing thresholds.",
       category: "risk",
       endpoint: "/api/reports/arrears",
@@ -235,7 +218,7 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
     {
       id: "collections-dues",
       label: "Loans Due Report",
-      description: "Legacy Cemes loans-due export for installments due in the selected window, including current arrears exposure.",
+      description: "Loans-due export for installments due in the selected window, including current arrears exposure.",
       category: "collections",
       endpoint: "/api/reports/dues",
       allowedRoles: reportRoles,
@@ -263,6 +246,70 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
       category: "finance",
       endpoint: "/api/reports/write-offs",
       allowedRoles: financeReportRoles,
+    },
+    {
+      id: "finance-balance-sheet",
+      label: "Balance Sheet",
+      description: "Snapshot of total assets (cash + loan receivable), liabilities, and equity as of the selected date.",
+      category: "finance",
+      endpoint: "/api/reports/balance-sheet",
+      allowedRoles: financeReportRoles,
+    },
+    {
+      id: "finance-cash-flow",
+      label: "Cash Flow",
+      description: "Cash inflows from repayments versus outflows from disbursements, with net position for the period.",
+      category: "finance",
+      endpoint: "/api/reports/cash-flow",
+      allowedRoles: financeReportRoles,
+    },
+    {
+      id: "risk-arrears-aging",
+      label: "Arrears Aging Buckets",
+      description: "Overdue portfolio segmented into 1–30, 31–60, 61–90, and 91+ day buckets with branch breakdown.",
+      category: "risk",
+      endpoint: "/api/reports/arrears-aging",
+      allowedRoles: reportRoles,
+    },
+    {
+      id: "risk-capital-adequacy",
+      label: "Capital Adequacy Snapshot",
+      description: "PAR 30 / 60 / 90 and NPL ratios, write-off rate, and gross outstanding inputs for capital adequacy calculations.",
+      category: "risk",
+      endpoint: "/api/reports/capital-adequacy",
+      allowedRoles: financeReportRoles,
+    },
+    {
+      id: "executive-officer-performance-v2",
+      label: "Officer Performance (PAR)",
+      description: "Extended officer view adding active portfolio, overdue loans, PAR ratio, and write-offs alongside collections.",
+      category: "executive",
+      endpoint: "/api/reports/officer-performance-v2",
+      allowedRoles: officerPerformanceRoles,
+    },
+    {
+      id: "finance-branch-pnl",
+      label: "Branch P&L",
+      description: "Per-branch income statement: interest, fees, penalties, write-offs, provision, and net income.",
+      category: "finance",
+      endpoint: "/api/reports/branch-pnl",
+      allowedRoles: financeReportRoles,
+    },
+    {
+      id: "finance-write-offs-portfolio",
+      label: "Write-offs (Portfolio)",
+      description: "Loan-table–based write-off list — works even when GL module is not fully posted.",
+      category: "finance",
+      endpoint: "/api/reports/write-offs-portfolio",
+      allowedRoles: financeReportRoles,
+    },
+    {
+      id: "executive-client-retention",
+      label: "Client Retention",
+      description: "Clients by loan cycle (1st, 2nd, 3rd, 4th+) with average loan size and retention rate per cohort.",
+      category: "executive",
+      endpoint: "/api/reports/client-retention",
+      allowedRoles: officerPerformanceRoles,
     },
     {
       id: "executive-board-summary",
@@ -309,51 +356,6 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
       return undefined;
     }
     return d.toISOString();
-  }
-
-  function toScopeCachePayload(scope: any): ScopeCachePayload {
-    const rawBranchIds: unknown[] = Array.isArray(scope?.branchIds) ? scope.branchIds : [];
-    return {
-      level: scope?.level || null,
-      role: scope?.role || null,
-      branchId: Number.isInteger(Number(scope?.branchId)) ? Number(scope.branchId) : null,
-      regionId: Number.isInteger(Number(scope?.regionId)) ? Number(scope.regionId) : null,
-      branchIds: rawBranchIds
-        .map((value) => Number(value))
-        .filter((value) => Number.isInteger(value) && value > 0)
-        .sort((a, b) => a - b),
-    };
-  }
-
-  async function resolveCachedReport<T>({
-    namespace,
-    user,
-    scope,
-    keyPayload = {},
-    compute,
-  }: {
-    namespace: string;
-    user: Record<string, any> | undefined;
-    scope: any;
-    keyPayload?: Record<string, unknown>;
-    compute: () => Promise<T>;
-  }): Promise<T> {
-    if (!reportCache || !reportCache.enabled) {
-      return compute();
-    }
-
-    const result = await reportCache.getOrSet({
-      key: reportCache.buildKey(namespace, {
-        tenantId: getCurrentTenantId(),
-        userId: user?.sub || null,
-        role: user?.role || null,
-        scope: toScopeCachePayload(scope),
-        ...keyPayload,
-      }),
-      compute,
-    });
-
-    return result.value;
   }
 
   const reportServices = serviceRegistry?.report || createAppServiceRegistry({
@@ -436,6 +438,10 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
         }
 
         const officeWhereBuilder = createSqlWhereBuilder();
+        // FIX: Tenant isolation — branches must be restricted to the current tenant
+        // before the scope filter. Without this, HQ-scope users see branches (and
+        // therefore agents) from every tenant in the system.
+        officeWhereBuilder.addEquals("b.tenant_id", getCurrentTenantId());
         officeWhereBuilder.addCondition(hierarchyService.buildScopeCondition(scope, "b.id"));
         if (branchFilter) {
           officeWhereBuilder.addEquals("b.id", branchFilter);
@@ -481,6 +487,7 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
           ];
         } else if (scopedOfficeIds.length > 0) {
           const scopedOfficePlaceholders = scopedOfficeIds.map(() => "?").join(", ");
+          const tenantId = getCurrentTenantId();
           const scopedAgents = await readAll(
             `
               SELECT
@@ -509,13 +516,15 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
                     SELECT 1
                     FROM loans lx
                     WHERE lx.officer_id = u.id
+                      AND lx.tenant_id = ?
                       AND lx.branch_id IN (${scopedOfficePlaceholders})
                   )
                 )
               GROUP BY u.id, u.full_name, u.role, u.branch_id, b.name, b.code
               ORDER BY u.full_name ASC, u.id ASC
             `,
-            [getCurrentTenantId(), ...agentRoleParams, ...scopedOfficeIds, ...scopedOfficeIds, ...scopedOfficeIds],
+            // Params order: u.tenant_id, agentRole?, u.branch_id IN (...), am.branch_id IN (...), lx.tenant_id, lx.branch_id IN (...)
+            [tenantId, ...agentRoleParams, ...scopedOfficeIds, ...scopedOfficeIds, tenantId, ...scopedOfficeIds],
           );
           agents = scopedAgents.map((row: Record<string, unknown>) => ({
             id: Number(row.user_id || 0),

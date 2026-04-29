@@ -1,31 +1,49 @@
 // ── CreateLoanApplicationCommand ─────────────────────────────────────────────
 export interface CreateLoanApplicationCommand {
-  /** Assigned by the persistence layer before calling the handler. */
-  id: number;
+  /**
+   * Not required for creation — present for future event-sourced replay support.
+   * Leave undefined when submitting a new loan application.
+   */
+  id?: number | null;
   clientId: number;
   productId?: number | null;
   branchId?: number | null;
+  purpose?: string | null;
   principal: number;
-  interestRate: number;
   termWeeks: number;
   termMonths?: number | null;
-  registrationFee: number;
-  processingFee: number;
-  expectedTotal: number;
+  /**
+   * Pricing overrides — all optional.
+   * When absent the handler delegates to loanService which derives pricing
+   * from the loan product configuration.  When present they are forwarded as
+   * explicit overrides (requires loan.approve permission — enforced in loanService).
+   */
+  interestRate?: number | null;
+  registrationFee?: number | null;
+  processingFee?: number | null;
+  /** Computed by loanService; not accepted as a command input. */
+  expectedTotal?: number | null;
   officerId?: number | null;
   createdByUserId: number;
+  createdByRole?: string | null;
+  createdByRoles?: string[];
+  createdByPermissions?: string[];
+  createdByBranchId?: number | null;
+  ipAddress?: string | null;
 }
 
 // ── ApproveLoanCommand ────────────────────────────────────────────────────────
 export interface ApproveLoanCommand {
   loanId: number;
   approvedByUserId: number;
+  approvedByRole?: string | null;
 }
 
 // ── RejectLoanCommand ─────────────────────────────────────────────────────────
 export interface RejectLoanCommand {
   loanId: number;
   rejectedByUserId: number;
+  rejectedByRole?: string | null;
   reason: string;
 }
 

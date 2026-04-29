@@ -20,6 +20,7 @@ type AccrualSummary = {
   scannedLoans: number;
   accruedLoans: number;
   accruedAmount: number;
+  failedLoans: number;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -76,6 +77,7 @@ function createInterestAccrualEngine(options: InterestAccrualEngineOptions) {
       `
         SELECT
           l.id AS loan_id,
+          l.tenant_id,
           l.client_id,
           l.branch_id,
           l.balance,
@@ -89,7 +91,7 @@ function createInterestAccrualEngine(options: InterestAccrualEngineOptions) {
         INNER JOIN loans l ON l.id = p.loan_id
         WHERE l.id > ?
           AND LOWER(TRIM(COALESCE(p.accrual_method, 'upfront'))) = 'daily_eod'
-          AND l.status IN ('active', 'restructured')
+          AND l.status IN ('active', 'restructured', 'overdue')
           AND COALESCE(p.total_contractual_interest, 0) > COALESCE(p.accrued_interest, 0)
         ORDER BY l.id ASC
         LIMIT ?
@@ -210,6 +212,7 @@ function createInterestAccrualEngine(options: InterestAccrualEngineOptions) {
       const txResult = await tx.run(
         `
           INSERT INTO transactions (
+            tenant_id,
             loan_id,
             client_id,
             branch_id,
@@ -218,9 +221,10 @@ function createInterestAccrualEngine(options: InterestAccrualEngineOptions) {
             occurred_at,
             note
           )
-          VALUES (?, ?, ?, 'interest_accrual', ?, ?, ?)
+          VALUES (?, ?, ?, ?, 'interest_accrual', ?, ?, ?)
         `,
         [
+          String(candidate.tenant_id || "").trim() || "default",
           loanId,
           Number(candidate.client_id || 0) || null,
           Number(candidate.branch_id || 0) || null,
@@ -269,6 +273,7 @@ function createInterestAccrualEngine(options: InterestAccrualEngineOptions) {
   }
 
   async function applyDailyAccruals(): Promise<AccrualSummary> {
+    const startedAtMs = Date.now();
     const batchSize = 500;
     let lastLoanId = 0;
     let scannedLoans = 0;
@@ -287,8 +292,11 @@ function createInterestAccrualEngine(options: InterestAccrualEngineOptions) {
         scannedLoans: 0,
         accruedLoans: 0,
         accruedAmount: 0,
+        failedLoans: 0,
       };
     }
+    let failedLoans = 0;
+    let lastFailureMessage: string | null = null;
 
     while (true) {
       const batch = await getCandidates(batchSize, lastLoanId);
@@ -306,6 +314,8 @@ function createInterestAccrualEngine(options: InterestAccrualEngineOptions) {
             accruedAmount = accruedAmount.plus(applied).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
           }
         } catch (error) {
+          failedLoans += 1;
+          lastFailureMessage = error instanceof Error ? error.message : String(error);
           if (logger && typeof logger.error === "function") {
             logger.error("interest_accrual_engine.loan_failed", {
               loanId: Number(candidate.loan_id || 0) || null,
@@ -333,10 +343,23 @@ function createInterestAccrualEngine(options: InterestAccrualEngineOptions) {
       scannedLoans,
       accruedLoans,
       accruedAmount: accruedAmount.toNumber(),
+      failedLoans,
     };
 
+    if (failedLoans > 0 && logger && typeof logger.warn === "function") {
+      logger.warn("interest_accrual_engine.completed_with_failures", {
+        ...summary,
+        lastError: lastFailureMessage,
+      });
+    }
+
     if (metrics && typeof metrics.observeBackgroundTask === "function") {
-      metrics.observeBackgroundTask("loan_interest_accrual_apply", summary);
+      metrics.observeBackgroundTask("loan_interest_accrual_apply", {
+        ...summary,
+        success: failedLoans === 0,
+        durationMs: Date.now() - startedAtMs,
+        ...(lastFailureMessage ? { errorMessage: lastFailureMessage } : {}),
+      });
     }
 
     return summary;

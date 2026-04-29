@@ -5,6 +5,15 @@ const sensitiveKeys = new Set([
   "token_version",
   "locked_until",
   "failed_login_attempts",
+  "password",
+  "secret",
+  "client_secret",
+  "private_key",
+  "reset_token",
+  "reset_token_hash",
+  "reset_token_expires_at",
+  "mfa_secret",
+  "totp_secret",
 ]);
 
 function isDecimalLike(value: unknown): value is { toString: () => string } {
@@ -19,6 +28,10 @@ function isDecimalLike(value: unknown): value is { toString: () => string } {
 function sanitizeResponsePayload(payload: unknown): unknown {
   if (Array.isArray(payload)) {
     return payload.map((item) => sanitizeResponsePayload(item));
+  }
+
+  if (payload instanceof Date) {
+    return payload.toISOString();
   }
 
   if (isDecimalLike(payload)) {

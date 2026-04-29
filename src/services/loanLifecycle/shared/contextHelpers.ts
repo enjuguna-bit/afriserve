@@ -13,6 +13,7 @@ import {
 } from "../../../domain/errors.js";
 import type { GeneralLedgerServiceLike, JournalLine } from "./types.js";
 import {
+  addRepaymentIntervalIso,
   toMoneyDecimal,
   moneyToNumber,
   normalizeOptionalNumber,
@@ -20,6 +21,8 @@ import {
   normalizeOptionalText,
   normalizeInterestAccrualMethod,
   buildInstallmentAmounts,
+  getInstallmentCountForTerm,
+  resolveLoanRepaymentCadence,
   nowIso,
 } from "./helpers.js";
 import { createApprovalWorkflowService } from "../../approvalWorkflowService.js";
@@ -167,6 +170,8 @@ export async function regeneratePendingInstallmentsTx(
 
   const normalizedRepaidTotal = toMoneyDecimal(options.repaidTotal || 0);
   const penaltyConfig = options.penaltyConfig || {};
+  const repaymentCadence = resolveLoanRepaymentCadence(penaltyConfig.interest_accrual_method);
+  const targetInstallmentCount = getInstallmentCountForTerm(termWeeks, repaymentCadence);
 
   const existingInstallments = await tx.loan_installments.findMany({
     where: { loan_id: options.loanId },
@@ -195,11 +200,12 @@ export async function regeneratePendingInstallmentsTx(
     (s: any, i: any) => s.plus(i.amount_due || 0), new Decimal(0),
   ).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
-  const remainingTermWeeks = termWeeks - preservedCount;
-  if (remainingTermWeeks < 0) {
+  const remainingInstallments = targetInstallmentCount - preservedCount;
+  if (remainingInstallments < 0) {
     throw new LoanStateConflictError("Existing repayment history exceeds target schedule length", {
       action: "schedule_regeneration",
       existingPaidInstallments: preservedCount,
+      targetInstallments: targetInstallmentCount,
       targetTermWeeks: termWeeks,
     });
   }
@@ -227,8 +233,8 @@ export async function regeneratePendingInstallmentsTx(
     (max: any, i: any) => Math.max(max, Number(i.installment_number || 0)), 0,
   );
   const nextNum = lastPreservedNum + 1;
-  const scheduleAmounts = remainingTermWeeks > 0
-    ? buildInstallmentAmounts(Decimal.max(0, remainingExpectedTotal).toNumber(), remainingTermWeeks)
+  const scheduleAmounts = remainingInstallments > 0
+    ? buildInstallmentAmounts(Decimal.max(0, remainingExpectedTotal).toNumber(), remainingInstallments)
     : [];
 
   if (scheduleAmounts.length > 0) {
@@ -236,7 +242,12 @@ export async function regeneratePendingInstallmentsTx(
       data: scheduleAmounts.map((amountDue, i) => ({
         loan_id: options.loanId,
         installment_number: nextNum + i,
-        due_date: addWeeksIso(scheduleStartDate, i + 1),
+        due_date: addRepaymentIntervalIso({
+          startIso: scheduleStartDate,
+          intervalCount: i + 1,
+          cadence: repaymentCadence,
+          addWeeksIso,
+        }),
         amount_due: amountDue,
         amount_paid: 0,
         penalty_rate_daily: normalizeOptionalNumber(penaltyConfig.penalty_rate_daily),
@@ -299,11 +310,11 @@ export async function sumDisbursedPrincipalTx(
   tx: PrismaTransactionClient,
   loanId: number,
 ): Promise<number> {
-  const rows = await (tx as any).$queryRawUnsafe(
-    "SELECT COALESCE(SUM(amount), 0) AS total_amount FROM loan_disbursement_tranches WHERE loan_id = ?",
-    loanId,
-  );
-  return moneyToNumber(rows?.[0]?.total_amount || 0);
+  const aggregate = await (tx as any).loan_disbursement_tranches.aggregate({
+    where: { loan_id: Number(loanId) },
+    _sum: { amount: true },
+  });
+  return moneyToNumber(aggregate?._sum?.amount || 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -363,13 +374,20 @@ export async function getLoanProductConfigTx(
   productId: number | null | undefined,
 ): Promise<Record<string, any>> {
   if (!Number(productId)) return {};
-  const rows = await (tx as any).$queryRawUnsafe(
-    `SELECT id, name, interest_accrual_method,
-      penalty_rate_daily, penalty_flat_amount, penalty_grace_days,
-      penalty_cap_amount, penalty_compounding_method, penalty_base_amount,
-      penalty_cap_percent_of_outstanding
-     FROM loan_products WHERE id = ? LIMIT 1`,
-    Number(productId),
-  );
-  return rows?.[0] || {};
+  const product = await (tx as any).loan_products.findUnique({
+    where: { id: Number(productId) },
+    select: {
+      id: true,
+      name: true,
+      interest_accrual_method: true,
+      penalty_rate_daily: true,
+      penalty_flat_amount: true,
+      penalty_grace_days: true,
+      penalty_cap_amount: true,
+      penalty_compounding_method: true,
+      penalty_base_amount: true,
+      penalty_cap_percent_of_outstanding: true,
+    },
+  });
+  return product || {};
 }

@@ -14,10 +14,11 @@
  */
 
 import { tenantStore } from "../utils/tenantStore.js";
+import { getDefaultTenantId } from "../utils/env.js";
 import type { NextFunctionLike, RequestLike, ResponseLike } from "../types/runtime.js";
 
 /** Fallback tenant used in single-tenant and local/CI environments. */
-const DEFAULT_TENANT = "default";
+const DEFAULT_TENANT = getDefaultTenantId();
 
 /**
  * Validates that a tenant ID header value is safe to use.

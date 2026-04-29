@@ -2,12 +2,42 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { startServer, api, loginAsAdmin } from "./integration-helpers.js";
+
+function toMpesaTimestamp(date: Date = new Date()): string {
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  const second = String(date.getSeconds()).padStart(2, "0");
+  return `${year}${month}${day}${hour}${minute}${second}`;
+}
+
+function signWebhookPayload(payload: Record<string, any>, webhookToken: string): string {
+  return crypto.createHmac("sha256", webhookToken).update(JSON.stringify(payload)).digest("hex");
+}
+
+function createWebhookHeaders(
+  payload: Record<string, any>,
+  webhookToken: string,
+  options: { includeToken?: boolean; timestamp?: string } = {},
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    "x-mobile-money-signature": signWebhookPayload(payload, webhookToken),
+    "x-mobile-money-timestamp": options.timestamp || new Date().toISOString(),
+  };
+  if (options.includeToken) {
+    headers["x-mobile-money-webhook-token"] = webhookToken;
+  }
+  return headers;
+}
 test("C2B webhook reconciles M-Pesa payment to loan repayment and is idempotent", async () => {
   const { baseUrl, stop } = await startServer({
     envOverrides: {
       MOBILE_MONEY_C2B_ENABLED: "true",
       MOBILE_MONEY_WEBHOOK_TOKEN: "test-webhook-token",
       MOBILE_MONEY_PROVIDER: "mock",
+      MOBILE_MONEY_CALLBACK_IP_WHITELIST: "",
     },
   });
 
@@ -50,18 +80,18 @@ test("C2B webhook reconciles M-Pesa payment to loan repayment and is idempotent"
     });
     assert.equal(disburseLoan.status, 200);
 
+    const webhookPayload = {
+      TransID: "QX12345ABC",
+      TransTime: toMpesaTimestamp(),
+      TransAmount: "300",
+      BillRefNumber: String(loanId),
+      MSISDN: "254700003001",
+    };
+
     const webhook = await api(baseUrl, "/api/mobile-money/c2b/webhook", {
       method: "POST",
-      headers: {
-        "x-mobile-money-webhook-token": "test-webhook-token",
-      },
-      body: {
-        TransID: "QX12345ABC",
-        TransTime: "20260226090001",
-        TransAmount: "300",
-        BillRefNumber: String(loanId),
-        MSISDN: "254700003001",
-      },
+      headers: createWebhookHeaders(webhookPayload, "test-webhook-token", { includeToken: true }),
+      body: webhookPayload,
     });
     if (webhook.status !== 200) console.log("C2B Webhook 500 Error Body:", webhook.data);
     assert.equal(webhook.status, 200);
@@ -70,16 +100,8 @@ test("C2B webhook reconciles M-Pesa payment to loan repayment and is idempotent"
 
     const duplicateWebhook = await api(baseUrl, "/api/mobile-money/c2b/webhook", {
       method: "POST",
-      headers: {
-        "x-mobile-money-webhook-token": "test-webhook-token",
-      },
-      body: {
-        TransID: "QX12345ABC",
-        TransTime: "20260226090001",
-        TransAmount: "300",
-        BillRefNumber: String(loanId),
-        MSISDN: "254700003001",
-      },
+      headers: createWebhookHeaders(webhookPayload, "test-webhook-token", { includeToken: true }),
+      body: webhookPayload,
     });
     assert.equal(duplicateWebhook.status, 200);
     assert.equal(duplicateWebhook.data.status, "duplicate");
@@ -100,6 +122,7 @@ test("unmatched C2B receipts can be manually reconciled from the workbench", asy
       MOBILE_MONEY_C2B_ENABLED: "true",
       MOBILE_MONEY_WEBHOOK_TOKEN: "test-webhook-token",
       MOBILE_MONEY_PROVIDER: "mock",
+      MOBILE_MONEY_CALLBACK_IP_WHITELIST: "",
     },
   });
 
@@ -142,18 +165,18 @@ test("unmatched C2B receipts can be manually reconciled from the workbench", asy
     });
     assert.equal(disburseLoan.status, 200);
 
+    const unmatchedWebhookPayload = {
+      TransID: "QX54321MAN",
+      TransTime: toMpesaTimestamp(),
+      TransAmount: "450",
+      BillRefNumber: "UNKNOWN-LOAN-REF",
+      MSISDN: "254700003009",
+    };
+
     const webhook = await api(baseUrl, "/api/mobile-money/c2b/webhook", {
       method: "POST",
-      headers: {
-        "x-mobile-money-webhook-token": "test-webhook-token",
-      },
-      body: {
-        TransID: "QX54321MAN",
-        TransTime: "20260306101501",
-        TransAmount: "450",
-        BillRefNumber: "UNKNOWN-LOAN-REF",
-        MSISDN: "254700003009",
-      },
+      headers: createWebhookHeaders(unmatchedWebhookPayload, "test-webhook-token", { includeToken: true }),
+      body: unmatchedWebhookPayload,
     });
     assert.equal(webhook.status, 200);
     assert.equal(webhook.data.status, "unmatched");
@@ -177,14 +200,18 @@ test("unmatched C2B receipts can be manually reconciled from the workbench", asy
       "Expected textual numeric loan search to support reconciliation lookup",
     );
 
-    const manualReconcile = await api(baseUrl, `/api/mobile-money/c2b/events/${Number(unmatchedEvent.id)}/reconcile`, {
-      method: "POST",
-      token: adminToken,
-      body: {
-        loanId,
-        note: "Finance matched receipt after customer account-reference review",
+    const manualReconcile = await api(
+      baseUrl,
+      `/api/mobile-money/c2b/events/${Number(unmatchedEvent.id)}/reconcile`,
+      {
+        method: "POST",
+        token: adminToken,
+        body: {
+          loanId,
+          note: "Finance matched receipt after customer account-reference review",
+        },
       },
-    });
+    );
     assert.equal(manualReconcile.status, 200);
     assert.equal(String(manualReconcile.data.status), "reconciled");
     assert.equal(Number(manualReconcile.data.loanId), loanId);
@@ -195,17 +222,57 @@ test("unmatched C2B receipts can be manually reconciled from the workbench", asy
       token: adminToken,
     });
     assert.equal(repayments.status, 200);
-    const matchedRepayment = repayments.data.find((row) => String(row.external_receipt || "") === "QX54321MAN");
+    const matchedRepayment = repayments.data.find(
+      (row) => String(row.external_receipt || "") === "QX54321MAN",
+    );
     assert.ok(matchedRepayment, "Expected manual reconciliation to create a repayment record");
 
     const reconciledEvents = await api(baseUrl, "/api/mobile-money/c2b/events?status=reconciled", {
       token: adminToken,
     });
     assert.equal(reconciledEvents.status, 200);
-    const reconciledEvent = reconciledEvents.data.find((row) => String(row.external_receipt) === "QX54321MAN");
+    const reconciledEvent = reconciledEvents.data.find(
+      (row) => String(row.external_receipt) === "QX54321MAN",
+    );
     assert.ok(reconciledEvent, "Expected reconciled event to move out of unmatched queue");
     assert.equal(Number(reconciledEvent.loan_id), loanId);
     assert.match(String(reconciledEvent.reconciliation_note || ""), /matched receipt/i);
+  } finally {
+    await stop();
+  }
+});
+
+test("C2B webhook rejects stale callback timestamps older than five minutes", async () => {
+  const webhookToken = "stale-webhook-token";
+  const { baseUrl, stop } = await startServer({
+    envOverrides: {
+      MOBILE_MONEY_C2B_ENABLED: "true",
+      MOBILE_MONEY_WEBHOOK_TOKEN: webhookToken,
+      MOBILE_MONEY_PROVIDER: "mock",
+      MOBILE_MONEY_CALLBACK_IP_WHITELIST: "",
+    },
+  });
+
+  try {
+    const staleDate = new Date(Date.now() - 10 * 60 * 1000);
+    const stalePayload = {
+      TransID: "QXSTALE001",
+      TransTime: toMpesaTimestamp(staleDate),
+      TransAmount: "150",
+      BillRefNumber: "STALE-REF",
+      MSISDN: "254700003099",
+    };
+
+    const webhook = await api(baseUrl, "/api/mobile-money/c2b/webhook", {
+      method: "POST",
+      headers: createWebhookHeaders(stalePayload, webhookToken, {
+        includeToken: true,
+        timestamp: staleDate.toISOString(),
+      }),
+      body: stalePayload,
+    });
+    assert.equal(webhook.status, 401);
+    assert.match(String(webhook.data.message || ""), /5 minute window/i);
   } finally {
     await stop();
   }
@@ -216,6 +283,7 @@ test("B2C mobile money disbursement runs when disburse is clicked with mobileMon
     envOverrides: {
       MOBILE_MONEY_B2C_ENABLED: "true",
       MOBILE_MONEY_PROVIDER: "mock",
+      MOBILE_MONEY_CALLBACK_IP_WHITELIST: "",
     },
   });
 
@@ -276,16 +344,13 @@ test("B2C mobile money disbursement runs when disburse is clicked with mobileMon
 
 test("B2C callback validates signature and reconciles completed/failed outcomes", async () => {
   const webhookToken = "b2c-callback-token";
-  const signPayload = (payload: Record<string, any>) => crypto
-    .createHmac("sha256", webhookToken)
-    .update(JSON.stringify(payload))
-    .digest("hex");
 
   const { baseUrl, stop } = await startServer({
     envOverrides: {
       MOBILE_MONEY_B2C_ENABLED: "true",
       MOBILE_MONEY_PROVIDER: "mock",
       MOBILE_MONEY_WEBHOOK_TOKEN: webhookToken,
+      MOBILE_MONEY_CALLBACK_IP_WHITELIST: "",
     },
   });
 
@@ -342,6 +407,7 @@ test("B2C callback validates signature and reconciles completed/failed outcomes"
       method: "POST",
       headers: {
         "x-mobile-money-signature": "invalid-signature",
+        "x-mobile-money-timestamp": new Date().toISOString(),
       },
       body: {
         providerRequestId: successProviderRequestId,
@@ -357,9 +423,7 @@ test("B2C callback validates signature and reconciles completed/failed outcomes"
     };
     const successCallback = await api(baseUrl, "/api/mobile-money/b2c/callback", {
       method: "POST",
-      headers: {
-        "x-mobile-money-signature": signPayload(successCallbackPayload),
-      },
+      headers: createWebhookHeaders(successCallbackPayload, webhookToken),
       body: successCallbackPayload,
     });
     assert.equal(successCallback.status, 200);
@@ -420,9 +484,7 @@ test("B2C callback validates signature and reconciles completed/failed outcomes"
     };
     const failureCallback = await api(baseUrl, "/api/mobile-money/b2c/callback", {
       method: "POST",
-      headers: {
-        "x-mobile-money-signature": signPayload(failureCallbackPayload),
-      },
+      headers: createWebhookHeaders(failureCallbackPayload, webhookToken),
       body: failureCallbackPayload,
     });
     assert.equal(failureCallback.status, 200);
@@ -456,9 +518,13 @@ test("B2C callback validates signature and reconciles completed/failed outcomes"
     assert.ok(Array.isArray(failedOnly.data));
     assert.ok(failedOnly.data.length >= 1);
     assert.ok(failedOnly.data.every((row) => String(row.status) === "failed"));
-    assert.ok(failedOnly.data.some((row) => String(row.provider_request_id || "") === failureProviderRequestId));
+    assert.ok(
+      failedOnly.data.some((row) => String(row.provider_request_id || "") === failureProviderRequestId),
+    );
 
-    const failedRow = failedOnly.data.find((row) => String(row.provider_request_id || "") === failureProviderRequestId);
+    const failedRow = failedOnly.data.find(
+      (row) => String(row.provider_request_id || "") === failureProviderRequestId,
+    );
     assert.ok(failedRow, "Expected failed B2C disbursement row for reversal retry request");
 
     const retryReversal = await api(
@@ -484,7 +550,9 @@ test("B2C callback validates signature and reconciles completed/failed outcomes"
       },
     );
     assert.equal(failedAfterRetry.status, 200);
-    const retriedRow = failedAfterRetry.data.find((row) => String(row.provider_request_id || "") === failureProviderRequestId);
+    const retriedRow = failedAfterRetry.data.find(
+      (row) => String(row.provider_request_id || "") === failureProviderRequestId,
+    );
     assert.ok(retriedRow);
     assert.match(String(retriedRow.failure_reason || ""), /reversal_retry_requested_at/i);
     assert.ok(Number(retriedRow.reversal_attempts || 0) >= 1);
@@ -508,6 +576,8 @@ test("STK push and callback endpoints work when STK is enabled", async () => {
     envOverrides: {
       MOBILE_MONEY_STK_ENABLED: "true",
       MOBILE_MONEY_PROVIDER: "mock",
+      MOBILE_MONEY_WEBHOOK_TOKEN: "stk-webhook-token",
+      MOBILE_MONEY_CALLBACK_IP_WHITELIST: "",
     },
   });
 
@@ -528,26 +598,29 @@ test("STK push and callback endpoints work when STK is enabled", async () => {
     assert.equal(String(stkPush.data.status), "accepted");
     assert.ok(String(stkPush.data.providerRequestId || "").length > 0);
 
-    const callback = await api(baseUrl, "/api/mobile-money/stk/callback", {
-      method: "POST",
-      body: {
-        Body: {
-          stkCallback: {
-            MerchantRequestID: String(stkPush.data.merchantRequestId || ""),
-            CheckoutRequestID: String(stkPush.data.checkoutRequestId || ""),
-            ResultCode: 0,
-            ResultDesc: "The service request is processed successfully.",
-            CallbackMetadata: {
-              Item: [
-                { Name: "Amount", Value: 5.0 },
-                { Name: "MpesaReceiptNumber", Value: "TESTSTK123" },
-                { Name: "TransactionDate", Value: 20260305143011 },
-                { Name: "PhoneNumber", Value: 254700003222 },
-              ],
-            },
+    const stkCallbackPayload = {
+      Body: {
+        stkCallback: {
+          MerchantRequestID: String(stkPush.data.merchantRequestId || ""),
+          CheckoutRequestID: String(stkPush.data.checkoutRequestId || ""),
+          ResultCode: 0,
+          ResultDesc: "The service request is processed successfully.",
+          CallbackMetadata: {
+            Item: [
+              { Name: "Amount", Value: 5.0 },
+              { Name: "MpesaReceiptNumber", Value: "TESTSTK123" },
+              { Name: "TransactionDate", Value: Number(toMpesaTimestamp()) },
+              { Name: "PhoneNumber", Value: 254700003222 },
+            ],
           },
         },
       },
+    };
+
+    const callback = await api(baseUrl, "/api/mobile-money/stk/callback", {
+      method: "POST",
+      headers: createWebhookHeaders(stkCallbackPayload, "stk-webhook-token"),
+      body: stkCallbackPayload,
     });
     assert.equal(callback.status, 200);
     assert.equal(Number(callback.data.ResultCode), 0);
@@ -568,18 +641,18 @@ test("Callback IP whitelist blocks non-whitelisted webhook source", async () => 
   });
 
   try {
+    const webhookPayload = {
+      TransID: "QX99999ABC",
+      TransTime: toMpesaTimestamp(),
+      TransAmount: "300",
+      BillRefNumber: "123",
+      MSISDN: "254700003001",
+    };
+
     const webhook = await api(baseUrl, "/api/mobile-money/c2b/webhook", {
       method: "POST",
-      headers: {
-        "x-mobile-money-webhook-token": "test-webhook-token",
-      },
-      body: {
-        TransID: "QX99999ABC",
-        TransTime: "20260305153001",
-        TransAmount: "300",
-        BillRefNumber: "123",
-        MSISDN: "254700003001",
-      },
+      headers: createWebhookHeaders(webhookPayload, "test-webhook-token", { includeToken: true }),
+      body: webhookPayload,
     });
     assert.equal(webhook.status, 403);
     assert.match(String(webhook.data.message || ""), /whitelist/i);

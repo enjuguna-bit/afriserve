@@ -8,6 +8,8 @@ import { prefetchClientWorkspace, prefetchLoanWorkspace } from '../../../service
 import { queryPolicies } from '../../../services/queryPolicies'
 import { listTransactions } from '../../../services/systemService'
 import { useCommandMenuStore } from '../../../store/commandMenuStore'
+import { formatDisplayDateTime } from '../../../utils/dateFormatting'
+import { formatDisplayText, resolveDisplayText } from '../../../utils/displayFormatting'
 import styles from '../../shared/styles/EntityPage.module.css'
 
 export function SearchPage() {
@@ -58,8 +60,8 @@ export function SearchPage() {
       sortOrder: 'desc',
     }),
     enabled: Boolean(numericSearch),
-    retry: false,
     ...queryPolicies.list,
+    retry: false,
   })
 
   const submitSearch = (event: FormEvent<HTMLFormElement>) => {
@@ -123,13 +125,13 @@ export function SearchPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {clientsQuery.data.data.map((client) => (
+                  {(clientsQuery.data?.data ?? []).map((client) => (
                     <tr key={client.id}>
                       <td>{client.id}</td>
-                      <td>{client.full_name}</td>
-                      <td>{client.phone || '-'}</td>
-                      <td>{client.national_id || '-'}</td>
-                      <td>{client.kyc_status || '-'}</td>
+                      <td>{formatDisplayText(client.full_name, `Client #${client.id}`)}</td>
+                      <td>{formatDisplayText(client.phone)}</td>
+                      <td>{formatDisplayText(client.national_id)}</td>
+                      <td>{formatDisplayText(client.kyc_status)}</td>
                       <td>
                         <Link
                           to={`/clients/${client.id}`}
@@ -181,11 +183,11 @@ export function SearchPage() {
                     </tr>
                   </thead>
                   <tbody>
-                  {loansQuery.data.data.map((loan) => (
+                  {(loansQuery.data?.data ?? []).map((loan) => (
                     <tr key={loan.id}>
                       <td>{loan.id}</td>
-                      <td>{loan.client_name || loan.client_id}</td>
-                      <td>{loan.status}</td>
+                      <td>{resolveDisplayText([loan.client_name, loan.client_id ? `Client #${loan.client_id}` : null], 'Unknown client')}</td>
+                      <td>{formatDisplayText(loan.status)}</td>
                       <td>{loan.principal}</td>
                       <td>{loan.balance}</td>
                       <td>
@@ -236,14 +238,14 @@ export function SearchPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {transactionsQuery.data.data.map((tx) => (
+                    {(transactionsQuery.data?.data ?? []).map((tx) => (
                       <tr key={tx.id}>
                         <td>{tx.id}</td>
-                        <td>{new Date(tx.occurred_at).toLocaleString()}</td>
-                        <td>{tx.tx_type}</td>
+                        <td>{formatDisplayDateTime(tx.occurred_at)}</td>
+                        <td>{formatDisplayText(tx.tx_type)}</td>
                         <td>{tx.amount}</td>
-                        <td>{tx.client_name || '-'}</td>
-                        <td>{tx.loan_id || '-'}</td>
+                        <td>{formatDisplayText(tx.client_name)}</td>
+                        <td>{formatDisplayText(tx.loan_id)}</td>
                       </tr>
                     ))}
                   </tbody>

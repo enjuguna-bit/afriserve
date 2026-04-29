@@ -5,6 +5,8 @@ import { changePassword, getCurrentUser } from '../../../services/authService'
 import { queryPolicies } from '../../../services/queryPolicies'
 import { listAuditTrail } from '../../../services/systemService'
 import { useToastStore } from '../../../store/toastStore'
+import { formatDisplayDateTime } from '../../../utils/dateFormatting'
+import { formatDisplayDetails, formatDisplayReference, formatDisplayText } from '../../../utils/displayFormatting'
 import styles from '../../shared/styles/EntityPage.module.css'
 
 type PasswordFormState = {
@@ -37,28 +39,6 @@ function resolveUserRoles(user: { role?: string; roles?: string[] } | undefined)
   return [...roleSet]
 }
 
-function safePrettyJson(value: unknown) {
-  if (value == null || value === '') {
-    return '-'
-  }
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value, null, 2)
-    } catch {
-      return String(value)
-    }
-  }
-  if (typeof value !== 'string') {
-    return String(value)
-  }
-  try {
-    const parsed = JSON.parse(value)
-    return JSON.stringify(parsed, null, 2)
-  } catch {
-    return value
-  }
-}
-
 export function ProfileSettingsPage() {
   const pushToast = useToastStore((state) => state.pushToast)
   const [passwordForm, setPasswordForm] = useState<PasswordFormState>(EMPTY_PASSWORD_FORM)
@@ -80,8 +60,8 @@ export function ProfileSettingsPage() {
       sortOrder: 'desc',
     }),
     enabled: canViewActivity && Number.isInteger(currentUserQuery.data?.id) && Number(currentUserQuery.data?.id) > 0,
-    retry: false,
     ...queryPolicies.list,
+    retry: false,
   })
 
   const changePasswordMutation = useMutation({
@@ -231,13 +211,13 @@ export function ProfileSettingsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {activityQuery.data.data.map((entry) => (
+                    {(activityQuery.data?.data ?? []).map((entry) => (
                       <tr key={entry.id}>
-                        <td>{new Date(entry.created_at).toLocaleString()}</td>
-                        <td className={styles.mono}>{entry.action}</td>
-                        <td>{entry.target_type || '-'} {entry.target_id ? `#${entry.target_id}` : ''}</td>
+                        <td>{formatDisplayDateTime(entry.created_at)}</td>
+                        <td className={styles.mono}>{formatDisplayText(entry.action)}</td>
+                        <td>{formatDisplayReference(entry.target_type, entry.target_id)}</td>
                         <td>
-                          <pre className={styles.pre}>{safePrettyJson(entry.details)}</pre>
+                          <pre className={styles.pre}>{formatDisplayDetails(entry.details)}</pre>
                         </td>
                       </tr>
                     ))}

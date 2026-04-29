@@ -1,5 +1,6 @@
 import { all, get, run } from "../db.js";
 import { createLogger } from "./logger.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 
 const PERMISSION_DEFINITIONS = [
   { permissionId: "user.manage", description: "Create, update, activate, deactivate, and revoke user accounts" },
@@ -13,6 +14,10 @@ const PERMISSION_DEFINITIONS = [
   { permissionId: "client.update", description: "Update client profile fields" },
   { permissionId: "client.kyc.update", description: "Update client KYC status and verification" },
   { permissionId: "client.assign", description: "Reassign client portfolio between officers" },
+  { permissionId: "client.profile_refresh.request", description: "Create and assign client profile refresh drafts" },
+  { permissionId: "client.profile_refresh.update", description: "Update assigned client profile refresh drafts" },
+  { permissionId: "client.profile_refresh.review", description: "Review and approve client profile refresh drafts" },
+  { permissionId: "client.pii.override", description: "Override locked client PII fields with an audited reason" },
   { permissionId: "loan.create", description: "Create loan applications" },
   { permissionId: "loan.view", description: "View loan portfolio data" },
   { permissionId: "loan.approve", description: "Approve high-risk and pending loans" },
@@ -36,6 +41,9 @@ const PERMISSION_DEFINITIONS = [
 ] as const;
 
 type PermissionCode = typeof PERMISSION_DEFINITIONS[number]["permissionId"];
+type PermissionLookupOptions = {
+  tenantId?: string | null;
+};
 
 const SUPPORTED_PERMISSION_CODES = PERMISSION_DEFINITIONS.map((item) => item.permissionId);
 const logger = createLogger().child("permissionService");
@@ -47,8 +55,9 @@ const ROLE_PERMISSION_MATRIX: Record<string, PermissionCode[]> = {
   partner: ["report.view"],
   operations_manager: [
     "client.view",
-    "client.update",
     "client.assign",
+    "client.profile_refresh.request",
+    "client.profile_refresh.review",
     "loan.view",
     "loan.approve",
     "loan.limit.allocate",
@@ -83,12 +92,13 @@ const ROLE_PERMISSION_MATRIX: Record<string, PermissionCode[]> = {
     "report.export",
   ],
   cashier: ["client.view", "loan.view", "loan.disburse", "collection.record", "report.view"],
-  area_manager: ["client.view", "client.update", "client.assign", "loan.view", "loan.approve", "loan.limit.allocate", "report.view"],
+  area_manager: ["client.view", "client.assign", "loan.view", "loan.approve", "loan.limit.allocate", "report.view"],
   loan_officer: [
     "client.create",
     "client.view",
-    "client.update",
     "client.kyc.update",
+    "client.profile_refresh.request",
+    "client.profile_refresh.update",
     "loan.create",
     "loan.view",
     "collection.record",
@@ -108,6 +118,8 @@ const ROLE_PERMISSION_MATRIX: Record<string, PermissionCode[]> = {
   ],
   branch_manager: [
     "client.view",
+    "client.profile_refresh.request",
+    "client.profile_refresh.review",
     "loan.view",
     "loan.approve",
     "loan.limit.allocate",
@@ -140,18 +152,27 @@ function hasRolePermissionFallback(role: string | string[], permissionCode: Perm
   });
 }
 
-async function checkUserPermission(userId: number, role: string | string[], permissionCode: PermissionCode): Promise<boolean> {
+async function checkUserPermission(
+  userId: number,
+  role: string | string[],
+  permissionCode: PermissionCode,
+  options: PermissionLookupOptions = {},
+): Promise<boolean> {
   const normalizedRoles = normalizeRoles(role);
+  const tenantId = String(options.tenantId || getCurrentTenantId()).trim() || getCurrentTenantId();
 
   try {
     const customPermission = await get(
       `
-        SELECT permission_id
-        FROM user_custom_permissions
-        WHERE user_id = ? AND permission_id = ?
+        SELECT ucp.permission_id
+        FROM user_custom_permissions ucp
+        INNER JOIN users u ON u.id = ucp.user_id
+        WHERE ucp.user_id = ?
+          AND ucp.permission_id = ?
+          AND u.tenant_id = ?
         LIMIT 1
       `,
-      [userId, permissionCode],
+      [userId, permissionCode, tenantId],
     );
     if (customPermission) {
       return true;
@@ -184,8 +205,13 @@ async function checkUserPermission(userId: number, role: string | string[], perm
   return hasRolePermissionFallback(role, permissionCode);
 }
 
-async function getEffectivePermissionsForUser(userId: number, role: string | string[]): Promise<string[]> {
+async function getEffectivePermissionsForUser(
+  userId: number,
+  role: string | string[],
+  options: PermissionLookupOptions = {},
+): Promise<string[]> {
   const normalizedRoles = normalizeRoles(role);
+  const tenantId = String(options.tenantId || getCurrentTenantId()).trim() || getCurrentTenantId();
   const fallbackPermissions = [...new Set(
     normalizedRoles.flatMap((roleId) => ROLE_PERMISSION_MATRIX[roleId] || []),
   )].sort((left, right) => left.localeCompare(right));
@@ -207,11 +233,13 @@ async function getEffectivePermissionsForUser(userId: number, role: string | str
       : [];
     const customPermissions = await all(
       `
-        SELECT DISTINCT permission_id
-        FROM user_custom_permissions
-        WHERE user_id = ?
+        SELECT DISTINCT ucp.permission_id
+        FROM user_custom_permissions ucp
+        INNER JOIN users u ON u.id = ucp.user_id
+        WHERE ucp.user_id = ?
+          AND u.tenant_id = ?
       `,
-      [userId],
+      [userId, tenantId],
     );
 
     return [...new Set([
@@ -294,4 +322,3 @@ export {
   seedDefaultRolePermissions,
   SUPPORTED_PERMISSION_CODES,
 };
-

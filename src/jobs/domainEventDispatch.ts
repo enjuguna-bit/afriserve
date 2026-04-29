@@ -85,10 +85,18 @@ function createDomainEventDispatchJob(options: DomainEventDispatchJobOptions) {
         });
       }
 
-      if (logger && typeof logger.info === "function") {
-        logger.info("domain_events.dispatch.completed", {
-          published: result.published,
-          failed: result.failed,
+      const publishedCount = Number(result.published || 0);
+      const failedCount = Number(result.failed || 0);
+      if (publishedCount > 0 || failedCount > 0) {
+        if (logger && typeof logger.info === "function") {
+          logger.info("domain_events.dispatch.completed", {
+            published: publishedCount,
+            failed: failedCount,
+            durationMs,
+          });
+        }
+      } else if (logger && typeof logger.debug === "function") {
+        logger.debug("domain_events.dispatch.idle", {
           durationMs,
         });
       }

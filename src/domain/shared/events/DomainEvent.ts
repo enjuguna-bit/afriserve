@@ -13,6 +13,10 @@ export abstract class DomainEvent {
     this.occurredAt = (occurredAt ?? new Date()).toISOString();
   }
 
+  get payload(): Record<string, unknown> {
+    return this.toOutboxPayload().payload;
+  }
+
   toOutboxPayload(): {
     eventType: string;
     aggregateType: string;

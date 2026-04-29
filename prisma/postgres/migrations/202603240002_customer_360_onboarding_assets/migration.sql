@@ -1,0 +1,11 @@
+ALTER TABLE clients
+  ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS location_accuracy_meters DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS location_captured_at TIMESTAMPTZ(3);
+
+ALTER TABLE guarantors
+  ADD COLUMN IF NOT EXISTS id_document_url TEXT;
+
+ALTER TABLE collateral_assets
+  ADD COLUMN IF NOT EXISTS document_url TEXT;

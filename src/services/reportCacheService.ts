@@ -199,18 +199,47 @@ async function tryCreateRedisBackend(
       await client.set(key, JSON.stringify(value), { PX: ttlMs });
     },
     async invalidatePrefix(prefix) {
+      // First: invalidate any in-memory tracked keys (fast path)
       for (const key of trackedKeys) {
-        if (!key.startsWith(prefix)) {
-          continue;
-        }
+        if (!key.startsWith(prefix)) continue;
         await client.del(key);
         trackedKeys.delete(key);
       }
+      // Second: use SCAN to find keys in Redis that may have been written
+      // before this process started (e.g. by a previous server instance).
+      // Without this, invalidation is a no-op after a process restart.
+      try {
+        let cursor = 0;
+        do {
+          const result = await client.scan(cursor, { MATCH: `${prefix}*`, COUNT: 200 });
+          cursor = result.cursor;
+          for (const key of result.keys) {
+            await client.del(key);
+            trackedKeys.delete(key);
+          }
+        } while (cursor !== 0);
+      } catch (_scanError) {
+        // SCAN not supported on all Redis-compatible backends; safe to swallow.
+      }
     },
     async clear() {
+      // Tracked keys in memory
       for (const key of [...trackedKeys]) {
         await client.del(key);
         trackedKeys.delete(key);
+      }
+      // Also SCAN for any keys from previous processes
+      try {
+        let cursor = 0;
+        do {
+          const result = await client.scan(cursor, { COUNT: 200 });
+          cursor = result.cursor;
+          for (const key of result.keys) {
+            await client.del(key);
+          }
+        } while (cursor !== 0);
+      } catch (_scanError) {
+        // Safe to swallow — SCAN may not be available on all backends.
       }
     },
     async close() {

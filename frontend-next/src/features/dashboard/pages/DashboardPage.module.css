@@ -1,18 +1,18 @@
-/* ═══════════════════════════════════════════════════════════════════════════
-   DASHBOARD PAGE — dark analytics theme
-═══════════════════════════════════════════════════════════════════════════ */
+﻿/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   DASHBOARD PAGE â€” dark analytics theme
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-/* ── Shared card surface ─────────────────────────────────────────────────── */
+/* â”€â”€ Shared card surface â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .hero,
 .kpiCard,
 .panel,
 .watchSection,
 .collectionPanel {
   border: 1px solid var(--border);
-  border-radius: 20px;
-  background: var(--gradient-card);
-  box-shadow: var(--shadow-card);
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  border-radius: 16px;
+  background: var(--surface-raised, var(--surface));
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
 }
 
 .hero:hover,
@@ -20,25 +20,24 @@
 .panel:hover,
 .watchSection:hover,
 .collectionPanel:hover {
-  border-color: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.18);
 }
 
-/* ── Page layout ─────────────────────────────────────────────────────────── */
+/* â”€â”€ Page layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .page {
   display: grid;
-  gap: 16px;
+  gap: 20px;
 }
 
-/* ── Hero bar ────────────────────────────────────────────────────────────── */
+/* â”€â”€ Hero bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .hero {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 18px;
-  padding: 16px 22px;
-  background:
-    radial-gradient(ellipse at top right, rgba(0, 220, 150, 0.08), transparent 42%),
-    linear-gradient(160deg, rgba(13, 23, 42, 0.98), rgba(9, 16, 32, 0.95));
+  padding: 18px 22px;
+  background: var(--surface-raised, var(--surface));
 }
 
 .heroTools {
@@ -47,7 +46,7 @@
   justify-items: end;
 }
 
-/* ── Buttons ─────────────────────────────────────────────────────────────── */
+/* â”€â”€ Buttons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .filterButton,
 .filterReset,
 .scopeAction,
@@ -55,7 +54,7 @@
 .modalClose {
   border: none;
   cursor: pointer;
-  transition: transform 130ms ease, box-shadow 130ms ease, filter 130ms ease;
+  transition: background-color 130ms ease, border-color 130ms ease, color 130ms ease, box-shadow 130ms ease;
 }
 
 .filterButton,
@@ -69,9 +68,9 @@
 }
 
 .filterButton {
-  background: linear-gradient(135deg, var(--accent-strong), var(--accent));
-  color: #001a0d;
-  box-shadow: 0 6px 20px rgba(0, 220, 150, 0.28);
+  background: var(--accent);
+  color: #04130b;
+  box-shadow: 0 6px 16px rgba(0, 220, 150, 0.16);
 }
 
 .filterReset {
@@ -89,9 +88,9 @@
 }
 
 .scopeAction {
-  background: linear-gradient(135deg, var(--accent-strong), var(--accent));
-  color: #001a0d;
-  box-shadow: 0 4px 14px rgba(0, 220, 150, 0.22);
+  background: rgba(0, 220, 150, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(0, 220, 150, 0.24) !important;
 }
 
 .scopeActionMuted {
@@ -105,11 +104,10 @@
 .scopeAction:hover,
 .scopeActionMuted:hover,
 .modalClose:hover {
-  transform: translateY(-1px);
-  filter: brightness(1.08);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
 }
 
-/* ── Labels ──────────────────────────────────────────────────────────────── */
+/* â”€â”€ Labels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .eyebrow,
 .panelEyebrow {
   margin: 0 0 7px;
@@ -162,7 +160,7 @@
   border-color: var(--border-accent);
 }
 
-/* ── Scope chip ──────────────────────────────────────────────────────────── */
+/* â”€â”€ Scope chip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .scopeChip {
   display: inline-flex;
   align-items: center;
@@ -171,7 +169,7 @@
   padding: 0 12px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.03);
   color: var(--text-muted);
   font-size: 0.78rem;
 }
@@ -180,7 +178,7 @@
 
 .scopeSummary { display: flex; flex-wrap: wrap; gap: 8px; }
 
-/* ── KPI strip ───────────────────────────────────────────────────────────── */
+/* â”€â”€ KPI strip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .kpiStrip {
   display: grid;
   gap: 14px;
@@ -193,12 +191,18 @@
   overflow: hidden;
 }
 
+.kpiCardInteractive {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.kpiCardInteractive:hover .kpiLink {
+  color: #fff;
+}
+
 .kpiCard::before {
-  content: "";
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(0, 220, 150, 0.18), transparent);
+  display: none;
 }
 
 .kpiLabel {
@@ -252,18 +256,16 @@
   font-size: 0.74rem;
 }
 
-/* ── Middle grid ─────────────────────────────────────────────────────────── */
+/* â”€â”€ Middle grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .middleSectionGrid {
   display: grid;
   gap: 16px;
   grid-template-columns: 1fr 1fr;
 }
 
-/* ── Watch section ───────────────────────────────────────────────────────── */
+/* â”€â”€ Watch section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .watchSection {
-  background:
-    radial-gradient(ellipse at top right, rgba(75, 156, 245, 0.06), transparent 42%),
-    var(--gradient-card);
+  background: var(--surface-raised, var(--surface));
 }
 
 .watchGrid {
@@ -289,7 +291,7 @@
 .watchCard strong { color: var(--text); font-size: 1.28rem; font-weight: 700; }
 .watchCard em    { color: var(--text-dim); font-style: normal; font-size: 0.78rem; }
 
-/* ── Collection panel ────────────────────────────────────────────────────── */
+/* â”€â”€ Collection panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .collectionPanel,
 .panel,
 .watchSection {
@@ -297,9 +299,7 @@
 }
 
 .collectionPanel {
-  background:
-    radial-gradient(ellipse at top right, rgba(0, 220, 150, 0.07), transparent 40%),
-    var(--gradient-card);
+  background: var(--surface-raised, var(--surface));
 }
 
 .panelHeader {
@@ -309,16 +309,47 @@
   gap: 14px;
 }
 
+.scaffoldSection {
+  display: grid;
+  gap: 16px;
+}
+
+.scaffoldHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.scaffoldHeader h2 {
+  margin: 0;
+}
+
 .panelBadge {
-  min-width: 100px;
+  min-width: 92px;
   text-align: center;
-  padding: 10px 14px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, var(--accent-strong), var(--accent));
-  color: #001a0d;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: rgba(0, 220, 150, 0.08);
+  border: 1px solid rgba(0, 220, 150, 0.16);
+  color: var(--text);
   font-weight: 700;
   font-size: 0.88rem;
-  box-shadow: 0 4px 14px rgba(0, 220, 150, 0.28);
+  box-shadow: none;
+}
+
+.panelBadge span,
+.panelBadge small {
+  display: block;
+}
+
+.panelBadge small {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .collectionGrid {
@@ -340,7 +371,7 @@
 .collectionMetric span  { color: var(--text-dim); font-size: 0.8rem; }
 .collectionMetric strong { color: var(--text); font-size: 1.28rem; font-weight: 700; }
 
-/* ── Progress bar ────────────────────────────────────────────────────────── */
+/* â”€â”€ Progress bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .progressRail {
   margin-top: 16px;
   height: 8px;
@@ -357,7 +388,7 @@
   transition: width 0.6s ease-out;
 }
 
-/* ── Analytics grid / panels ─────────────────────────────────────────────── */
+/* â”€â”€ Analytics grid / panels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .analyticsGrid {
   display: grid;
   gap: 16px;
@@ -383,12 +414,12 @@
 .stackRow:last-child  { border-bottom: none; padding-bottom: 0; }
 .stackRow strong      { color: var(--text); font-weight: 600; }
 
-/* ── Colour utilities ────────────────────────────────────────────────────── */
+/* â”€â”€ Colour utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .textGreen { color: var(--success-text) !important; }
 .textAmber { color: var(--warning-text) !important; }
 .textRed   { color: var(--danger-text)  !important; }
 
-/* ── Tab bar ─────────────────────────────────────────────────────────────── */
+/* â”€â”€ Tab bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tabsList {
   display: flex;
   gap: 3px;
@@ -427,12 +458,12 @@
   font-weight: 600;
   text-decoration: none;
   font-size: 0.86rem;
-  transition: color 0.15s ease;
+  transition: color 0.15s ease, opacity 0.15s ease;
 }
 
-.tabLink:hover { color: #fff; }
+.tabLink:hover { color: #fff; opacity: 0.9; }
 
-/* ── Modal ───────────────────────────────────────────────────────────────── */
+/* â”€â”€ Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .overlay {
   position: fixed;
   inset: 0;
@@ -497,9 +528,9 @@
   gap: 12px;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    JTBD / data-driven additions
-══════════════════════════════════════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 .heroHeadline {
   margin: 4px 0 0;
@@ -515,21 +546,21 @@
   justify-content: center;
   min-height: 44px;
   padding: 0 20px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, var(--accent-strong), var(--accent));
-  color: #001a0d;
+  border-radius: 12px;
+  background: rgba(0, 220, 150, 0.12);
+  border: 1px solid rgba(0, 220, 150, 0.24);
+  color: var(--accent);
   font-weight: 700;
   font-size: 0.9rem;
   text-decoration: none;
-  box-shadow: 0 6px 22px rgba(0, 220, 150, 0.28);
-  transition: transform 130ms ease, box-shadow 130ms ease, filter 130ms ease;
+  box-shadow: none;
+  transition: background-color 130ms ease, border-color 130ms ease, color 130ms ease;
   white-space: nowrap;
 }
 
 .ctaPrimary:hover {
-  transform: translateY(-2px);
-  filter: brightness(1.06);
-  box-shadow: 0 10px 28px rgba(0, 220, 150, 0.34);
+  background: rgba(0, 220, 150, 0.16);
+  border-color: rgba(0, 220, 150, 0.3);
 }
 
 .scopeSummaryInline {
@@ -537,6 +568,36 @@
   flex-wrap: wrap;
   gap: 7px;
   align-items: center;
+}
+
+.metricGroup {
+  display: grid;
+  gap: 12px;
+}
+
+.metricGroup + .metricGroup {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.metricGroupHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.metricGroupHeader h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
+.metricGroupHeader p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
 }
 
 .kpiStripToday,
@@ -564,14 +625,12 @@
   border-color: rgba(0, 220, 150, 0.1);
 }
 
-.kpiStripPortfolio .kpiCard { opacity: 0.88; }
+.kpiStripPortfolio .kpiCard { opacity: 1; }
 .kpiStripPortfolio .kpiValue { font-size: 1.55rem; }
 
 .kpiCardUrgent {
   border-color: rgba(245, 166, 35, 0.28) !important;
-  background:
-    radial-gradient(ellipse at top right, rgba(245, 166, 35, 0.07), transparent 44%),
-    var(--gradient-card) !important;
+  background: rgba(245, 166, 35, 0.05) !important;
 }
 
 .kpiLink {
@@ -586,16 +645,17 @@
 
 .muted { color: var(--text-muted); font-size: 0.88rem; }
 
-/* ── Notice bar ──────────────────────────────────────────────────────────── */
+/* â”€â”€ Notice bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .notice {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
   align-items: center;
   justify-content: space-between;
-  padding: 11px 18px;
+  padding: 12px 18px;
   border: 1px solid var(--border);
   border-radius: 16px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
 }
 
 .noticeBody {
@@ -644,16 +704,20 @@
 
 .noticeCta:hover { opacity: 1; }
 
-/* ══════════════════════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    DEEP DIVE PANELS
-══════════════════════════════════════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 /* PAR buckets */
 .parGrid {
   margin-top: 16px;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 9px;
+  gap: 12px;
+}
+
+.riskChartWrap {
+  margin-top: 4px;
 }
 
 .parBucket {
@@ -723,9 +787,57 @@
 .progressFillThick {
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent-strong), var(--accent));
-  box-shadow: 0 0 8px var(--accent-glow);
+  background: linear-gradient(90deg, rgba(0, 220, 150, 0.78), var(--accent));
+  box-shadow: none;
   transition: width 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.summaryGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.summaryMetric {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+}
+
+.summaryMetricInteractive {
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+
+.summaryMetricInteractive:hover,
+.summaryMetricInteractive:focus-visible {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.summaryMetricInteractive:hover .kpiLink,
+.summaryMetricInteractive:focus-visible .kpiLink {
+  color: #fff;
+}
+
+.summaryMetricInteractive:focus-visible {
+  outline: 2px solid rgba(0, 220, 150, 0.3);
+  outline-offset: 2px;
+}
+
+.summaryMetric span {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+.summaryMetric strong {
+  color: var(--text);
+  font-size: 1.08rem;
+  font-weight: 700;
 }
 
 /* Collection pulse */
@@ -764,9 +876,13 @@
   --glass-bg: rgba(14, 25, 41, 0.4);
   --glass-border: rgba(255, 255, 255, 0.08);
 
-  display: flex;
-  flex-direction: column;
-  gap: 32px;
+  display: grid;
+  gap: 20px;
+}
+
+.kpiRing,
+.kpiGlow {
+  display: none;
 }
 
 .collectionPulseLabel {
@@ -802,19 +918,286 @@
 
 .stackRowHighlight strong { color: var(--accent) !important; }
 
-/* ── Responsive ──────────────────────────────────────────────────────────── */
+.legacyDashboardSections {
+  display: none;
+}
+
+.zoneLead {
+  display: grid;
+  gap: 10px;
+}
+
+.zoneHeader,
+.zoneHeaderCompact {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.zoneEyebrow {
+  margin: 0 0 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  font-weight: 700;
+}
+
+.zoneHeader h2,
+.zoneHeaderCompact h2 {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+}
+
+.zoneIntro,
+.zoneIntroCompact {
+  margin: 0;
+  max-width: 54ch;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.vitalStrip {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.priorityCard,
+.activityCard,
+.featureCard,
+.compactCard {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.priorityCardInteractive,
+.activityCardInteractive,
+.featureCardInteractive,
+.compactCardInteractive,
+.summaryMetricInteractive {
+  position: relative;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease;
+}
+
+.priorityCardInteractive::after,
+.activityCardInteractive::after,
+.featureCardInteractive::after,
+.compactCardInteractive::after,
+.summaryMetricInteractive::after {
+  content: 'â†’';
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.9rem;
+  transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.priorityCardInteractive:hover,
+.activityCardInteractive:hover,
+.featureCardInteractive:hover,
+.compactCardInteractive:hover,
+.summaryMetricInteractive:hover,
+.priorityCardInteractive:focus-visible,
+.activityCardInteractive:focus-visible,
+.featureCardInteractive:focus-visible,
+.compactCardInteractive:focus-visible,
+.summaryMetricInteractive:focus-visible {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  transform: translateY(-1px);
+}
+
+.priorityCardInteractive:hover::after,
+.activityCardInteractive:hover::after,
+.featureCardInteractive:hover::after,
+.compactCardInteractive:hover::after,
+.summaryMetricInteractive:hover::after,
+.priorityCardInteractive:focus-visible::after,
+.activityCardInteractive:focus-visible::after,
+.featureCardInteractive:focus-visible::after,
+.compactCardInteractive:focus-visible::after,
+.summaryMetricInteractive:focus-visible::after {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  transform: translateX(2px);
+}
+
+.priorityCard {
+  min-height: 176px;
+  padding: 22px 22px 20px;
+  display: grid;
+  gap: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+}
+
+.priorityCardLabel,
+.activityCardLabel,
+.compactCardLabel,
+.featureCardLabel {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.priorityCardValue {
+  color: var(--text);
+  font-size: clamp(2rem, 3vw, 2.75rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  padding-right: 36px;
+}
+
+.priorityCardMeta,
+.activityCardMeta,
+.compactCardMeta {
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+
+.zoneGrid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.zonePanel {
+  display: grid;
+  gap: 18px;
+}
+
+.activityGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.activityCard,
+.compactCard {
+  min-height: 136px;
+  padding: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.activityCardValue,
+.compactCardValue {
+  color: var(--text);
+  font-size: 1.55rem;
+  font-weight: 700;
+  line-height: 1.1;
+  padding-right: 34px;
+}
+
+.monthGrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.featureCard {
+  min-height: 100%;
+  padding: 22px;
+  display: grid;
+  gap: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+}
+
+.featureCardValue {
+  color: var(--text);
+  font-size: clamp(2.1rem, 3vw, 2.9rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  padding-right: 36px;
+}
+
+.featureCardCopy {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  max-width: 30ch;
+}
+
+.featureStats {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.featureStat {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.featureStat span {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.featureStat strong {
+  color: var(--text);
+  font-size: 1.18rem;
+  font-weight: 700;
+}
+
+.monthCards {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.kpiLink {
+  display: none;
+}
+
+/* â”€â”€ Responsive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 1100px) {
   .middleSectionGrid { grid-template-columns: 1fr; }
+  .zoneGrid,
+  .monthGrid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 960px) {
   .mtdGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vitalStrip,
+  .activityGrid,
+  .monthCards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 840px) {
   .hero { flex-direction: column; align-items: flex-start; }
   .heroTools { width: 100%; justify-items: stretch; }
   .heroHeadline { font-size: 1.15rem; }
+  .zoneHeader,
+  .zoneHeaderCompact { flex-direction: column; }
   .ctaPrimary { width: 100%; justify-content: center; }
   .scopeSummaryInline { width: 100%; }
   .notice { flex-direction: column; align-items: flex-start; }
@@ -829,14 +1212,18 @@
   .mtdGrid { grid-template-columns: 1fr; }
   .collectionPulseRow { grid-template-columns: 1fr; }
   .parGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vitalStrip,
+  .activityGrid,
+  .monthCards,
+  .featureStats { grid-template-columns: 1fr; }
 }
 
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   CHART ENHANCEMENTS — recharts integration
-═══════════════════════════════════════════════════════════════════════════ */
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   CHART ENHANCEMENTS â€” recharts integration
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-/* ── KPI card ring animation ────────────────────────────────────────────── */
+/* â”€â”€ KPI card ring animation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @keyframes ringGrow {
   from { stroke-dashoffset: 251; }
   to   { stroke-dashoffset: var(--ring-offset, 0); }
@@ -892,9 +1279,25 @@
   margin-top: 2px;
 }
 
-/* ── Make kpiCard flex when ring is present ─────────────────────────────── */
+/* â”€â”€ Make kpiCard flex when ring is present â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .kpiCard.withRing {
   display: flex;
   align-items: center;
   gap: 14px;
 }
+
+/* Dashboard hierarchy overrides */
+.priorityCardInteractive::after,
+.activityCardInteractive::after,
+.featureCardInteractive::after,
+.compactCardInteractive::after,
+.summaryMetricInteractive::after {
+  content: '\2192';
+}
+
+.collectionMetric strong,
+.summaryMetric strong {
+  display: block;
+  padding-right: 34px;
+}
+

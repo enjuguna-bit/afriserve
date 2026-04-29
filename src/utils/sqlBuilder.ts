@@ -62,7 +62,21 @@ function createSqlWhereBuilder() {
     return [...params];
   }
 
-  function hasClauses(): boolean {
+  function addNotNull(columnRef: string): void {
+    const safeColumnRef = assertSafeColumnRef(columnRef);
+    addClause(`${safeColumnRef} IS NOT NULL`);
+  }
+
+  function addIsNull(columnRef: string): void {
+    const safeColumnRef = assertSafeColumnRef(columnRef);
+    addClause(`${safeColumnRef} IS NULL`);
+  }
+
+  function getClauses(): string[] {
+    return [...clauses];
+  }
+
+    function hasClauses(): boolean {
     return clauses.length > 0;
   }
 
@@ -74,7 +88,10 @@ function createSqlWhereBuilder() {
     buildWhere,
     buildAnd,
     getParams,
+    getClauses,
     hasClauses,
+    addNotNull,
+    addIsNull,
   };
 }
 

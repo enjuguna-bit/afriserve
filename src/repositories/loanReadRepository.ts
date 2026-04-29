@@ -16,6 +16,8 @@ interface ScopeCondition {
 
 interface ListLoansFilters {
   status?: string;
+  statusGroup?: "active_portfolio";
+  workflowStage?: "arrears";
   loanId?: number;
   clientId?: number;
   branchId?: number;
@@ -113,6 +115,13 @@ function createLoanReadRepository(deps: LoanReadRepositoryDeps) {
     if (filters.status) {
       where.addEquals("l.status", filters.status);
     }
+    if (filters.statusGroup === "active_portfolio") {
+      where.addClause("LOWER(COALESCE(l.status, '')) IN ('active', 'restructured', 'overdue')");
+    }
+    if (filters.workflowStage === "arrears") {
+      where.addClause("LOWER(COALESCE(l.status, '')) IN ('active', 'restructured', 'overdue')");
+      where.addClause("COALESCE(inst.overdue_installments, 0) > 0");
+    }
     if (Number.isInteger(filters.loanId) && Number(filters.loanId) > 0) {
       where.addEquals("l.id", Number(filters.loanId));
     }
@@ -180,7 +189,7 @@ function createLoanReadRepository(deps: LoanReadRepositoryDeps) {
               CASE
                 WHEN status = 'paid' THEN 0
                 WHEN COALESCE(amount_due, 0) - COALESCE(amount_paid, 0) <= 0 THEN 0
-                WHEN datetime(due_date) < datetime('now') OR status = 'overdue' THEN 0
+                WHEN date(due_date) < date('now') OR status = 'overdue' THEN 0
                 ELSE 1
               END
             ) AS pending_installments,
@@ -188,7 +197,7 @@ function createLoanReadRepository(deps: LoanReadRepositoryDeps) {
               CASE
                 WHEN status = 'paid' THEN 0
                 WHEN COALESCE(amount_due, 0) - COALESCE(amount_paid, 0) <= 0 THEN 0
-                WHEN datetime(due_date) < datetime('now') OR status = 'overdue' THEN 1
+                WHEN date(due_date) < date('now') OR status = 'overdue' THEN 1
                 ELSE 0
               END
             ) AS overdue_installments,
@@ -205,7 +214,7 @@ function createLoanReadRepository(deps: LoanReadRepositoryDeps) {
                 CASE
                   WHEN status = 'paid' THEN 0
                   WHEN COALESCE(amount_due, 0) - COALESCE(amount_paid, 0) <= 0 THEN 0
-                  WHEN datetime(due_date) < datetime('now') OR status = 'overdue' THEN amount_due - amount_paid
+                  WHEN date(due_date) < date('now') OR status = 'overdue' THEN amount_due - amount_paid
                   ELSE 0
                 END
               ),
@@ -238,6 +247,20 @@ function createLoanReadRepository(deps: LoanReadRepositoryDeps) {
         INNER JOIN clients c ON c.id = l.client_id
         LEFT JOIN branches b ON b.id = l.branch_id
         LEFT JOIN users u ON u.id = l.officer_id
+        LEFT JOIN (
+          SELECT
+            loan_id,
+            SUM(
+              CASE
+                WHEN status = 'paid' THEN 0
+                WHEN COALESCE(amount_due, 0) - COALESCE(amount_paid, 0) <= 0 THEN 0
+                WHEN date(due_date) < date('now') OR status = 'overdue' THEN 1
+                ELSE 0
+              END
+            ) AS overdue_installments
+          FROM loan_installments
+          GROUP BY loan_id
+        ) inst ON inst.loan_id = l.id
         ${whereSql}
       `,
       queryParams,
@@ -487,7 +510,7 @@ function createLoanReadRepository(deps: LoanReadRepositoryDeps) {
             CASE
               WHEN status = 'paid' THEN 0
               WHEN COALESCE(amount_due, 0) - COALESCE(amount_paid, 0) <= 0 THEN 0
-              WHEN datetime(due_date) < datetime('now') OR status = 'overdue' THEN 1
+              WHEN date(due_date) < date('now') OR status = 'overdue' THEN 1
               ELSE 0
             END
           ) AS overdue_installments,
@@ -553,7 +576,7 @@ function createLoanReadRepository(deps: LoanReadRepositoryDeps) {
             CASE
               WHEN status = 'paid' THEN 0
               WHEN COALESCE(amount_due, 0) - COALESCE(amount_paid, 0) <= 0 THEN 0
-              WHEN datetime(due_date) < datetime('now') OR status = 'overdue' THEN 1
+              WHEN date(due_date) < date('now') OR status = 'overdue' THEN 1
               ELSE 0
             END
           ) AS overdue_installments,
@@ -584,3 +607,5 @@ function createLoanReadRepository(deps: LoanReadRepositoryDeps) {
 export {
   createLoanReadRepository,
 };
+
+

@@ -24,6 +24,8 @@
  *   The bridge monkey-patch in serviceRegistry can then be removed.
  */
 import type { DomainEvent } from "../../domain/shared/events/DomainEvent.js";
+import type { LoggerLike } from "../../types/runtime.js";
+import { getCurrentTenantId } from "../../utils/tenantStore.js";
 import type { IEventBus, EventHandler } from "./IEventBus.js";
 
 type PublishDomainEventFn = (payload: {
@@ -39,25 +41,35 @@ type PublishDomainEventFn = (payload: {
 export class OutboxEventBus implements IEventBus {
   private readonly _handlers = new Map<string, Set<EventHandler>>();
 
-  constructor(private readonly publishDomainEvent: PublishDomainEventFn) {}
+  constructor(
+    private readonly publishDomainEvent: PublishDomainEventFn,
+    private readonly logger: LoggerLike | null = null,
+  ) {}
 
   // -------------------------------------------------------------------------
   // IEventBus
   // -------------------------------------------------------------------------
 
   async publish(event: DomainEvent): Promise<void> {
+    const outboxEvent = event.toOutboxPayload();
+    const payloadTenantId = typeof outboxEvent.payload?.tenantId === "string"
+      ? outboxEvent.payload.tenantId
+      : null;
+    const eventTenantIdValue = (event as { tenantId?: unknown }).tenantId;
+    const eventTenantId = typeof eventTenantIdValue === "string"
+      ? eventTenantIdValue
+      : null;
+    const tenantId = payloadTenantId || eventTenantId || getCurrentTenantId();
+
     // 1. Write to outbox for guaranteed at-least-once delivery
     await this.publishDomainEvent({
-      eventType:     event.eventType,
+      eventType: event.eventType,
       aggregateType: event.aggregateType,
-      aggregateId:   typeof (event as any).aggregateId === "number"
-                       ? (event as any).aggregateId
-                       : null,
-      occurredAt:    event.occurredAt ?? new Date().toISOString(),
-
-
-      // Spread remaining event fields as payload so subscribers have full context
-      payload: this._eventToPayload(event),
+      aggregateId: event.aggregateId,
+      tenantId,
+      occurredAt: event.occurredAt ?? new Date().toISOString(),
+      // Spread remaining event fields as payload so subscribers have full context.
+      payload: outboxEvent.payload,
     });
 
     // 2. Call any in-process subscribers immediately (best-effort — errors
@@ -70,10 +82,10 @@ export class OutboxEventBus implements IEventBus {
         } catch (err) {
           // Subscriber errors must not fail the publish call — the outbox
           // guarantees delivery; a subscriber bug should not create data loss.
-          console.error(
-            `[OutboxEventBus] subscriber error for event "${event.eventType}":`,
-            err,
-          );
+          this.logger?.error?.("outbox_event_bus.subscriber_error", {
+            eventType: event.eventType,
+            error: err,
+          });
         }
       }
     }
@@ -109,15 +121,5 @@ export class OutboxEventBus implements IEventBus {
 
   clearAll(): void {
     this._handlers.clear();
-  }
-
-  // -------------------------------------------------------------------------
-  // Private helpers
-  // -------------------------------------------------------------------------
-
-  private _eventToPayload(event: DomainEvent): Record<string, unknown> {
-    // Strip the base DomainEvent fields — keep domain-specific data as payload
-    const { eventType, aggregateType, occurredAt, ...rest } = event as any;
-    return rest as Record<string, unknown>;
   }
 }

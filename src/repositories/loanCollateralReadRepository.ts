@@ -54,12 +54,15 @@ function createLoanCollateralReadRepository(deps: LoanCollateralReadRepositoryDe
         SELECT
           g.*,
           b.name AS branch_name,
-          COUNT(lg.id) AS linked_loan_count
+          (
+            SELECT COUNT(*)
+            FROM loan_guarantors lg
+            WHERE lg.guarantor_id = g.id
+              AND lg.tenant_id = g.tenant_id
+          ) AS linked_loan_count
         FROM guarantors g
         LEFT JOIN branches b ON b.id = g.branch_id
-        LEFT JOIN loan_guarantors lg ON lg.guarantor_id = g.id
         ${whereSql}
-        GROUP BY g.id
         ORDER BY g.id DESC
         LIMIT ? OFFSET ?
       `,
@@ -113,12 +116,15 @@ function createLoanCollateralReadRepository(deps: LoanCollateralReadRepositoryDe
         SELECT
           ca.*,
           b.name AS branch_name,
-          COUNT(lc.id) AS linked_loan_count
+          (
+            SELECT COUNT(*)
+            FROM loan_collaterals lc
+            WHERE lc.collateral_asset_id = ca.id
+              AND lc.tenant_id = ca.tenant_id
+          ) AS linked_loan_count
         FROM collateral_assets ca
         LEFT JOIN branches b ON b.id = ca.branch_id
-        LEFT JOIN loan_collaterals lc ON lc.collateral_asset_id = ca.id
         ${whereSql}
-        GROUP BY ca.id
         ORDER BY ca.id DESC
         LIMIT ? OFFSET ?
       `,

@@ -1,6 +1,7 @@
 import { assertEnvironment } from "../config/env.js";
 import { createBootstrapContext } from "../config/bootstrap.js";
 import { createSystemJobs } from "./systemJobs.js";
+import { shutdownTracing } from "../observability/tracing.js";
 import { getConfiguredDbClient } from "../utils/env.js";
 
 type StartQueueWorkerOptions = {
@@ -72,6 +73,7 @@ async function startQueueWorker(options: StartQueueWorkerOptions = {}): Promise<
         await reportCache.close();
       }
       await Promise.resolve(db.closeDb());
+      await shutdownTracing(logger || null);
       if (logger && typeof logger.close === "function") {
         await logger.close();
       }
@@ -177,6 +179,7 @@ async function startQueueWorker(options: StartQueueWorkerOptions = {}): Promise<
         source: "queue.worker.start_failed",
       });
     }
+    await shutdownTracing(logger || null);
     process.exit(1);
   }
 }

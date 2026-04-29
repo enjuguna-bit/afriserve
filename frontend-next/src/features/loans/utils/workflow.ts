@@ -1,7 +1,61 @@
 import type { LoanWorkflow, PendingApprovalLoanRecord } from '../../../types/loan'
 
+type PendingApprovalReviewer = {
+  id?: number | null
+  role?: string | null
+  roles?: Array<string | null | undefined> | null
+  permissions?: Array<string | null | undefined> | null
+} | null | undefined
+
+const APPROVE_LOAN_ROLES = ['admin', 'operations_manager', 'finance', 'area_manager']
+const REJECT_LOAN_ROLES = ['admin', 'operations_manager']
+
 function normalizeWorkflowValue(value: string | null | undefined): string {
   return String(value || '').trim().toLowerCase()
+}
+
+function appendUniqueBlocker(blockers: string[], blocker: string) {
+  const normalizedBlocker = String(blocker || '').trim()
+  if (!normalizedBlocker || blockers.includes(normalizedBlocker)) {
+    return
+  }
+
+  blockers.push(normalizedBlocker)
+}
+
+function normalizeReviewerRoles(reviewer: PendingApprovalReviewer): string[] {
+  if (!reviewer || typeof reviewer !== 'object') {
+    return []
+  }
+
+  const seenRoles = new Set<string>()
+  const normalizedRoles: string[] = []
+  const sourceRoles = [
+    ...(Array.isArray(reviewer.roles) ? reviewer.roles : []),
+    reviewer.role,
+  ]
+
+  sourceRoles.forEach((role) => {
+    const normalizedRole = normalizeWorkflowValue(role)
+    if (!normalizedRole || seenRoles.has(normalizedRole)) {
+      return
+    }
+
+    seenRoles.add(normalizedRole)
+    normalizedRoles.push(normalizedRole)
+  })
+
+  return normalizedRoles
+}
+
+function normalizeReviewerPermissions(reviewer: PendingApprovalReviewer): string[] | null {
+  if (!reviewer || typeof reviewer !== 'object' || !Array.isArray(reviewer.permissions)) {
+    return null
+  }
+
+  return reviewer.permissions
+    .map((permission) => String(permission || '').trim())
+    .filter(Boolean)
 }
 
 export function formatWorkflowText(value: string | null | undefined, fallback = '-'): string {
@@ -62,17 +116,60 @@ export function getLoanActionState(status: string | null | undefined, workflow?:
   }
 }
 
-export function getPendingApprovalReviewState(loan: PendingApprovalLoanRecord) {
-  const approvalBlockers = Array.isArray(loan.approval_blockers)
+export function getPendingApprovalReviewState(
+  loan: PendingApprovalLoanRecord,
+  reviewer?: PendingApprovalReviewer,
+) {
+  const workflowBlockers = Array.isArray(loan.approval_blockers)
     ? loan.approval_blockers.filter((blocker) => String(blocker || '').trim().length > 0)
     : []
-  const approvalReady = Number(loan.approval_ready || 0) === 1 && approvalBlockers.length === 0
+  const approvalReady = Number(loan.approval_ready || 0) === 1 && workflowBlockers.length === 0
+  const reviewerRoles = normalizeReviewerRoles(reviewer)
+  const reviewerPermissions = normalizeReviewerPermissions(reviewer)
+  const reviewerId = Number(reviewer && typeof reviewer === 'object' ? reviewer.id || 0 : 0)
+  const isAdminReviewer = reviewerRoles.includes('admin')
+  const approveAccessBlockers = [...workflowBlockers]
+  const rejectAccessBlockers: string[] = []
+
+  if (reviewerRoles.length > 0 && !reviewerRoles.some((role) => APPROVE_LOAN_ROLES.includes(role))) {
+    appendUniqueBlocker(approveAccessBlockers, 'You do not have an approval role for pending loan applications.')
+  }
+  if (reviewerPermissions && !reviewerPermissions.includes('loan.approve')) {
+    appendUniqueBlocker(approveAccessBlockers, 'You do not have permission to approve loans.')
+  }
+  if (reviewerRoles.length > 0 && !reviewerRoles.some((role) => REJECT_LOAN_ROLES.includes(role))) {
+    appendUniqueBlocker(rejectAccessBlockers, 'You do not have a rejection role for pending loan applications.')
+  }
+  if (reviewerPermissions && !reviewerPermissions.includes('loan.reject')) {
+    appendUniqueBlocker(rejectAccessBlockers, 'You do not have permission to reject loans.')
+  }
+
+  if (!isAdminReviewer && reviewerId > 0) {
+    if (Number(loan.created_by_user_id || 0) === reviewerId) {
+      appendUniqueBlocker(approveAccessBlockers, 'Maker-checker policy blocks you from approving a loan you created.')
+      appendUniqueBlocker(rejectAccessBlockers, 'Maker-checker policy blocks you from rejecting a loan you created.')
+    }
+    if (Number(loan.officer_id || 0) > 0 && Number(loan.officer_id || 0) === reviewerId) {
+      appendUniqueBlocker(approveAccessBlockers, 'Maker-checker policy blocks you from approving a loan assigned to you as officer.')
+      appendUniqueBlocker(rejectAccessBlockers, 'Maker-checker policy blocks you from rejecting a loan assigned to you as officer.')
+    }
+  }
+
+  const canApprove = approvalReady && approveAccessBlockers.length === 0
+  const canReject = rejectAccessBlockers.length === 0
 
   return {
     approvalReady,
-    approvalBlockers,
+    canApprove,
+    canReject,
+    approvalBlockers: approveAccessBlockers,
+    rejectBlockers: rejectAccessBlockers,
     workflowStageLabel: formatWorkflowText(loan.workflow_stage, 'Loan Application'),
     loanStatusLabel: formatWorkflowText(loan.status, 'Pending Approval'),
-    readinessLabel: approvalReady ? 'Ready to approve' : 'Needs officer follow-up',
+    readinessLabel: canApprove
+      ? 'Ready to approve'
+      : approvalReady
+        ? 'Approval restricted'
+        : 'Needs officer follow-up',
   }
 }

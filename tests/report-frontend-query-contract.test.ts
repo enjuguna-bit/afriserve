@@ -105,6 +105,23 @@ async function createApprovedLoanForExistingClient({
   };
 }
 
+function moveRemainingInstallmentsBeyondSnapshot(db: Database.Database, loanId: number) {
+  const futureDates = [
+    [2, "2026-04-13T09:00:00.000Z"],
+    [3, "2026-04-20T09:00:00.000Z"],
+    [4, "2026-04-27T09:00:00.000Z"],
+    [5, "2026-05-04T09:00:00.000Z"],
+  ] as const;
+
+  for (const [installmentNumber, dueDate] of futureDates) {
+    db.prepare(`
+      UPDATE loan_installments
+      SET due_date = ?, amount_paid = 0, status = 'pending'
+      WHERE loan_id = ? AND installment_number = ?
+    `).run(dueDate, loanId, installmentNumber);
+  }
+}
+
 test("portfolio report honors frontend branch and report date query filters", async () => {
   const { baseUrl, stop } = await startServer();
   const suffix = uniqueSuffix();
@@ -192,6 +209,8 @@ test("portfolio report accepts multiple officer ids for subset filtering", async
 
   try {
     const adminToken = await loginAsAdmin(baseUrl);
+    const checkerToken = await createHighRiskReviewerToken(baseUrl, adminToken);
+
 
     const branches = await api(baseUrl, "/api/branches?limit=1&sortBy=id&sortOrder=asc", {
       token: adminToken,
@@ -250,9 +269,6 @@ test("portfolio report accepts multiple officer ids for subset filtering", async
       termWeeks: 8,
       approvalToken: checkerToken,
     });
- exchange:
-
-
     const db = new Database(String(dbFilePath));
     try {
       db.prepare("UPDATE loans SET officer_id = ? WHERE id = ?").run(officerAId, loanA.loanId);
@@ -291,7 +307,6 @@ test("dues report returns all unpaid installments for loans with a scheduled due
 
   try {
     const adminToken = await loginAsAdmin(baseUrl);
-
     const branches = await api(baseUrl, "/api/branches?limit=1&sortBy=id&sortOrder=asc", {
       token: adminToken,
     });
@@ -413,6 +428,238 @@ test("dues report returns all unpaid installments for loans with a scheduled due
   }
 });
 
+test("dues report matches installments by calendar date instead of timestamp precision", async () => {
+  const { baseUrl, stop, dbFilePath } = await startServer();
+  const suffix = uniqueSuffix();
+
+  try {
+    const adminToken = await loginAsAdmin(baseUrl);
+    const checkerToken = await createHighRiskReviewerToken(baseUrl, adminToken);
+
+    const branches = await api(baseUrl, "/api/branches?limit=1&sortBy=id&sortOrder=asc", {
+      token: adminToken,
+    });
+    assert.equal(branches.status, 200);
+    const branchId = Number(branches.data.data[0].id);
+    assert.ok(branchId > 0);
+    assert.ok(dbFilePath, "Expected sqlite test database path");
+
+    const seededLoan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `Calendar Date Dues Loan ${suffix}`,
+      phone: `+254739${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+
+    const db = new Database(String(dbFilePath));
+    try {
+      const reportDate = "2026-03-06T00:00:00.000Z";
+
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'pending'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2026-03-06T18:45:00.000Z", seededLoan.loanId);
+
+      const futureDates = [
+        [2, "2026-03-13T09:00:00.000Z"],
+        [3, "2026-03-20T09:00:00.000Z"],
+        [4, "2026-03-27T09:00:00.000Z"],
+        [5, "2026-04-03T09:00:00.000Z"],
+      ] as const;
+
+      for (const [installmentNumber, dueDate] of futureDates) {
+        db.prepare(`
+          UPDATE loan_installments
+          SET due_date = ?, amount_paid = 0, status = 'pending'
+          WHERE loan_id = ? AND installment_number = ?
+        `).run(dueDate, seededLoan.loanId, installmentNumber);
+      }
+
+      const duesReport = await api(
+        baseUrl,
+        `/api/reports/dues?branchId=${branchId}&dateFrom=${encodeURIComponent(reportDate)}&dateTo=${encodeURIComponent(reportDate)}`,
+        {
+          token: adminToken,
+        },
+      );
+      assert.equal(duesReport.status, 200);
+
+      const dueItems = Array.isArray(duesReport.data?.dueItems) ? duesReport.data.dueItems : [];
+      const seededLoanItems = dueItems.filter((row) => Number(row.loanid) === seededLoan.loanId);
+      assert.equal(seededLoanItems.length, 1);
+      assert.equal(Number(seededLoanItems[0].installmentno), 1);
+    } finally {
+      db.close();
+    }
+  } finally {
+    await stop();
+  }
+});
+
+test("dues report exposes fixed scheduled dues separately from remaining unpaid dues", async () => {
+  const { baseUrl, stop, dbFilePath } = await startServer();
+  const suffix = uniqueSuffix();
+
+  try {
+    const adminToken = await loginAsAdmin(baseUrl);
+    const checkerToken = await createHighRiskReviewerToken(baseUrl, adminToken);
+
+    const branches = await api(baseUrl, "/api/branches?limit=1&sortBy=id&sortOrder=asc", {
+      token: adminToken,
+    });
+    assert.equal(branches.status, 200);
+    const branchId = Number(branches.data.data[0].id);
+    assert.ok(branchId > 0);
+    assert.ok(dbFilePath, "Expected sqlite test database path");
+
+    const seededLoan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `Fixed Scheduled Dues Loan ${suffix}`,
+      phone: `+254738${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+
+    const db = new Database(String(dbFilePath));
+    try {
+      const reportDate = "2026-03-06T00:00:00.000Z";
+      const installment = db.prepare(`
+        SELECT amount_due
+        FROM loan_installments
+        WHERE loan_id = ? AND installment_number = 1
+      `).get(seededLoan.loanId) as { amount_due: number };
+      const totalScheduledAmount = Number(Number(installment.amount_due || 0).toFixed(2));
+      const partialPayment = Number((totalScheduledAmount / 2).toFixed(2));
+      const remainingDue = Number((totalScheduledAmount - partialPayment).toFixed(2));
+
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = ?, status = 'pending'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2026-03-06T18:45:00.000Z", partialPayment, seededLoan.loanId);
+
+      const futureDates = [
+        [2, "2026-03-13T09:00:00.000Z"],
+        [3, "2026-03-20T09:00:00.000Z"],
+        [4, "2026-03-27T09:00:00.000Z"],
+        [5, "2026-04-03T09:00:00.000Z"],
+      ] as const;
+
+      for (const [installmentNumber, dueDate] of futureDates) {
+        db.prepare(`
+          UPDATE loan_installments
+          SET due_date = ?, amount_paid = 0, status = 'pending'
+          WHERE loan_id = ? AND installment_number = ?
+        `).run(dueDate, seededLoan.loanId, installmentNumber);
+      }
+
+      const duesReport = await api(
+        baseUrl,
+        `/api/reports/dues?branchId=${branchId}&dateFrom=${encodeURIComponent(reportDate)}&dateTo=${encodeURIComponent(reportDate)}`,
+        {
+          token: adminToken,
+        },
+      );
+      assert.equal(duesReport.status, 200);
+
+      const duesInPeriod = duesReport.data?.duesInPeriod ?? {};
+      assert.equal(Number(Number(duesInPeriod.total_scheduled_amount || 0).toFixed(2)), totalScheduledAmount);
+      assert.equal(Number(Number(duesInPeriod.expected_amount || 0).toFixed(2)), remainingDue);
+    } finally {
+      db.close();
+    }
+  } finally {
+    await stop();
+  }
+});
+
+test("dues report honors Nairobi business-day boundaries for dashboard windows", async () => {
+  const { baseUrl, stop, dbFilePath } = await startServer();
+  const suffix = uniqueSuffix();
+
+  try {
+    const adminToken = await loginAsAdmin(baseUrl);
+    const checkerToken = await createHighRiskReviewerToken(baseUrl, adminToken);
+
+    const branches = await api(baseUrl, "/api/branches?limit=1&sortBy=id&sortOrder=asc", {
+      token: adminToken,
+    });
+    assert.equal(branches.status, 200);
+    const branchId = Number(branches.data.data[0].id);
+    assert.ok(branchId > 0);
+    assert.ok(dbFilePath, "Expected sqlite test database path");
+
+    const todayLoan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `Business Date Today Loan ${suffix}`,
+      phone: `+254736${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+    const yesterdayLoan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `Business Date Yesterday Loan ${suffix}`,
+      phone: `+254735${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+
+    const db = new Database(String(dbFilePath));
+    try {
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'pending'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2026-03-06T18:45:00.000Z", todayLoan.loanId);
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'pending'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2026-03-05T18:45:00.000Z", yesterdayLoan.loanId);
+
+      moveRemainingInstallmentsBeyondSnapshot(db, todayLoan.loanId);
+      moveRemainingInstallmentsBeyondSnapshot(db, yesterdayLoan.loanId);
+
+      const duesReport = await api(
+        baseUrl,
+        `/api/reports/dues?branchId=${branchId}&dateFrom=${encodeURIComponent("2026-03-05T21:00:00.000Z")}&dateTo=${encodeURIComponent("2026-03-06T20:59:59.999Z")}`,
+        {
+          token: adminToken,
+        },
+      );
+      assert.equal(duesReport.status, 200);
+
+      const dueItems = Array.isArray(duesReport.data?.dueItems) ? duesReport.data.dueItems : [];
+      assert.ok(
+        dueItems.some((row) => Number(row.loanid) === todayLoan.loanId),
+        "Expected current-business-day loan in dues report",
+      );
+      assert.ok(
+        !dueItems.some((row) => Number(row.loanid) === yesterdayLoan.loanId),
+        "Expected prior-business-day loan to be excluded from current dashboard day window",
+      );
+    } finally {
+      db.close();
+    }
+  } finally {
+    await stop();
+  }
+});
+
 test("arrears report uses snapshot-date arrears instead of filtering overdue loans by due-date window", async () => {
   const { baseUrl, stop, dbFilePath } = await startServer();
   const suffix = uniqueSuffix();
@@ -468,7 +715,433 @@ test("arrears report uses snapshot-date arrears instead of filtering overdue loa
       const arrearsRow = reportRows.find((row) => Number(row.LoanId) === arrearsLoan.loanId);
       assert.ok(arrearsRow, "Expected arrears report row for seeded overdue loan");
       assert.equal(Number(arrearsRow.DaysInArrears), 15);
+      assert.equal(Number(arrearsRow.DaysToNpl), 76);
       assert.equal(String(arrearsRow.Maturity), "Not Matured");
+    } finally {
+      db.close();
+    }
+  } finally {
+    await stop();
+  }
+});
+
+test("arrears report exposes pre-NPL arrears separately from NPL and restructured balances", async () => {
+  const { baseUrl, stop, dbFilePath } = await startServer();
+  const suffix = uniqueSuffix();
+
+  try {
+    const adminToken = await loginAsAdmin(baseUrl);
+    const checkerToken = await createHighRiskReviewerToken(baseUrl, adminToken);
+
+    const branches = await api(baseUrl, "/api/branches?limit=1&sortBy=id&sortOrder=asc", {
+      token: adminToken,
+    });
+    assert.equal(branches.status, 200);
+    const branchId = Number(branches.data.data[0].id);
+    assert.ok(branchId > 0);
+    assert.ok(dbFilePath, "Expected sqlite test database path");
+
+    const currentArrearsLoan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `Current Arrears Loan ${suffix}`,
+      phone: `+254734${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+    const nplLoan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `NPL Arrears Loan ${suffix}`,
+      phone: `+254733${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+    const restructuredLoan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `Restructured Arrears Loan ${suffix}`,
+      phone: `+254732${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+
+    const db = new Database(String(dbFilePath));
+    try {
+      const currentInstallment = db.prepare(`
+        SELECT amount_due
+        FROM loan_installments
+        WHERE loan_id = ? AND installment_number = 1
+      `).get(currentArrearsLoan.loanId) as { amount_due: number };
+      const nplInstallment = db.prepare(`
+        SELECT amount_due
+        FROM loan_installments
+        WHERE loan_id = ? AND installment_number = 1
+      `).get(nplLoan.loanId) as { amount_due: number };
+      const restructuredInstallment = db.prepare(`
+        SELECT amount_due
+        FROM loan_installments
+        WHERE loan_id = ? AND installment_number = 1
+      `).get(restructuredLoan.loanId) as { amount_due: number };
+
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'overdue'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2026-03-10T18:45:00.000Z", currentArrearsLoan.loanId);
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'overdue'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2025-12-15T18:45:00.000Z", nplLoan.loanId);
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'overdue'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2026-03-08T18:45:00.000Z", restructuredLoan.loanId);
+      db.prepare(`
+        UPDATE loans
+        SET status = 'restructured'
+        WHERE id = ?
+      `).run(restructuredLoan.loanId);
+
+      moveRemainingInstallmentsBeyondSnapshot(db, currentArrearsLoan.loanId);
+      moveRemainingInstallmentsBeyondSnapshot(db, nplLoan.loanId);
+      moveRemainingInstallmentsBeyondSnapshot(db, restructuredLoan.loanId);
+
+      const arrearsReport = await api(
+        baseUrl,
+        `/api/reports/arrears?branchId=${branchId}&dateTo=${encodeURIComponent("2026-03-20T20:59:59.999Z")}`,
+        {
+          token: adminToken,
+        },
+      );
+      assert.equal(arrearsReport.status, 200);
+
+      const summary = arrearsReport.data?.summary ?? {};
+      const expectedPreNplArrears = Number(Number(currentInstallment.amount_due || 0).toFixed(2));
+
+      assert.equal(
+        Number(Number(summary.pre_npl_arrears_amount || 0).toFixed(2)),
+        expectedPreNplArrears,
+      );
+      assert.equal(
+        Number(Number(summary.total_arrears_amount || 0).toFixed(2)),
+        Number((
+          Number(currentInstallment.amount_due || 0)
+          + Number(nplInstallment.amount_due || 0)
+          + Number(restructuredInstallment.amount_due || 0)
+        ).toFixed(2)),
+      );
+    } finally {
+      db.close();
+    }
+  } finally {
+    await stop();
+  }
+});
+
+test("arrears report maps PAR 30, PAR 60, PAR 90, and NPL to distinct overdue ranges", async () => {
+  const { baseUrl, stop, dbFilePath } = await startServer();
+  const suffix = uniqueSuffix();
+
+  try {
+    const adminToken = await loginAsAdmin(baseUrl);
+    const checkerToken = await createHighRiskReviewerToken(baseUrl, adminToken);
+
+    const branches = await api(baseUrl, "/api/branches?limit=1&sortBy=id&sortOrder=asc", {
+      token: adminToken,
+    });
+    assert.equal(branches.status, 200);
+    const branchId = Number(branches.data.data[0].id);
+    assert.ok(branchId > 0);
+    assert.ok(dbFilePath, "Expected sqlite test database path");
+
+    const par30Loan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `PAR 30 Loan ${suffix}`,
+      phone: `+254731${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+    const par60Loan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `PAR 60 Loan ${suffix}`,
+      phone: `+254730${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+    const par90Loan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `PAR 90 Loan ${suffix}`,
+      phone: `+254729${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+    const nplLoan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `NPL Loan ${suffix}`,
+      phone: `+254728${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+
+    const db = new Database(String(dbFilePath));
+    try {
+      const par30Balance = db.prepare(`
+        SELECT balance
+        FROM loans
+        WHERE id = ?
+      `).get(par30Loan.loanId) as { balance: number };
+      const par60Balance = db.prepare(`
+        SELECT balance
+        FROM loans
+        WHERE id = ?
+      `).get(par60Loan.loanId) as { balance: number };
+      const par90Balance = db.prepare(`
+        SELECT balance
+        FROM loans
+        WHERE id = ?
+      `).get(par90Loan.loanId) as { balance: number };
+      const nplBalance = db.prepare(`
+        SELECT balance
+        FROM loans
+        WHERE id = ?
+      `).get(nplLoan.loanId) as { balance: number };
+
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'overdue'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2026-02-18T18:45:00.000Z", par30Loan.loanId);
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'overdue'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2026-01-19T18:45:00.000Z", par60Loan.loanId);
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'overdue'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2025-12-20T18:45:00.000Z", par90Loan.loanId);
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'overdue'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2025-12-19T18:45:00.000Z", nplLoan.loanId);
+
+      moveRemainingInstallmentsBeyondSnapshot(db, par30Loan.loanId);
+      moveRemainingInstallmentsBeyondSnapshot(db, par60Loan.loanId);
+      moveRemainingInstallmentsBeyondSnapshot(db, par90Loan.loanId);
+      moveRemainingInstallmentsBeyondSnapshot(db, nplLoan.loanId);
+
+      const arrearsReport = await api(
+        baseUrl,
+        `/api/reports/arrears?branchId=${branchId}&dateTo=${encodeURIComponent("2026-03-20T20:59:59.999Z")}`,
+        {
+          token: adminToken,
+        },
+      );
+      assert.equal(arrearsReport.status, 200);
+
+      const summary = arrearsReport.data?.summary ?? {};
+      const totalOutstandingBalance = Number(summary.total_outstanding_balance || 0);
+      assert.equal(Number(summary.par30_count || 0), 1);
+      assert.equal(Number(summary.par60_count || 0), 1);
+      assert.equal(Number(summary.par90_count || 0), 1);
+      assert.equal(Number(summary.npl_count || 0), 1);
+      assert.equal(Number(Number(summary.par30_balance || 0).toFixed(2)), Number(Number(par30Balance.balance || 0).toFixed(2)));
+      assert.equal(Number(Number(summary.par60_balance || 0).toFixed(2)), Number(Number(par60Balance.balance || 0).toFixed(2)));
+      assert.equal(Number(Number(summary.par90_balance || 0).toFixed(2)), Number(Number(par90Balance.balance || 0).toFixed(2)));
+      assert.equal(Number(Number(summary.npl_balance || 0).toFixed(2)), Number(Number(nplBalance.balance || 0).toFixed(2)));
+      assert.equal(
+        Number(Number(summary.par30_ratio || 0).toFixed(4)),
+        totalOutstandingBalance > 0 ? Number((Number(par30Balance.balance || 0) / totalOutstandingBalance).toFixed(4)) : 0,
+      );
+      assert.equal(
+        Number(Number(summary.par60_ratio || 0).toFixed(4)),
+        totalOutstandingBalance > 0 ? Number((Number(par60Balance.balance || 0) / totalOutstandingBalance).toFixed(4)) : 0,
+      );
+      assert.equal(
+        Number(Number(summary.par90_ratio || 0).toFixed(4)),
+        totalOutstandingBalance > 0 ? Number((Number(par90Balance.balance || 0) / totalOutstandingBalance).toFixed(4)) : 0,
+      );
+      assert.equal(
+        Number(Number(summary.npl_ratio || 0).toFixed(4)),
+        totalOutstandingBalance > 0 ? Number((Number(nplBalance.balance || 0) / totalOutstandingBalance).toFixed(4)) : 0,
+      );
+      assert.equal(
+        Number(Number(summary.at_risk_ratio || 0).toFixed(4)),
+        totalOutstandingBalance > 0 ? Number((Number(summary.at_risk_balance || 0) / totalOutstandingBalance).toFixed(4)) : 0,
+      );
+    } finally {
+      db.close();
+    }
+  } finally {
+    await stop();
+  }
+});
+
+test("capital adequacy report uses exclusive PAR 30, PAR 60, PAR 90, and NPL buckets", async () => {
+  const { baseUrl, stop, dbFilePath } = await startServer();
+  const suffix = uniqueSuffix();
+
+  try {
+    const adminToken = await loginAsAdmin(baseUrl);
+    const checkerToken = await createHighRiskReviewerToken(baseUrl, adminToken);
+
+    const branches = await api(baseUrl, "/api/branches?limit=1&sortBy=id&sortOrder=asc", {
+      token: adminToken,
+    });
+    assert.equal(branches.status, 200);
+    const branchId = Number(branches.data.data[0].id);
+    assert.ok(branchId > 0);
+    assert.ok(dbFilePath, "Expected sqlite test database path");
+
+    const par30Loan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `Capital PAR 30 Loan ${suffix}`,
+      phone: `+254727${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+    const par60Loan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `Capital PAR 60 Loan ${suffix}`,
+      phone: `+254726${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+    const par90Loan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `Capital PAR 90 Loan ${suffix}`,
+      phone: `+254725${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+    const nplLoan = await createClientAndApprovedLoan({
+      baseUrl,
+      token: adminToken,
+      fullName: `Capital NPL Loan ${suffix}`,
+      phone: `+254724${String(Math.floor(Math.random() * 1000000)).padStart(6, "0")}`,
+      branchId,
+      principal: 5000,
+      termWeeks: 5,
+      approvalToken: checkerToken,
+    });
+
+    const db = new Database(String(dbFilePath));
+    try {
+      const par30Balance = db.prepare(`
+        SELECT balance
+        FROM loans
+        WHERE id = ?
+      `).get(par30Loan.loanId) as { balance: number };
+      const par60Balance = db.prepare(`
+        SELECT balance
+        FROM loans
+        WHERE id = ?
+      `).get(par60Loan.loanId) as { balance: number };
+      const par90Balance = db.prepare(`
+        SELECT balance
+        FROM loans
+        WHERE id = ?
+      `).get(par90Loan.loanId) as { balance: number };
+      const nplBalance = db.prepare(`
+        SELECT balance
+        FROM loans
+        WHERE id = ?
+      `).get(nplLoan.loanId) as { balance: number };
+
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'overdue'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2026-02-18T18:45:00.000Z", par30Loan.loanId);
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'overdue'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2026-01-19T18:45:00.000Z", par60Loan.loanId);
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'overdue'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2025-12-20T18:45:00.000Z", par90Loan.loanId);
+      db.prepare(`
+        UPDATE loan_installments
+        SET due_date = ?, amount_paid = 0, status = 'overdue'
+        WHERE loan_id = ? AND installment_number = 1
+      `).run("2025-12-19T18:45:00.000Z", nplLoan.loanId);
+
+      moveRemainingInstallmentsBeyondSnapshot(db, par30Loan.loanId);
+      moveRemainingInstallmentsBeyondSnapshot(db, par60Loan.loanId);
+      moveRemainingInstallmentsBeyondSnapshot(db, par90Loan.loanId);
+      moveRemainingInstallmentsBeyondSnapshot(db, nplLoan.loanId);
+
+      const capitalAdequacyReport = await api(
+        baseUrl,
+        `/api/reports/capital-adequacy?dateTo=${encodeURIComponent("2026-03-20T20:59:59.999Z")}`,
+        {
+          token: adminToken,
+        },
+      );
+      assert.equal(capitalAdequacyReport.status, 200);
+
+      const payload = capitalAdequacyReport.data ?? {};
+      const expectedPar30Balance = Number(Number(par30Balance.balance || 0).toFixed(2));
+      const expectedPar60Balance = Number(Number(par60Balance.balance || 0).toFixed(2));
+      const expectedPar90Balance = Number(Number(par90Balance.balance || 0).toFixed(2));
+      const expectedNplBalance = Number(Number(nplBalance.balance || 0).toFixed(2));
+      const grossOutstanding = Number(payload.gross_outstanding || 0);
+
+      assert.equal(Number(Number(payload.par30_balance || 0).toFixed(2)), expectedPar30Balance);
+      assert.equal(Number(Number(payload.par60_balance || 0).toFixed(2)), expectedPar60Balance);
+      assert.equal(Number(Number(payload.par90_balance || 0).toFixed(2)), expectedPar90Balance);
+      assert.equal(Number(Number(payload.npl_balance || 0).toFixed(2)), expectedNplBalance);
+      assert.equal(
+        Number(Number(payload.par30_ratio || 0).toFixed(4)),
+        grossOutstanding > 0 ? Number((expectedPar30Balance / grossOutstanding).toFixed(4)) : 0,
+      );
+      assert.equal(
+        Number(Number(payload.par60_ratio || 0).toFixed(4)),
+        grossOutstanding > 0 ? Number((expectedPar60Balance / grossOutstanding).toFixed(4)) : 0,
+      );
+      assert.equal(
+        Number(Number(payload.par90_ratio || 0).toFixed(4)),
+        grossOutstanding > 0 ? Number((expectedPar90Balance / grossOutstanding).toFixed(4)) : 0,
+      );
+      assert.equal(
+        Number(Number(payload.npl_ratio || 0).toFixed(4)),
+        grossOutstanding > 0 ? Number((expectedNplBalance / grossOutstanding).toFixed(4)) : 0,
+      );
     } finally {
       db.close();
     }
@@ -661,9 +1334,6 @@ test("aging report uses report snapshot date instead of now for overdue buckets"
       termWeeks: 5,
       approvalToken: checkerToken,
     });
- exchange:
-
-
     const db = new Database(String(dbFilePath));
     try {
       db.prepare(`
@@ -701,3 +1371,6 @@ test("aging report uses report snapshot date instead of now for overdue buckets"
     await stop();
   }
 });
+
+
+

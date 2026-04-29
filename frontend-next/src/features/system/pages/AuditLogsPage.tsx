@@ -3,32 +3,11 @@ import { useQuery } from '@tanstack/react-query'
 import { AsyncState } from '../../../components/common/AsyncState'
 import { queryPolicies } from '../../../services/queryPolicies'
 import { listAuditLogs } from '../../../services/systemService'
+import { formatDisplayDateTime } from '../../../utils/dateFormatting'
+import { formatDisplayDetails, formatDisplayReference, formatDisplayText } from '../../../utils/displayFormatting'
 import styles from '../../shared/styles/EntityPage.module.css'
 
 const PAGE_SIZE = 50
-
-function safePrettyJson(value: unknown) {
-  if (value == null || value === '') {
-    return '-'
-  }
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value, null, 2)
-    } catch {
-      return String(value)
-    }
-  }
-  if (typeof value !== 'string') {
-    return String(value)
-  }
-
-  try {
-    const parsed = JSON.parse(value)
-    return JSON.stringify(parsed, null, 2)
-  } catch {
-    return value
-  }
-}
 
 export function AuditLogsPage() {
   const [action, setAction] = useState('')
@@ -145,19 +124,16 @@ export function AuditLogsPage() {
                 </tr>
               </thead>
               <tbody>
-                {auditLogsQuery.data.data.map((row) => (
+                {(auditLogsQuery.data?.data ?? []).map((row) => (
                   <tr key={row.id}>
                     <td>{row.id}</td>
-                    <td>{new Date(row.created_at).toLocaleString()}</td>
-                    <td className={styles.mono}>{row.action}</td>
-                    <td>{row.user_id || '-'}</td>
+                    <td>{formatDisplayDateTime(row.created_at)}</td>
+                    <td className={styles.mono}>{formatDisplayText(row.action)}</td>
+                    <td>{formatDisplayText(row.user_id)}</td>
+                    <td>{formatDisplayReference(row.target_type, row.target_id)}</td>
+                    <td>{formatDisplayText(row.ip_address)}</td>
                     <td>
-                      {row.target_type || '-'}
-                      {row.target_id ? ` #${row.target_id}` : ''}
-                    </td>
-                    <td>{row.ip_address || '-'}</td>
-                    <td>
-                      <pre className={styles.pre}>{safePrettyJson(row.details)}</pre>
+                      <pre className={styles.pre}>{formatDisplayDetails(row.details)}</pre>
                     </td>
                   </tr>
                 ))}

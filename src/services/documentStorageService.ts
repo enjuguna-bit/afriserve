@@ -44,7 +44,12 @@ function resolveFileExtension(originalName: string, mimeType: string): string {
   return mapped || ".bin";
 }
 
-function buildObjectKey(clientId: number, documentType: "photo" | "id_document", originalName: string, mimeType: string): string {
+function buildObjectKey(
+  clientId: number,
+  documentType: "photo" | "id_document" | "guarantor_id_document" | "collateral_document",
+  originalName: string,
+  mimeType: string,
+): string {
   const extension = resolveFileExtension(originalName, mimeType);
   const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, "");
   const randomPart = crypto.randomBytes(8).toString("hex");
@@ -192,7 +197,7 @@ type CreateDocumentStorageServiceOptions = {
 
 interface StoreClientDocumentPayload {
   clientId: number;
-  documentType: "photo" | "id_document";
+  documentType: "photo" | "id_document" | "guarantor_id_document" | "collateral_document";
   fileBuffer: Buffer;
   mimeType: string;
   originalName: string;

@@ -7,6 +7,7 @@ import { queryPolicies } from '../../../services/queryPolicies'
 import { createCollateralAsset, listCollateralAssets } from '../../../services/riskService'
 import { useToastStore } from '../../../store/toastStore'
 import type { CollateralAssetType, CollateralOwnershipType } from '../../../types/risk'
+import { formatDisplayText } from '../../../utils/displayFormatting'
 import styles from '../../shared/styles/EntityPage.module.css'
 
 const COLLATERAL_ASSET_TYPES: Array<{ value: CollateralAssetType; label: string }> = [
@@ -342,21 +343,21 @@ export function CollateralAssetsPage() {
               </tr>
             </thead>
             <tbody>
-              {assetsQuery.data.data.map((row) => (
+              {(assetsQuery.data?.data ?? []).map((row) => (
                 <tr key={row.id}>
                   <td>{row.id}</td>
                   <td>
-                    <div>{row.asset_type}</div>
-                    <div className={styles.muted}>{row.description}</div>
+                    <div>{formatDisplayText(row.asset_type)}</div>
+                    <div className={styles.muted}>{formatDisplayText(row.description)}</div>
                   </td>
                   <td>
-                    <div>{row.registration_number || '-'}</div>
-                    <div className={styles.muted}>{row.logbook_number || '-'}</div>
-                    <div className={styles.muted}>{row.title_number || '-'}</div>
+                    <div>{formatDisplayText(row.registration_number)}</div>
+                    <div className={styles.muted}>{formatDisplayText(row.logbook_number)}</div>
+                    <div className={styles.muted}>{formatDisplayText(row.title_number)}</div>
                   </td>
                   <td>
-                    <div>{row.owner_name || '-'}</div>
-                    <div className={styles.muted}>{row.owner_national_id || '-'}</div>
+                    <div>{formatDisplayText(row.owner_name)}</div>
+                    <div className={styles.muted}>{formatDisplayText(row.owner_national_id)}</div>
                   </td>
                   <td>{formatMoney(row.estimated_value)}</td>
                   <td>

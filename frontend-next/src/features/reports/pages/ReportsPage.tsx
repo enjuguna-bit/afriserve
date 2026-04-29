@@ -1,8 +1,10 @@
-ï»¿import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { AsyncState } from '../../../components/common/AsyncState'
 import { queryPolicies } from '../../../services/queryPolicies'
 import { getReportByPath, getReportFilterOptions } from '../../../services/reportService'
+import { queryKeys } from '../../../services/queryKeys'
 import { useToastStore } from '../../../store/toastStore'
 import styles from './ReportsPage.module.css'
 
@@ -82,6 +84,74 @@ const reportDatePresetOptions: Array<{ value: ReportDatePreset; label: string }>
   { value: 'custom_range', label: 'Custom Range' },
 ]
 
+function parseReportDatePreset(value: string | null): ReportDatePreset | null {
+  const normalized = String(value || '').trim()
+  if (!normalized) {
+    return null
+  }
+
+  return reportDatePresetOptions.some((entry) => entry.value === normalized)
+    ? normalized as ReportDatePreset
+    : null
+}
+
+function parseCsvValues(value: string | null): string[] {
+  return String(value || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+}
+
+const reservedReportSearchParamKeys = new Set([
+  'autoload',
+  'categoryId',
+  'customDateFrom',
+  'customDateTo',
+  'dateFrom',
+  'datePreset',
+  'dateTo',
+  'level',
+  'officeId',
+  'officerIds',
+  'reportId',
+])
+
+function extractReportPassThroughParams(searchParams: URLSearchParams): Record<string, string> {
+  const params: Record<string, string> = {}
+
+  searchParams.forEach((value, key) => {
+    if (reservedReportSearchParamKeys.has(key)) {
+      return
+    }
+
+    const normalizedValue = String(value || '').trim()
+    if (!normalizedValue) {
+      return
+    }
+
+    params[key] = normalizedValue
+  })
+
+  return params
+}
+
+function toDateInputValue(value: string | null): string {
+  const normalized = String(value || '').trim()
+  if (!normalized) {
+    return ''
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    return normalized
+  }
+
+  const parsed = new Date(normalized)
+  if (Number.isNaN(parsed.getTime())) {
+    return ''
+  }
+
+  return parsed.toISOString().slice(0, 10)
+}
+
 function startOfDay(date: Date): Date {
   const next = new Date(date)
   next.setHours(0, 0, 0, 0)
@@ -126,8 +196,9 @@ function resolveReportDateParams({
       return { params: {}, error: 'Select both Date From and Date To for Custom Range.' }
     }
 
-    const fromDate = new Date(`${customDateFrom}T00:00:00`)
-    const toDate = new Date(`${customDateTo}T23:59:59.999`)
+    // Parse as UTC so dates are not shifted by the user's local offset (e.g. EAT UTC+3)
+    const fromDate = new Date(`${customDateFrom}T00:00:00.000Z`)
+    const toDate = new Date(`${customDateTo}T23:59:59.999Z`)
     if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
       return { params: {}, error: 'Choose valid custom range dates.' }
     }
@@ -159,9 +230,11 @@ function resolveReportDateParams({
       fromDate = startOfDay(addDays(now, -29))
       break
     case 'next_7_days':
+      fromDate = startOfDay(addDays(now, 1))
       toDate = endOfDay(addDays(now, 7))
       break
     case 'next_30_days':
+      fromDate = startOfDay(addDays(now, 1))
       toDate = endOfDay(addDays(now, 30))
       break
     case 'this_month':
@@ -212,6 +285,77 @@ function normalizeReportPathLabel(endpoint: string) {
 
 function isDuesReportEndpoint(endpoint: string | null | undefined): boolean {
   return normalizeReportPathLabel(String(endpoint || '')) === '/reports/dues'
+}
+
+function buildGeneratedReportRequest({
+  selectedReport,
+  availableAgents,
+  effectiveSelectedAgentIds,
+  selectedOffice,
+  reportDatePreset,
+  customDateFrom,
+  customDateTo,
+  extraParams,
+  exactDateFrom,
+  exactDateTo,
+}: {
+  selectedReport: GeneratedRequest['report'] | null
+  availableAgents: Array<{ id: number | string }>
+  effectiveSelectedAgentIds: string[]
+  selectedOffice: { id: number | string; scopeType?: string | null } | null
+  reportDatePreset: ReportDatePreset
+  customDateFrom: string
+  customDateTo: string
+  extraParams?: Record<string, string>
+  exactDateFrom?: string | null
+  exactDateTo?: string | null
+}): { request: GeneratedRequest | null; error?: string } {
+  if (!selectedReport) {
+    return { request: null, error: 'Select a report before generating.' }
+  }
+
+  const normalizedAgentIds = [...new Set(
+    effectiveSelectedAgentIds
+      .map((value) => Number(value || 0))
+      .filter((value) => Number.isInteger(value) && value > 0),
+  )]
+  const normalizedEndpoint = String(selectedReport.endpoint || '')
+  const resolvedDateParams = resolveReportDateParams({
+    preset: reportDatePreset,
+    customDateFrom,
+    customDateTo,
+  })
+
+  if (resolvedDateParams.error) {
+    return { request: null, error: resolvedDateParams.error }
+  }
+
+  const params: Record<string, unknown> = {
+    ...(exactDateFrom && exactDateTo
+      ? { dateFrom: exactDateFrom, dateTo: exactDateTo }
+      : resolvedDateParams.params),
+    ...(extraParams || {}),
+    ...(
+      normalizedAgentIds.length > 0 && normalizedAgentIds.length < availableAgents.length
+        ? { officerIds: normalizedAgentIds.join(',') }
+        : {}
+    ),
+    ...(normalizedEndpoint.endsWith('/reports/portfolio') ? { includeBreakdown: true } : {}),
+  }
+
+  if (String(selectedOffice?.scopeType || '').trim().toLowerCase() === 'branch') {
+    const normalizedOfficeId = Number(selectedOffice?.id || 0)
+    if (Number.isInteger(normalizedOfficeId) && normalizedOfficeId > 0) {
+      params.branchId = normalizedOfficeId
+    }
+  }
+
+  return {
+    request: {
+      report: selectedReport,
+      params,
+    },
+  }
 }
 
 function MultiAgentPicker({
@@ -288,19 +432,27 @@ function MultiAgentPicker({
 }
 
 export function ReportsPage() {
-  const [level, setLevel] = useState('')
-  const [officeId, setOfficeId] = useState('')
-  const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([])
-  const [categoryId, setCategoryId] = useState('')
-  const [reportId, setReportId] = useState('')
-  const [reportDatePreset, setReportDatePreset] = useState<ReportDatePreset>('last_30_days')
-  const [customDateFrom, setCustomDateFrom] = useState('')
-  const [customDateTo, setCustomDateTo] = useState('')
+  const [searchParams] = useSearchParams()
+  const deepLinkQueryKey = searchParams.toString()
+  const autoloadRequested = searchParams.get('autoload') === '1'
+  const deepLinkPassThroughParams = useMemo(() => extractReportPassThroughParams(searchParams), [deepLinkQueryKey, searchParams])
+  const deepLinkDateFrom = String(searchParams.get('dateFrom') || '').trim()
+  const deepLinkDateTo = String(searchParams.get('dateTo') || '').trim()
+  const initialDatePreset = parseReportDatePreset(searchParams.get('datePreset'))
+  const [level, setLevel] = useState(() => String(searchParams.get('level') || '').trim())
+  const [officeId, setOfficeId] = useState(() => String(searchParams.get('officeId') || '').trim())
+  const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>(() => parseCsvValues(searchParams.get('officerIds')))
+  const [categoryId, setCategoryId] = useState(() => String(searchParams.get('categoryId') || '').trim())
+  const [reportId, setReportId] = useState(() => String(searchParams.get('reportId') || '').trim())
+  const [reportDatePreset, setReportDatePreset] = useState<ReportDatePreset>(initialDatePreset || 'last_30_days')
+  const [customDateFrom, setCustomDateFrom] = useState(() => toDateInputValue(searchParams.get('customDateFrom') || searchParams.get('dateFrom')))
+  const [customDateTo, setCustomDateTo] = useState(() => toDateInputValue(searchParams.get('customDateTo') || searchParams.get('dateTo')))
   const [generatedRequest, setGeneratedRequest] = useState<GeneratedRequest | null>(null)
+  const autoloadedQueryRef = useRef<string | null>(null)
   const pushToast = useToastStore((state) => state.pushToast)
 
   const filterOptionsQuery = useQuery({
-    queryKey: ['reports', 'filter-options'],
+    queryKey: queryKeys.reports.filterOptions({ agentRole: 'loan_officer' }),
     queryFn: () => getReportFilterOptions({ agentRole: 'loan_officer' }),
     ...queryPolicies.report,
   })
@@ -316,6 +468,10 @@ export function ReportsPage() {
     reports: Array.isArray(filterOptions?.reports) ? filterOptions.reports : [],
   }), [filterOptions])
   const { scope, filterUi, levels, offices, agents, categories, reports } = normalizedFilterOptions
+  const deepLinkedReport = useMemo(
+    () => reports.find((entry) => entry.id === reportId) || null,
+    [reportId, reports],
+  )
   const effectiveLevel = useMemo(() => {
     if (levels.length === 0) {
       return ''
@@ -348,8 +504,11 @@ export function ReportsPage() {
     if (categoryId && categories.some((entry) => entry.id === categoryId)) {
       return categoryId
     }
+    if (deepLinkedReport && categories.some((entry) => entry.id === deepLinkedReport.category)) {
+      return deepLinkedReport.category
+    }
     return categories[0].id
-  }, [categories, categoryId])
+  }, [categories, categoryId, deepLinkedReport])
   const selectedOffice = useMemo(
     () => offices.find((entry) => String(entry.id) === String(effectiveOfficeId)) || null,
     [effectiveOfficeId, offices],
@@ -371,6 +530,13 @@ export function ReportsPage() {
     }
     return availableReports[0].id
   }, [availableReports, reportId])
+
+  const activeGeneratedRequest = useMemo(() => {
+    if (!generatedRequest) {
+      return null
+    }
+    return generatedRequest.report.id === effectiveReportId ? generatedRequest : null
+  }, [effectiveReportId, generatedRequest])
 
   const selectedReport = useMemo(
     () => reports.find((entry) => entry.id === effectiveReportId) || null,
@@ -403,61 +569,80 @@ export function ReportsPage() {
   }, [availableAgents, selectedAgentIds])
 
   const generatedReportQuery = useQuery({
-    queryKey: [
-      'reports',
-      'generated-report',
-      generatedRequest?.report.id || null,
-      generatedRequest?.params || {},
-    ],
-    queryFn: () => getReportByPath(generatedRequest?.report.endpoint || '/reports/portfolio', generatedRequest?.params || {}),
-    enabled: Boolean(generatedRequest),
+    queryKey: queryKeys.reports.generated(
+      activeGeneratedRequest?.report.id || null,
+      activeGeneratedRequest?.params || {},
+    ),
+    queryFn: () => getReportByPath(activeGeneratedRequest?.report.endpoint || '/reports/portfolio', activeGeneratedRequest?.params || {}),
+    enabled: Boolean(activeGeneratedRequest),
     ...queryPolicies.report,
   })
 
+  useEffect(() => {
+    if (!autoloadRequested || filterOptionsQuery.isLoading) {
+      return
+    }
+    if (autoloadedQueryRef.current === deepLinkQueryKey) {
+      return
+    }
+
+    const { request } = buildGeneratedReportRequest({
+      selectedReport,
+      availableAgents,
+      effectiveSelectedAgentIds,
+      selectedOffice,
+      reportDatePreset,
+      customDateFrom,
+      customDateTo,
+      extraParams: deepLinkPassThroughParams,
+      exactDateFrom: deepLinkDateFrom || null,
+      exactDateTo: deepLinkDateTo || null,
+    })
+
+    if (!request) {
+      return
+    }
+
+    setGeneratedRequest(request)
+    autoloadedQueryRef.current = deepLinkQueryKey
+  }, [
+    autoloadRequested,
+    availableAgents,
+    customDateFrom,
+    customDateTo,
+    deepLinkDateFrom,
+    deepLinkDateTo,
+    deepLinkPassThroughParams,
+    deepLinkQueryKey,
+    effectiveSelectedAgentIds,
+    filterOptionsQuery.isLoading,
+    reportDatePreset,
+    selectedOffice,
+    selectedReport,
+  ])
+
   function handleGenerate() {
-    if (!selectedReport) {
+    const { request, error } = buildGeneratedReportRequest({
+      selectedReport,
+      availableAgents,
+      effectiveSelectedAgentIds,
+      selectedOffice,
+      reportDatePreset,
+      customDateFrom,
+      customDateTo,
+      extraParams: deepLinkPassThroughParams,
+    })
+
+    if (error) {
+      pushToast({ type: 'error', message: error })
+      return
+    }
+    if (!request) {
       pushToast({ type: 'error', message: 'Select a report before generating.' })
       return
     }
 
-    const normalizedAgentIds = [...new Set(
-      effectiveSelectedAgentIds
-        .map((value) => Number(value || 0))
-        .filter((value) => Number.isInteger(value) && value > 0),
-    )]
-    const normalizedEndpoint = String(selectedReport.endpoint || '')
-    const resolvedDateParams = resolveReportDateParams({
-      preset: reportDatePreset,
-      customDateFrom,
-      customDateTo,
-    })
-
-    if (resolvedDateParams.error) {
-      pushToast({ type: 'error', message: resolvedDateParams.error })
-      return
-    }
-
-    const params: Record<string, unknown> = {
-      ...resolvedDateParams.params,
-      ...(
-        normalizedAgentIds.length > 0 && normalizedAgentIds.length < availableAgents.length
-          ? { officerIds: normalizedAgentIds.join(',') }
-          : {}
-      ),
-      ...(normalizedEndpoint.endsWith('/reports/portfolio') ? { includeBreakdown: true } : {}),
-    }
-
-    if (String(selectedOffice?.scopeType || '').trim().toLowerCase() === 'branch') {
-      const normalizedOfficeId = Number(selectedOffice?.id || 0)
-      if (Number.isInteger(normalizedOfficeId) && normalizedOfficeId > 0) {
-        params.branchId = normalizedOfficeId
-      }
-    }
-
-    setGeneratedRequest({
-      report: selectedReport,
-      params,
-    })
+    setGeneratedRequest(request)
   }
 
   return (
@@ -582,8 +767,13 @@ export function ReportsPage() {
         ) : null}
 
         <div className={styles.generateWrap}>
-          <button type="button" className={styles.generateButton} onClick={handleGenerate}>
-            Generate View
+          <button
+            type="button"
+            className={styles.generateButton}
+            onClick={handleGenerate}
+            disabled={generatedReportQuery.isFetching}
+          >
+            {generatedReportQuery.isFetching ? 'Generating…' : 'Generate View'}
           </button>
         </div>
       </section>
@@ -598,14 +788,14 @@ export function ReportsPage() {
         }}
       />
 
-      {generatedRequest ? (
+      {activeGeneratedRequest ? (
         <section className={styles.resultCard}>
           <div className={styles.resultHeader}>
             <div>
               <p className={styles.resultEyebrow}>Report Results</p>
-              <h2>{generatedRequest.report.label}</h2>
-              {generatedRequest.report.description ? (
-                <p className={styles.resultDescription}>{generatedRequest.report.description}</p>
+              <h2>{activeGeneratedRequest.report.label}</h2>
+              {activeGeneratedRequest.report.description ? (
+                <p className={styles.resultDescription}>{activeGeneratedRequest.report.description}</p>
               ) : null}
             </div>
             <Suspense
@@ -618,9 +808,9 @@ export function ReportsPage() {
               )}
             >
               <ReportExportActions
-                endpoint={generatedRequest.report.endpoint}
-                params={generatedRequest.params}
-                label={generatedRequest.report.label}
+                endpoint={activeGeneratedRequest.report.endpoint}
+                params={activeGeneratedRequest.params}
+                label={activeGeneratedRequest.report.label}
               />
             </Suspense>
           </div>
@@ -640,3 +830,4 @@ export function ReportsPage() {
     </div>
   )
 }
+

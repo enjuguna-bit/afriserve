@@ -4,6 +4,7 @@
  */
 import type { DbRunResult } from "../../../types/dataLayer.js";
 import type { PrismaTransactionClient } from "../../../db/prismaClient.js";
+import type { DomainEventPublisher, HierarchyServiceLike } from "../../../types/serviceContracts.js";
 
 export interface JournalLine {
   accountCode: string;
@@ -38,7 +39,7 @@ export interface LoanLifecycleDeps {
     run: (sql: string, params?: unknown[]) => Promise<DbRunResult>;
     get: (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
   }) => Promise<unknown> | unknown) => Promise<unknown>;
-  hierarchyService: any;
+  hierarchyService: HierarchyServiceLike;
   calculateExpectedTotal: (principal: number, interestRate: number, termWeeks: number) => number;
   addWeeksIso: (isoDate: string, weeksToAdd: number) => string;
   writeAuditLog: (payload: {
@@ -52,13 +53,5 @@ export interface LoanLifecycleDeps {
   invalidateReportCaches: () => Promise<void>;
   requireVerifiedClientKycForLoanApproval: boolean;
   generalLedgerService: GeneralLedgerServiceLike;
-  publishDomainEvent?: (payload: {
-    eventType: string;
-    aggregateType: string;
-    aggregateId: number | null | undefined;
-    tenantId?: string | null | undefined;
-    payload?: Record<string, unknown> | null | undefined;
-    metadata?: Record<string, unknown> | null | undefined;
-    occurredAt?: string | null | undefined;
-  }, tx?: any) => Promise<number>;
+  publishDomainEvent?: DomainEventPublisher;
 }

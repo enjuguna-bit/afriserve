@@ -1,4 +1,5 @@
 import type { DbRunResult } from "../types/dataLayer.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 
 type DbGet = (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
 type DbRun = (sql: string, params?: unknown[]) => Promise<DbRunResult>;
@@ -443,6 +444,7 @@ function createLoanUnderwritingService(options: {
       await run(
         `
           INSERT INTO loan_underwriting_assessments (
+            tenant_id,
             loan_id,
             client_id,
             branch_id,
@@ -469,9 +471,10 @@ function createLoanUnderwritingService(options: {
             assessed_at,
             updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
+          getCurrentTenantId(),
           assessment.loan_id,
           assessment.client_id,
           assessment.branch_id,

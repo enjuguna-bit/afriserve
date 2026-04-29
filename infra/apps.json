@@ -1,0 +1,538 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.42.1.51946",
+      "templateHash": "8567260092393921385"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "environmentName": {
+      "type": "string",
+      "defaultValue": "dev"
+    },
+    "namePrefix": {
+      "type": "string",
+      "defaultValue": "afriserve"
+    },
+    "uniqueSuffix": {
+      "type": "string"
+    },
+    "containerEnvironmentId": {
+      "type": "string"
+    },
+    "acrName": {
+      "type": "string"
+    },
+    "acrLoginServer": {
+      "type": "string"
+    },
+    "uploadsStorageName": {
+      "type": "string",
+      "defaultValue": "uploads"
+    },
+    "imageRepository": {
+      "type": "string",
+      "defaultValue": "afriservebackend"
+    },
+    "imageTag": {
+      "type": "string"
+    },
+    "databaseUrl": {
+      "type": "securestring"
+    },
+    "redisUrl": {
+      "type": "securestring"
+    },
+    "jwtSecret": {
+      "type": "securestring"
+    },
+    "corsOrigins": {
+      "type": "string",
+      "defaultValue": "https://placeholder.invalid"
+    },
+    "corsAllowNoOrigin": {
+      "type": "string",
+      "defaultValue": "true"
+    },
+    "apiBaseUrl": {
+      "type": "string",
+      "defaultValue": "https://placeholder.invalid/api"
+    },
+    "uploadPublicBaseUrl": {
+      "type": "string",
+      "defaultValue": "https://placeholder.invalid/uploads"
+    },
+    "webCpu": {
+      "type": "string",
+      "defaultValue": "1"
+    },
+    "webMemory": {
+      "type": "string",
+      "defaultValue": "2Gi"
+    },
+    "workerCpu": {
+      "type": "string",
+      "defaultValue": "0.5"
+    },
+    "workerMemory": {
+      "type": "string",
+      "defaultValue": "1Gi"
+    },
+    "webMinReplicas": {
+      "type": "int",
+      "defaultValue": 1
+    },
+    "webMaxReplicas": {
+      "type": "int",
+      "defaultValue": 2
+    },
+    "workerMinReplicas": {
+      "type": "int",
+      "defaultValue": 1
+    },
+    "workerMaxReplicas": {
+      "type": "int",
+      "defaultValue": 1
+    }
+  },
+  "variables": {
+    "webAppName": "[take(format('aca-{0}-{1}-web-{2}', parameters('namePrefix'), parameters('environmentName'), parameters('uniqueSuffix')), 32)]",
+    "workerAppName": "[take(format('aca-{0}-{1}-worker-{2}', parameters('namePrefix'), parameters('environmentName'), parameters('uniqueSuffix')), 32)]",
+    "imageReference": "[format('{0}/{1}:{2}', parameters('acrLoginServer'), parameters('imageRepository'), parameters('imageTag'))]",
+    "containerEnvironmentName": "[last(split(parameters('containerEnvironmentId'), '/'))]",
+    "acrPullRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2025-01-01",
+      "name": "[variables('webAppName')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvironmentName'))]",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "ingress": {
+            "allowInsecure": false,
+            "external": true,
+            "targetPort": 3000,
+            "transport": "auto"
+          },
+          "registries": [
+            {
+              "server": "[parameters('acrLoginServer')]",
+              "identity": "system"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "database-url",
+              "value": "[parameters('databaseUrl')]"
+            },
+            {
+              "name": "redis-url",
+              "value": "[parameters('redisUrl')]"
+            },
+            {
+              "name": "jwt-secret",
+              "value": "[parameters('jwtSecret')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "web",
+              "image": "[variables('imageReference')]",
+              "env": [
+                {
+                  "name": "NODE_ENV",
+                  "value": "production"
+                },
+                {
+                  "name": "PORT",
+                  "value": "3000"
+                },
+                {
+                  "name": "DB_CLIENT",
+                  "value": "postgres"
+                },
+                {
+                  "name": "DATABASE_URL",
+                  "secretRef": "database-url"
+                },
+                {
+                  "name": "JWT_SECRET",
+                  "secretRef": "jwt-secret"
+                },
+                {
+                  "name": "AUTH_TOKEN_STORE_REDIS_URL",
+                  "secretRef": "redis-url"
+                },
+                {
+                  "name": "AUTH_SESSION_CACHE_REDIS_URL",
+                  "secretRef": "redis-url"
+                },
+                {
+                  "name": "RATE_LIMIT_REDIS_URL",
+                  "secretRef": "redis-url"
+                },
+                {
+                  "name": "JOB_QUEUE_ENABLED",
+                  "value": "true"
+                },
+                {
+                  "name": "JOB_QUEUE_ROLE",
+                  "value": "scheduler"
+                },
+                {
+                  "name": "JOB_QUEUE_REDIS_URL",
+                  "secretRef": "redis-url"
+                },
+                {
+                  "name": "TRUST_PROXY",
+                  "value": "true"
+                },
+                {
+                  "name": "HTTPS_ENFORCE_IN_PRODUCTION",
+                  "value": "true"
+                },
+                {
+                  "name": "HTTPS_TRUST_FORWARDED_PROTO",
+                  "value": "true"
+                },
+                {
+                  "name": "ALLOW_CONSOLE_RESET_TOKENS",
+                  "value": "false"
+                },
+                {
+                  "name": "REQUIRE_VERIFIED_CLIENT_KYC_FOR_LOAN_APPROVAL",
+                  "value": "true"
+                },
+                {
+                  "name": "DEFAULT_TENANT_ID",
+                  "value": "default"
+                },
+                {
+                  "name": "UPLOAD_STORAGE_DRIVER",
+                  "value": "local"
+                },
+                {
+                  "name": "UPLOAD_LOCAL_DIR",
+                  "value": "/app/data/uploads"
+                },
+                {
+                  "name": "UPLOAD_PUBLIC_BASE_URL",
+                  "value": "[parameters('uploadPublicBaseUrl')]"
+                },
+                {
+                  "name": "API_BASE_URL",
+                  "value": "[parameters('apiBaseUrl')]"
+                },
+                {
+                  "name": "CORS_ORIGINS",
+                  "value": "[parameters('corsOrigins')]"
+                },
+                {
+                  "name": "CORS_ALLOW_NO_ORIGIN",
+                  "value": "[parameters('corsAllowNoOrigin')]"
+                },
+                {
+                  "name": "REPORT_CACHE_ENABLED",
+                  "value": "false"
+                },
+                {
+                  "name": "ACCOUNTING_GL_CONSUMER_ENABLED",
+                  "value": "false"
+                },
+                {
+                  "name": "EVENT_BROKER_PROVIDER",
+                  "value": "none"
+                },
+                {
+                  "name": "MOBILE_MONEY_PROVIDER",
+                  "value": "mock"
+                },
+                {
+                  "name": "MOBILE_MONEY_C2B_ENABLED",
+                  "value": "false"
+                },
+                {
+                  "name": "MOBILE_MONEY_B2C_ENABLED",
+                  "value": "false"
+                },
+                {
+                  "name": "MOBILE_MONEY_STK_ENABLED",
+                  "value": "false"
+                },
+                {
+                  "name": "OTEL_SERVICE_NAME",
+                  "value": "afriserve-api"
+                },
+                {
+                  "name": "LOG_LEVEL",
+                  "value": "info"
+                }
+              ],
+              "probes": [
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 3000
+                  },
+                  "initialDelaySeconds": 30,
+                  "periodSeconds": 30,
+                  "timeoutSeconds": 5,
+                  "failureThreshold": 3
+                },
+                {
+                  "type": "Readiness",
+                  "httpGet": {
+                    "path": "/ready",
+                    "port": 3000
+                  },
+                  "initialDelaySeconds": 15,
+                  "periodSeconds": 20,
+                  "timeoutSeconds": 5,
+                  "failureThreshold": 3
+                }
+              ],
+              "resources": {
+                "cpu": "[json(parameters('webCpu'))]",
+                "memory": "[parameters('webMemory')]"
+              },
+              "volumeMounts": [
+                {
+                  "volumeName": "uploads",
+                  "mountPath": "/app/data/uploads"
+                }
+              ]
+            }
+          ],
+          "volumes": [
+            {
+              "name": "uploads",
+              "storageType": "AzureFile",
+              "storageName": "[parameters('uploadsStorageName')]"
+            }
+          ],
+          "scale": {
+            "minReplicas": "[parameters('webMinReplicas')]",
+            "maxReplicas": "[parameters('webMaxReplicas')]"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2025-01-01",
+      "name": "[variables('workerAppName')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvironmentName'))]",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "registries": [
+            {
+              "server": "[parameters('acrLoginServer')]",
+              "identity": "system"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "database-url",
+              "value": "[parameters('databaseUrl')]"
+            },
+            {
+              "name": "redis-url",
+              "value": "[parameters('redisUrl')]"
+            },
+            {
+              "name": "jwt-secret",
+              "value": "[parameters('jwtSecret')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "worker",
+              "image": "[variables('imageReference')]",
+              "command": [
+                "node",
+                "dist/src/worker.js"
+              ],
+              "env": [
+                {
+                  "name": "NODE_ENV",
+                  "value": "production"
+                },
+                {
+                  "name": "DB_CLIENT",
+                  "value": "postgres"
+                },
+                {
+                  "name": "DATABASE_URL",
+                  "secretRef": "database-url"
+                },
+                {
+                  "name": "JWT_SECRET",
+                  "secretRef": "jwt-secret"
+                },
+                {
+                  "name": "AUTH_TOKEN_STORE_REDIS_URL",
+                  "secretRef": "redis-url"
+                },
+                {
+                  "name": "AUTH_SESSION_CACHE_REDIS_URL",
+                  "secretRef": "redis-url"
+                },
+                {
+                  "name": "RATE_LIMIT_REDIS_URL",
+                  "secretRef": "redis-url"
+                },
+                {
+                  "name": "JOB_QUEUE_ENABLED",
+                  "value": "true"
+                },
+                {
+                  "name": "JOB_QUEUE_ROLE",
+                  "value": "worker"
+                },
+                {
+                  "name": "JOB_QUEUE_REDIS_URL",
+                  "secretRef": "redis-url"
+                },
+                {
+                  "name": "DEFAULT_TENANT_ID",
+                  "value": "default"
+                },
+                {
+                  "name": "UPLOAD_STORAGE_DRIVER",
+                  "value": "local"
+                },
+                {
+                  "name": "UPLOAD_LOCAL_DIR",
+                  "value": "/app/data/uploads"
+                },
+                {
+                  "name": "REPORT_CACHE_ENABLED",
+                  "value": "false"
+                },
+                {
+                  "name": "ACCOUNTING_GL_CONSUMER_ENABLED",
+                  "value": "false"
+                },
+                {
+                  "name": "EVENT_BROKER_PROVIDER",
+                  "value": "none"
+                },
+                {
+                  "name": "MOBILE_MONEY_PROVIDER",
+                  "value": "mock"
+                },
+                {
+                  "name": "MOBILE_MONEY_C2B_ENABLED",
+                  "value": "false"
+                },
+                {
+                  "name": "MOBILE_MONEY_B2C_ENABLED",
+                  "value": "false"
+                },
+                {
+                  "name": "MOBILE_MONEY_STK_ENABLED",
+                  "value": "false"
+                },
+                {
+                  "name": "OTEL_SERVICE_NAME",
+                  "value": "afriserve-queue-worker"
+                },
+                {
+                  "name": "LOG_LEVEL",
+                  "value": "info"
+                }
+              ],
+              "resources": {
+                "cpu": "[json(parameters('workerCpu'))]",
+                "memory": "[parameters('workerMemory')]"
+              },
+              "volumeMounts": [
+                {
+                  "volumeName": "uploads",
+                  "mountPath": "/app/data/uploads"
+                }
+              ]
+            }
+          ],
+          "volumes": [
+            {
+              "name": "uploads",
+              "storageType": "AzureFile",
+              "storageName": "[parameters('uploadsStorageName')]"
+            }
+          ],
+          "scale": {
+            "minReplicas": "[parameters('workerMinReplicas')]",
+            "maxReplicas": "[parameters('workerMaxReplicas')]"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), resourceId('Microsoft.App/containerApps', variables('webAppName')), variables('acrPullRoleDefinitionId'))]",
+      "properties": {
+        "roleDefinitionId": "[variables('acrPullRoleDefinitionId')]",
+        "principalId": "[reference(resourceId('Microsoft.App/containerApps', variables('webAppName')), '2025-01-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/containerApps', variables('webAppName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), resourceId('Microsoft.App/containerApps', variables('workerAppName')), variables('acrPullRoleDefinitionId'))]",
+      "properties": {
+        "roleDefinitionId": "[variables('acrPullRoleDefinitionId')]",
+        "principalId": "[reference(resourceId('Microsoft.App/containerApps', variables('workerAppName')), '2025-01-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/containerApps', variables('workerAppName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "webAppName": {
+      "type": "string",
+      "value": "[variables('webAppName')]"
+    },
+    "webAppFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.App/containerApps', variables('webAppName')), '2025-01-01').configuration.ingress.fqdn]"
+    },
+    "workerAppName": {
+      "type": "string",
+      "value": "[variables('workerAppName')]"
+    }
+  }
+}

@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 import { prisma, type PrismaTransactionClient } from "../db/prismaClient.js";
 import { createMobileMoneyReadRepository } from "../repositories/mobileMoneyReadRepository.js";
-import { CircuitBreakerOpenError, CircuitBreakerTimeoutError, createCircuitBreaker } from "./circuitBreaker.js";
+import {
+  CircuitBreakerOpenError,
+  CircuitBreakerTimeoutError,
+  createCircuitBreaker,
+} from "./circuitBreaker.js";
 import {
   DomainValidationError,
   LoanNotFoundError,
@@ -9,6 +13,8 @@ import {
   UnauthorizedDomainError,
   UpstreamServiceError,
 } from "../domain/errors.js";
+import { getConfiguredDbClient } from "../utils/env.js";
+import { getCurrentTenantId, runWithTenant } from "../utils/tenantStore.js";
 
 interface RepaymentResultLike {
   repayment: Record<string, any> | null;
@@ -126,8 +132,124 @@ interface MobileMoneyServiceDeps {
   providerTimeoutMs?: number;
   circuitFailureThreshold?: number;
   circuitResetTimeoutMs?: number;
-  logger?: { info?: (message: string, meta?: Record<string, unknown>) => void; warn?: (message: string, meta?: Record<string, unknown>) => void } | null;
-  metrics?: { observeBackgroundTask?: (taskName: string, payload?: Record<string, unknown>) => void } | null;
+  logger?: {
+    info?: (message: string, meta?: Record<string, unknown>) => void;
+    warn?: (message: string, meta?: Record<string, unknown>) => void;
+  } | null;
+  metrics?: {
+    observeBackgroundTask?: (taskName: string, payload?: Record<string, unknown>) => void;
+    observePaymentFailure?: (reason: string) => void;
+  } | null;
+}
+
+const configuredDbClient = getConfiguredDbClient();
+const WEBHOOK_FRESHNESS_WINDOW_MS = 5 * 60 * 1000;
+const C2B_RECONCILIATION_TRANSACTION_OPTIONS = {
+  maxWait: 5_000,
+  timeout: 20_000,
+} as const;
+
+function toIsoWebhookTimestamp(value: unknown): string | null {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  if (/^\d{14}$/.test(raw)) {
+    const year = Number(raw.slice(0, 4));
+    const month = Number(raw.slice(4, 6));
+    const day = Number(raw.slice(6, 8));
+    const hour = Number(raw.slice(8, 10));
+    const minute = Number(raw.slice(10, 12));
+    const second = Number(raw.slice(12, 14));
+    const timestamp = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    if (!Number.isNaN(timestamp.getTime())) {
+      return timestamp.toISOString();
+    }
+  }
+
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString();
+  }
+
+  return null;
+}
+
+function readNamedValue(items: unknown, acceptedNames: string[]): unknown {
+  if (!Array.isArray(items)) {
+    return null;
+  }
+
+  const accepted = new Set(
+    acceptedNames.map((name) =>
+      String(name || "")
+        .trim()
+        .toLowerCase(),
+    ),
+  );
+  for (const item of items) {
+    const key = String(
+      (item as { Name?: unknown; name?: unknown; Key?: unknown; key?: unknown })?.Name ||
+        (item as { name?: unknown })?.name ||
+        (item as { Key?: unknown })?.Key ||
+        (item as { key?: unknown })?.key ||
+        "",
+    )
+      .trim()
+      .toLowerCase();
+    if (!accepted.has(key)) {
+      continue;
+    }
+    return (
+      (item as { Value?: unknown; value?: unknown })?.Value ?? (item as { value?: unknown })?.value ?? null
+    );
+  }
+
+  return null;
+}
+
+function extractB2CCallbackTimestamp(body: Record<string, any>): string | null {
+  const resultBlock =
+    body.Result && typeof body.Result === "object"
+      ? body.Result
+      : body.result && typeof body.result === "object"
+        ? body.result
+        : null;
+
+  return toIsoWebhookTimestamp(
+    body["x-mobile-money-timestamp"] ||
+      body.callbackTimestamp ||
+      body.CallbackTimestamp ||
+      body.timestamp ||
+      body.Timestamp ||
+      resultBlock?.TransactionCompletedDateTime ||
+      resultBlock?.CompletionTime ||
+      resultBlock?.Timestamp ||
+      readNamedValue(resultBlock?.ResultParameters?.ResultParameter, [
+        "TransactionCompletedDateTime",
+        "TransactionDate",
+        "CompletionTime",
+        "Timestamp",
+        "ResultTime",
+      ]),
+  );
+}
+
+async function lockRowForUpdate(
+  transactionClient: PrismaTransactionClient,
+  tableName: "mobile_money_c2b_events" | "mobile_money_b2c_disbursements",
+  rowId: number,
+): Promise<void> {
+  if (configuredDbClient !== "postgres") {
+    return;
+  }
+  if (!Number.isInteger(rowId) || rowId <= 0) {
+    return;
+  }
+
+  const tenantId = getCurrentTenantId();
+  await transactionClient.$queryRawUnsafe(`SELECT id FROM ${tableName} WHERE id = $1 AND tenant_id = $2 FOR UPDATE`, rowId, tenantId);
 }
 
 function normalizePhoneNumber(value: unknown): string {
@@ -149,18 +271,22 @@ function normalizePhoneNumber(value: unknown): string {
 
 function isSqliteUniqueError(error: Error & { code?: string }): boolean {
   const message = String(error?.message || "");
-  return String(error?.code || "").toUpperCase() === "SQLITE_CONSTRAINT_UNIQUE"
-    || message.toLowerCase().includes("unique constraint failed");
+  return (
+    String(error?.code || "").toUpperCase() === "SQLITE_CONSTRAINT_UNIQUE" ||
+    message.toLowerCase().includes("unique constraint failed")
+  );
 }
 
 function isPrismaUniqueError(error: unknown): boolean {
   const candidate = error as { code?: string; message?: string };
-  return String(candidate?.code || "") === "P2002" || String(candidate?.message || "").includes("Unique constraint");
+  return (
+    String(candidate?.code || "") === "P2002" ||
+    String(candidate?.message || "").includes("Unique constraint")
+  );
 }
 
 function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
   const {
-    run,
     get,
     all,
     writeAuditLog,
@@ -215,7 +341,11 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
     }
   }
 
-  async function resolveLoanByAccountReference(accountReference: string) {
+  async function resolveLoanByAccountReference(
+    accountReference: string,
+    transactionClient?: PrismaTransactionClient,
+  ) {
+    const db = transactionClient || prisma;
     const trimmed = String(accountReference || "").trim();
     if (!trimmed) {
       return null;
@@ -223,8 +353,8 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
     const numericMatch = trimmed.match(/\d+/);
     const numericCandidate = numericMatch ? Number(numericMatch[0]) : null;
     if (numericCandidate && Number.isInteger(numericCandidate) && numericCandidate > 0) {
-      const byId = await prisma.loans.findUnique({
-        where: { id: numericCandidate },
+      const byId = await db.loans.findFirst({
+        where: { id: numericCandidate, tenant_id: getCurrentTenantId() },
         select: { id: true, status: true, branch_id: true },
       });
       if (byId) {
@@ -232,16 +362,13 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
       }
     }
 
-    const exactReferenceCandidates = [...new Set([
-      trimmed,
-      trimmed.toLowerCase(),
-      trimmed.toUpperCase(),
-    ])];
-    const matched = await prisma.loans.findFirst({
+    const exactReferenceCandidates = [...new Set([trimmed, trimmed.toLowerCase(), trimmed.toUpperCase()])];
+    const matched = await db.loans.findFirst({
       where: {
         external_reference: {
           in: exactReferenceCandidates,
         },
+        tenant_id: getCurrentTenantId(),
       },
       select: {
         id: true,
@@ -268,39 +395,74 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
     }
     const providedBuffer = Buffer.from(String(token || "").trim());
     const expectedBuffer = Buffer.from(webhookToken);
-    if (providedBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(providedBuffer, expectedBuffer)) {
+    if (
+      providedBuffer.length !== expectedBuffer.length ||
+      !crypto.timingSafeEqual(providedBuffer, expectedBuffer)
+    ) {
       throw new UnauthorizedDomainError("Invalid webhook token");
     }
   }
 
-  function buildWebhookSignature(body: Record<string, any>): string {
-    return crypto
-      .createHmac("sha256", webhookToken)
-      .update(JSON.stringify(body || {}))
-      .digest("hex");
+  function resolveSignedPayload(rawBody: string | null | undefined, body: Record<string, any>): string {
+    const normalizedRawBody =
+      typeof rawBody === "string" && rawBody.length > 0 ? rawBody : JSON.stringify(body || {});
+    return normalizedRawBody;
   }
 
-  function assertB2CCallbackSignature(signature: string | null, body: Record<string, any>): void {
-    if (!b2cEnabled) {
-      throw new ServiceUnavailableDomainError("M-Pesa B2C callback processing is disabled");
+  function buildWebhookSignature(payload: string): string {
+    return crypto.createHmac("sha256", webhookToken).update(payload).digest("hex");
+  }
+
+  function assertCallbackSignature(args: {
+    callbackName: "B2C" | "C2B" | "STK";
+    signature: string | null;
+    rawBody?: string | null;
+    body: Record<string, any>;
+    enabled: boolean;
+  }): void {
+    if (!args.enabled) {
+      throw new ServiceUnavailableDomainError(`M-Pesa ${args.callbackName} callback processing is disabled`);
     }
     if (!webhookToken) {
       throw new ServiceUnavailableDomainError("M-Pesa webhook token is not configured");
     }
 
-    const provided = String(signature || "").trim().toLowerCase();
+    const provided = String(args.signature || "")
+      .trim()
+      .toLowerCase();
     if (!provided) {
-      throw new UnauthorizedDomainError("Missing B2C callback signature");
+      throw new UnauthorizedDomainError(`Missing ${args.callbackName} callback signature`);
     }
 
-    const expected = buildWebhookSignature(body || {}).toLowerCase();
+    const expected = buildWebhookSignature(resolveSignedPayload(args.rawBody, args.body || {})).toLowerCase();
     const providedBuffer = Buffer.from(provided);
     const expectedBuffer = Buffer.from(expected);
     if (
-      providedBuffer.length !== expectedBuffer.length
-      || !crypto.timingSafeEqual(providedBuffer, expectedBuffer)
+      providedBuffer.length !== expectedBuffer.length ||
+      !crypto.timingSafeEqual(providedBuffer, expectedBuffer)
     ) {
-      throw new UnauthorizedDomainError("Invalid B2C callback signature");
+      throw new UnauthorizedDomainError(`Invalid ${args.callbackName} callback signature`);
+    }
+  }
+
+  function assertWebhookFreshness(callbackName: "B2C" | "C2B" | "STK", timestamp: string | null): void {
+    if (!timestamp) {
+      throw new UnauthorizedDomainError(`Missing ${callbackName} callback timestamp`);
+    }
+
+    const callbackAtMs = new Date(timestamp).getTime();
+    if (!Number.isFinite(callbackAtMs)) {
+      throw new UnauthorizedDomainError(`Invalid ${callbackName} callback timestamp`);
+    }
+
+    const nowMs = Date.now();
+    if (
+      callbackAtMs < nowMs - WEBHOOK_FRESHNESS_WINDOW_MS ||
+      callbackAtMs > nowMs + WEBHOOK_FRESHNESS_WINDOW_MS
+    ) {
+      throw new UnauthorizedDomainError(
+        `${callbackName} callback timestamp is outside the accepted 5 minute window`,
+      );
     }
   }
 
@@ -310,7 +472,9 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
     }
 
     const providerRequestId = String(body.providerRequestId || body.provider_request_id || "").trim() || null;
-    const normalizedStatus = String(body.status || "").trim().toLowerCase();
+    const normalizedStatus = String(body.status || "")
+      .trim()
+      .toLowerCase();
     const status: "completed" | "failed" = ["completed", "success", "ok"].includes(normalizedStatus)
       ? "completed"
       : "failed";
@@ -318,17 +482,61 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
     return {
       providerRequestId,
       status,
-      failureReason: status === "failed"
-        ? String(body.failureReason || body.resultDesc || "B2C callback reported failure").trim() || "B2C callback reported failure"
-        : null,
+      failureReason:
+        status === "failed"
+          ? String(body.failureReason || body.resultDesc || "B2C callback reported failure").trim() ||
+            "B2C callback reported failure"
+          : null,
       raw: body,
     };
   }
 
+  function resolveC2BCallbackTimestamp(
+    headerTimestamp: string | null,
+    body: Record<string, any>,
+    paidAt: string | null,
+  ): string | null {
+    return (
+      toIsoWebhookTimestamp(headerTimestamp) ||
+      paidAt ||
+      toIsoWebhookTimestamp(body.TransTime || body.transTime || body.paidAt)
+    );
+  }
+
+  function resolveSTKCallbackTimestamp(
+    headerTimestamp: string | null,
+    body: Record<string, any>,
+    paidAt: string | null,
+  ): string | null {
+    const stkCallback =
+      body.Body?.stkCallback && typeof body.Body.stkCallback === "object"
+        ? body.Body.stkCallback
+        : body.stkCallback && typeof body.stkCallback === "object"
+          ? body.stkCallback
+          : body;
+    return (
+      toIsoWebhookTimestamp(headerTimestamp) ||
+      paidAt ||
+      toIsoWebhookTimestamp(
+        readNamedValue(stkCallback.CallbackMetadata?.Item || stkCallback.CallbackMetadata, [
+          "TransactionDate",
+          "PaidAt",
+          "Timestamp",
+        ]),
+      ) ||
+      toIsoWebhookTimestamp(
+        stkCallback.Timestamp || body.Timestamp || stkCallback.timestamp || body.timestamp,
+      )
+    );
+  }
+
   function mapC2BEventRow(row: C2BEventRowLike) {
-    const isUnmatched = String(row.status || "").trim().toLowerCase() === "rejected"
-      && !row.loan_id
-      && !row.repayment_id;
+    const isUnmatched =
+      String(row.status || "")
+        .trim()
+        .toLowerCase() === "rejected" &&
+      !row.loan_id &&
+      !row.repayment_id;
     return {
       id: Number(row.id),
       provider: row.provider,
@@ -379,11 +587,13 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
       where: { id: args.eventId },
       select: { status: true, loan_id: true, repayment_id: true },
     });
-    const currentStatus = String(currentEvent?.status || "").trim().toLowerCase();
+    const currentStatus = String(currentEvent?.status || "")
+      .trim()
+      .toLowerCase();
     if (
-      currentStatus !== "reconciled"
-      || Number(currentEvent?.loan_id || 0) !== args.loanId
-      || Number(currentEvent?.repayment_id || 0) !== args.repaymentId
+      currentStatus !== "reconciled" ||
+      Number(currentEvent?.loan_id || 0) !== args.loanId ||
+      Number(currentEvent?.repayment_id || 0) !== args.repaymentId
     ) {
       throw new DomainValidationError("C2B event state changed before reconciliation could be finalized");
     }
@@ -443,12 +653,13 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
     const providerResponse = await executeProviderRequest({
       breaker: stkCircuitBreaker,
       actionLabel: "STK push",
-      work: () => mobileMoneyProvider.initiateSTKPush!({
-        amount,
-        phoneNumber,
-        accountReference,
-        transactionDesc,
-      }),
+      work: () =>
+        mobileMoneyProvider.initiateSTKPush!({
+          amount,
+          phoneNumber,
+          accountReference,
+          transactionDesc,
+        }),
     });
 
     await writeAuditLog({
@@ -470,7 +681,10 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
 
     return {
       provider: mobileMoneyProvider.providerName,
-      status: String(providerResponse.status || "accepted").trim().toLowerCase() || "accepted",
+      status:
+        String(providerResponse.status || "accepted")
+          .trim()
+          .toLowerCase() || "accepted",
       providerRequestId: providerResponse.providerRequestId || null,
       checkoutRequestId: providerResponse.checkoutRequestId || null,
       merchantRequestId: providerResponse.merchantRequestId || null,
@@ -483,29 +697,48 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
 
   async function handleSTKCallback(args: {
     body: Record<string, any>;
+    rawBody?: string | null;
+    signature?: string | null;
+    timestamp?: string | null;
     ipAddress?: string | null | undefined;
   }) {
     if (!stkEnabled) {
       throw new ServiceUnavailableDomainError("M-Pesa STK callback processing is disabled");
     }
 
-    const parsed = typeof mobileMoneyProvider.parseSTKCallback === "function"
-      ? mobileMoneyProvider.parseSTKCallback({ body: args.body || {} })
-      : {
-        providerRequestId: String(args.body?.CheckoutRequestID || args.body?.checkoutRequestId || "").trim() || null,
-        checkoutRequestId: String(args.body?.CheckoutRequestID || args.body?.checkoutRequestId || "").trim() || null,
-        merchantRequestId: String(args.body?.MerchantRequestID || args.body?.merchantRequestId || "").trim() || null,
-        status: Number(args.body?.ResultCode ?? args.body?.resultCode) === 0 ? "completed" : "failed",
-        resultCode: Number.isFinite(Number(args.body?.ResultCode ?? args.body?.resultCode))
-          ? Number(args.body?.ResultCode ?? args.body?.resultCode)
-          : null,
-        resultDesc: String(args.body?.ResultDesc || args.body?.resultDesc || "").trim() || null,
-        amount: null,
-        externalReceipt: null,
-        phoneNumber: null,
-        paidAt: null,
-        raw: args.body || {},
-      };
+    assertCallbackSignature({
+      callbackName: "STK",
+      signature: args.signature || null,
+      rawBody: args.rawBody || null,
+      body: args.body || {},
+      enabled: stkEnabled,
+    });
+
+    const parsed =
+      typeof mobileMoneyProvider.parseSTKCallback === "function"
+        ? mobileMoneyProvider.parseSTKCallback({ body: args.body || {} })
+        : {
+            providerRequestId:
+              String(args.body?.CheckoutRequestID || args.body?.checkoutRequestId || "").trim() || null,
+            checkoutRequestId:
+              String(args.body?.CheckoutRequestID || args.body?.checkoutRequestId || "").trim() || null,
+            merchantRequestId:
+              String(args.body?.MerchantRequestID || args.body?.merchantRequestId || "").trim() || null,
+            status: Number(args.body?.ResultCode ?? args.body?.resultCode) === 0 ? "completed" : "failed",
+            resultCode: Number.isFinite(Number(args.body?.ResultCode ?? args.body?.resultCode))
+              ? Number(args.body?.ResultCode ?? args.body?.resultCode)
+              : null,
+            resultDesc: String(args.body?.ResultDesc || args.body?.resultDesc || "").trim() || null,
+            amount: null,
+            externalReceipt: null,
+            phoneNumber: null,
+            paidAt: null,
+            raw: args.body || {},
+          };
+    assertWebhookFreshness(
+      "STK",
+      resolveSTKCallbackTimestamp(args.timestamp || null, args.body || {}, parsed.paidAt || null),
+    );
 
     await writeAuditLog({
       userId: null,
@@ -530,12 +763,180 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
     return parsed;
   }
 
+  async function processC2BEvent(args: {
+    eventId: number;
+    externalReceipt: string;
+    accountReference: string;
+    amount: number;
+    payerPhone: string;
+    ipAddress?: string | null | undefined;
+  }) {
+    return prisma.$transaction(async (tx: PrismaTransactionClient) => {
+      await lockRowForUpdate(tx, "mobile_money_c2b_events", Number(args.eventId || 0));
+
+      const event = await tx.mobile_money_c2b_events.findUnique({
+        where: { id: Number(args.eventId || 0) },
+        select: {
+          id: true,
+          status: true,
+          loan_id: true,
+          repayment_id: true,
+          reconciliation_note: true,
+        },
+      });
+      if (!event) {
+        throw new DomainValidationError("C2B event not found after insert");
+      }
+
+      const currentStatus = String(event.status || "")
+        .trim()
+        .toLowerCase();
+      if (currentStatus === "reconciled" && Number(event.repayment_id || 0) > 0) {
+        return {
+          status: "duplicate",
+          message: "Receipt already reconciled",
+          repaymentId: Number(event.repayment_id || 0),
+          loanId: Number(event.loan_id || 0) || null,
+        };
+      }
+      if (currentStatus === "rejected" && Number(event.repayment_id || 0) <= 0) {
+        return {
+          status: "unmatched",
+          message: String(
+            event.reconciliation_note || "Payment received but no loan matched the account reference",
+          ),
+          repaymentId: null,
+          loanId: Number(event.loan_id || 0) || null,
+        };
+      }
+      if (currentStatus !== "received") {
+        return {
+          status: "duplicate",
+          message: "Receipt is already being processed",
+          repaymentId: Number(event.repayment_id || 0) || null,
+          loanId: Number(event.loan_id || 0) || null,
+        };
+      }
+
+      const existingRepayment = await tx.repayments.findFirst({
+        where: { external_receipt: args.externalReceipt },
+        select: { id: true, loan_id: true },
+      });
+      if (existingRepayment) {
+        await markEventReconciled({
+          eventId: Number(event.id || 0),
+          loanId: Number(existingRepayment.loan_id || 0),
+          repaymentId: Number(existingRepayment.id || 0),
+          reconciliationNote: "Matched to existing repayment by external receipt",
+          transactionClient: tx,
+        });
+        return {
+          status: "duplicate",
+          message: "Receipt already reconciled",
+          repaymentId: existingRepayment.id,
+          loanId: existingRepayment.loan_id,
+        };
+      }
+
+      const loan = await resolveLoanByAccountReference(args.accountReference, tx);
+      if (!loan) {
+        const rejectUpdate = await tx.mobile_money_c2b_events.updateMany({
+          where: {
+            id: Number(event.id || 0),
+            status: "received",
+          },
+          data: {
+            status: "rejected",
+            reconciliation_note: `Loan not found for account reference "${args.accountReference}"`,
+          },
+        });
+        if (Number(rejectUpdate.count || 0) !== 1) {
+          throw new DomainValidationError(
+            "C2B event state changed before unmatched receipt could be recorded",
+          );
+        }
+        return {
+          status: "unmatched",
+          message: "Payment received but no loan matched the account reference",
+          repaymentId: null,
+          loanId: null,
+        };
+      }
+
+      try {
+        const result = await repaymentService.recordRepayment({
+          loanId: Number(loan.id),
+          payload: {
+            amount: args.amount,
+            note: `M-Pesa C2B ${args.externalReceipt}`,
+          },
+          user: {
+            sub: null,
+          },
+          ipAddress: args.ipAddress || null,
+          skipScopeCheck: true,
+          source: {
+            channel: "c2b",
+            provider: mobileMoneyProvider.providerName,
+            externalReceipt: args.externalReceipt,
+            externalReference: args.accountReference,
+            payerPhone: args.payerPhone,
+          },
+          transactionClient: tx,
+        });
+        if (!result.repayment?.id) {
+          throw new DomainValidationError("Repayment reconciliation failed to persist a repayment record");
+        }
+
+        await markEventReconciled({
+          eventId: Number(event.id || 0),
+          loanId: Number(loan.id),
+          repaymentId: Number(result.repayment.id),
+          reconciliationNote: "Auto-reconciled successfully",
+          transactionClient: tx,
+        });
+
+        return {
+          status: "reconciled",
+          message: "Payment reconciled to loan installment",
+          loanId: Number(loan.id),
+          repaymentId: Number(result.repayment.id),
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Failed to reconcile payment";
+        await tx.mobile_money_c2b_events.updateMany({
+          where: {
+            id: Number(event.id || 0),
+            status: {
+              in: ["received", "rejected"],
+            },
+          },
+          data: {
+            status: "rejected",
+            reconciliation_note: String(errorMessage),
+          },
+        });
+        throw error;
+      }
+    }, C2B_RECONCILIATION_TRANSACTION_OPTIONS);
+  }
+
   async function handleC2BWebhook(args: {
     body: Record<string, any>;
+    rawBody?: string | null;
     webhookToken: string | null;
+    signature?: string | null;
+    timestamp?: string | null;
     ipAddress?: string | null | undefined;
   }) {
     assertWebhookToken(args.webhookToken);
+    assertCallbackSignature({
+      callbackName: "C2B",
+      signature: args.signature || null,
+      rawBody: args.rawBody || null,
+      body: args.body || {},
+      enabled: c2bEnabled,
+    });
 
     const parsed = mobileMoneyProvider.parseC2BWebhook({ body: args.body || {} });
     const externalReceipt = String(parsed.externalReceipt || "").trim();
@@ -546,20 +947,29 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
       throw new DomainValidationError("Invalid M-Pesa amount");
     }
 
-    const paidAt = parsed.paidAt || new Date().toISOString();
     const accountReference = String(parsed.accountReference || "").trim();
     if (!accountReference) {
       throw new DomainValidationError("Missing BillRefNumber/account reference");
     }
 
-    let eventId = null;
+    const callbackTimestamp = resolveC2BCallbackTimestamp(
+      args.timestamp || null,
+      args.body || {},
+      parsed.paidAt || null,
+    );
+    assertWebhookFreshness("C2B", callbackTimestamp);
+    const paidAt = parsed.paidAt || callbackTimestamp || new Date().toISOString();
+    const payerPhone = normalizePhoneNumber(parsed.payerPhone || "");
+
+    let eventId = 0;
     try {
       const inserted = await prisma.mobile_money_c2b_events.create({
         data: {
+          tenant_id: getCurrentTenantId(),
           provider: mobileMoneyProvider.providerName,
           external_receipt: externalReceipt,
           account_reference: accountReference,
-          payer_phone: normalizePhoneNumber(parsed.payerPhone || ""),
+          payer_phone: payerPhone,
           amount: parsed.amount,
           paid_at: paidAt,
           payload_json: JSON.stringify(args.body || {}),
@@ -571,141 +981,46 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
     } catch (error) {
       const maybeError = error instanceof Error ? error : new Error(String(error));
       if (isSqliteUniqueError(maybeError) || isPrismaUniqueError(error)) {
-        const existingRepayment = await prisma.repayments.findFirst({
+        const existingEvent = await prisma.mobile_money_c2b_events.findUnique({
           where: { external_receipt: externalReceipt },
-          select: { id: true, loan_id: true },
+          select: { id: true },
         });
-        return {
-          status: "duplicate",
-          message: "Receipt already processed",
-          repaymentId: existingRepayment?.id || null,
-          loanId: existingRepayment?.loan_id || null,
-        };
+        if (!existingEvent) {
+          throw error;
+        }
+        eventId = Number(existingEvent.id || 0);
+      } else {
+        throw error;
       }
-      throw error;
     }
 
-    const existingRepayment = await prisma.repayments.findFirst({
-      where: { external_receipt: externalReceipt },
-      select: { id: true, loan_id: true },
+    const result = await processC2BEvent({
+      eventId,
+      externalReceipt,
+      accountReference,
+      amount: parsed.amount,
+      payerPhone,
+      ipAddress: args.ipAddress || null,
     });
-    if (existingRepayment) {
-      await markEventReconciled({
-        eventId: Number(eventId || 0),
-        loanId: Number(existingRepayment.loan_id || 0),
-        repaymentId: Number(existingRepayment.id || 0),
-        reconciliationNote: "Matched to existing repayment by external receipt",
-      });
-      return {
-        status: "duplicate",
-        message: "Receipt already reconciled",
-        repaymentId: existingRepayment.id,
-        loanId: existingRepayment.loan_id,
-      };
-    }
 
-    const loan = await resolveLoanByAccountReference(accountReference);
-    if (!loan) {
-      const rejectUpdate = await prisma.mobile_money_c2b_events.updateMany({
-        where: {
-          id: Number(eventId || 0),
-          status: "received",
-        },
-        data: {
-          status: "rejected",
-          reconciliation_note: `Loan not found for account reference "${accountReference}"`,
-        },
-      });
-      if (Number(rejectUpdate.count || 0) !== 1) {
-        const currentEvent = await prisma.mobile_money_c2b_events.findUnique({
-          where: { id: Number(eventId || 0) },
-          select: { status: true },
-        });
-        const currentStatus = String(currentEvent?.status || "").trim().toLowerCase();
-        if (currentStatus !== "rejected" && currentStatus !== "reconciled") {
-          throw new DomainValidationError("C2B event state changed before unmatched receipt could be recorded");
-        }
-      }
-      return {
-        status: "unmatched",
-        message: "Payment received but no loan matched the account reference",
-      };
-    }
-
-    try {
-      const repaymentResult = await prisma.$transaction(async (tx: any) => {
-        const result = await repaymentService.recordRepayment({
-          loanId: Number(loan.id),
-          payload: {
-            amount: parsed.amount,
-            note: `M-Pesa C2B ${externalReceipt}`,
-          },
-          user: {
-            sub: null,
-          },
-          ipAddress: args.ipAddress || null,
-          skipScopeCheck: true,
-          source: {
-            channel: "c2b",
-            provider: mobileMoneyProvider.providerName,
-            externalReceipt,
-            externalReference: accountReference,
-            payerPhone: normalizePhoneNumber(parsed.payerPhone || ""),
-          },
-          transactionClient: tx,
-        });
-        if (!result.repayment?.id) {
-          throw new DomainValidationError("Repayment reconciliation failed to persist a repayment record");
-        }
-
-        await markEventReconciled({
-          eventId: Number(eventId || 0),
-          loanId: Number(loan.id),
-          repaymentId: Number(result.repayment.id),
-          reconciliationNote: "Auto-reconciled successfully",
-          transactionClient: tx,
-        });
-
-        return result;
-      });
-
+    if (result.status === "reconciled") {
       await writeAuditLog({
         userId: null,
         action: "mobile_money.c2b.reconciled",
         targetType: "loan",
-        targetId: Number(loan.id),
+        targetId: Number(result.loanId || 0),
         details: JSON.stringify({
           receipt: externalReceipt,
           amount: parsed.amount,
           accountReference,
-          repaymentId: repaymentResult.repayment.id,
+          repaymentId: result.repaymentId,
           provider: mobileMoneyProvider.providerName,
         }),
         ipAddress: args.ipAddress || null,
       });
-
-      return {
-        status: "reconciled",
-        message: "Payment reconciled to loan installment",
-        loanId: Number(loan.id),
-        repaymentId: Number(repaymentResult.repayment.id),
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to reconcile payment";
-      await prisma.mobile_money_c2b_events.updateMany({
-        where: {
-          id: Number(eventId || 0),
-          status: {
-            in: ["received", "rejected"],
-          },
-        },
-        data: {
-          status: "rejected",
-          reconciliation_note: String(errorMessage),
-        },
-      });
-      throw error;
     }
+
+    return result;
   }
 
   async function reconcileC2BEventManually(args: {
@@ -732,7 +1047,9 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
       throw new DomainValidationError("C2B event not found");
     }
 
-    const normalizedStatus = String(event.status || "").trim().toLowerCase();
+    const normalizedStatus = String(event.status || "")
+      .trim()
+      .toLowerCase();
     if (normalizedStatus === "reconciled" && Number(event.repayment_id || 0) > 0) {
       throw new DomainValidationError("C2B event is already reconciled");
     }
@@ -753,9 +1070,9 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
     const manualNote = String(args.note || "").trim();
     const existingRepayment = externalReceipt
       ? await prisma.repayments.findFirst({
-        where: { external_receipt: externalReceipt },
-        select: { id: true, loan_id: true },
-      })
+          where: { external_receipt: externalReceipt },
+          select: { id: true, loan_id: true },
+        })
       : null;
 
     let matchedLoanId = Number(loan.id);
@@ -771,7 +1088,7 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         reconciliationNote: manualNote || "Manually linked to existing repayment by external receipt",
       });
     } else {
-      const repaymentResult = await prisma.$transaction(async (tx: any) => {
+    const repaymentResult = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
         const result = await repaymentService.recordRepayment({
           loanId: matchedLoanId,
           payload: {
@@ -805,7 +1122,7 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         });
 
         return result;
-      });
+      }, C2B_RECONCILIATION_TRANSACTION_OPTIONS);
       repaymentId = Number(repaymentResult.repayment?.id || 0);
     }
 
@@ -876,13 +1193,18 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
       throw new DomainValidationError("Client phone number is required for mobile wallet disbursement");
     }
 
-    const accountReference = String(args.payload?.mobileMoney?.accountReference || `LOAN-${args.loanId}`).trim();
-    const narration = String(args.payload?.mobileMoney?.narration || args.payload?.notes || "Loan disbursement").trim() || null;
+    const accountReference = String(
+      args.payload?.mobileMoney?.accountReference || `LOAN-${args.loanId}`,
+    ).trim();
+    const narration =
+      String(args.payload?.mobileMoney?.narration || args.payload?.notes || "Loan disbursement").trim() ||
+      null;
     const requestId = crypto.randomUUID();
 
     const initInsert = await prisma.mobile_money_b2c_disbursements.create({
       data: {
         request_id: requestId,
+        tenant_id: getCurrentTenantId(),
         loan_id: args.loanId,
         provider: mobileMoneyProvider.providerName,
         amount: Number(loanRow.principal || 0),
@@ -902,17 +1224,22 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
       providerResponse = await executeProviderRequest({
         breaker: b2cCircuitBreaker,
         actionLabel: "B2C disbursement",
-        work: () => mobileMoneyProvider.initiateB2CDisbursement({
-          amount: Number(loanRow.principal || 0),
-          phoneNumber,
-          accountReference,
-          narration,
-        }),
+        work: () =>
+          mobileMoneyProvider.initiateB2CDisbursement({
+            amount: Number(loanRow.principal || 0),
+            phoneNumber,
+            accountReference,
+            narration,
+          }),
       });
 
       const providerStatus = (() => {
-        const normalized = String(providerResponse.status || "accepted").trim().toLowerCase();
-        return ["initiated", "accepted", "failed", "core_disbursed", "core_failed", "completed"].includes(normalized)
+        const normalized = String(providerResponse.status || "accepted")
+          .trim()
+          .toLowerCase();
+        return ["initiated", "accepted", "failed", "core_disbursed", "core_failed", "completed"].includes(
+          normalized,
+        )
           ? normalized
           : "accepted";
       })();
@@ -930,7 +1257,9 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         },
       });
       if (Number(providerUpdate.count || 0) !== 1) {
-        throw new DomainValidationError("B2C disbursement state changed before provider acceptance could be recorded");
+        throw new DomainValidationError(
+          "B2C disbursement state changed before provider acceptance could be recorded",
+        );
       }
 
       if (providerStatus === "failed") {
@@ -954,9 +1283,13 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
           where: { id: disbursementRowId },
           select: { status: true },
         });
-        const existingStatus = String(existing?.status || "").trim().toLowerCase();
+        const existingStatus = String(existing?.status || "")
+          .trim()
+          .toLowerCase();
         if (!["core_pending", "core_disbursed", "completed"].includes(existingStatus)) {
-          throw new DomainValidationError("B2C disbursement state changed before core disbursement could start");
+          throw new DomainValidationError(
+            "B2C disbursement state changed before core disbursement could start",
+          );
         }
       }
     } catch (error: unknown) {
@@ -977,7 +1310,9 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
       if (error instanceof ServiceUnavailableDomainError || error instanceof UpstreamServiceError) {
         throw error;
       }
-      throw new UpstreamServiceError(`M-Pesa disbursement failed: ${String(errorMessage || "unknown error")}`);
+      throw new UpstreamServiceError(
+        `M-Pesa disbursement failed: ${String(errorMessage || "unknown error")}`,
+      );
     }
 
     try {
@@ -1008,11 +1343,15 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
           where: { id: disbursementRowId },
           select: { status: true },
         });
-        const existingStatus = String(existing?.status || "").trim().toLowerCase();
+        const existingStatus = String(existing?.status || "")
+          .trim()
+          .toLowerCase();
         if (existingStatus === "completed" || existingStatus === "core_disbursed") {
           mobileMoneyStatus = existingStatus;
         } else {
-          throw new DomainValidationError("B2C disbursement state changed during core disbursement reconciliation");
+          throw new DomainValidationError(
+            "B2C disbursement state changed during core disbursement reconciliation",
+          );
         }
       }
 
@@ -1043,7 +1382,8 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         },
       };
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Core loan disbursement failed after B2C acceptance";
+      const errorMessage =
+        error instanceof Error ? error.message : "Core loan disbursement failed after B2C acceptance";
       await prisma.mobile_money_b2c_disbursements.updateMany({
         where: {
           id: disbursementRowId,
@@ -1057,6 +1397,9 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
           updated_at: new Date().toISOString(),
         },
       });
+      if (metrics && typeof metrics.observePaymentFailure === "function") {
+        metrics.observePaymentFailure("b2c.core_failed");
+      }
       // FIX #13: When the provider accepted the transfer but core disbursement failed,
       // money left the account but the loan is stuck as "approved". Write an audit entry
       // flagged for manual reconciliation so ops can force-disburse or reverse.
@@ -1073,7 +1416,8 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
             amount: Number(loanRow.principal || 0),
             phoneNumber,
             errorMessage,
-            action_required: "Manual review: provider transfer may have completed but loan core disbursement failed. Verify with provider and force-disburse or reverse.",
+            action_required:
+              "Manual review: provider transfer may have completed but loan core disbursement failed. Verify with provider and force-disburse or reverse.",
           }),
           ipAddress: args.ipAddress || null,
         });
@@ -1083,7 +1427,6 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
       throw new UpstreamServiceError(
         `M-Pesa transfer accepted but core disbursement failed. Manual review required. Reason: ${String(errorMessage || "unknown error")}`,
       );
-
     }
   }
   async function listC2BEvents(args: { limit?: number; status?: string } = {}) {
@@ -1095,12 +1438,14 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
     return rows.map((row) => mapC2BEventRow(row as unknown as C2BEventRowLike));
   }
 
-  async function listB2CDisbursements(args: {
-    limit?: number;
-    status?: string;
-    loanId?: number;
-    providerRequestId?: string;
-  } = {}) {
+  async function listB2CDisbursements(
+    args: {
+      limit?: number;
+      status?: string;
+      loanId?: number;
+      providerRequestId?: string;
+    } = {},
+  ) {
     const limit = Math.min(Math.max(Number(args.limit || 50), 1), 200);
     const rows = await mobileMoneyReadRepository.listB2CDisbursements({
       status: args.status,
@@ -1129,10 +1474,12 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
     }));
   }
 
-  async function getB2CDisbursementSummary(args: {
-    status?: string;
-    loanId?: number;
-  } = {}) {
+  async function getB2CDisbursementSummary(
+    args: {
+      status?: string;
+      loanId?: number;
+    } = {},
+  ) {
     const row = await mobileMoneyReadRepository.getB2CDisbursementSummary({
       status: args.status,
       loanId: args.loanId,
@@ -1158,7 +1505,7 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
       throw new DomainValidationError("Invalid B2C disbursement id");
     }
 
-    const retryResult = await prisma.$transaction(async (tx: any) => {
+    const retryResult = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
       const disbursement = await tx.mobile_money_b2c_disbursements.findUnique({
         where: { id: disbursementId },
         select: {
@@ -1176,17 +1523,18 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         throw new DomainValidationError("B2C disbursement record not found");
       }
 
-      const currentStatus = String(disbursement.status || "").trim().toLowerCase();
+      const currentStatus = String(disbursement.status || "")
+        .trim()
+        .toLowerCase();
       if (!["failed", "core_failed"].includes(currentStatus)) {
         throw new DomainValidationError("Reversal retry is only allowed for failed B2C disbursements");
       }
 
       const nowIso = new Date().toISOString();
       const existingReason = String(disbursement.failure_reason || "").trim();
-      const retryReason = [
-        existingReason,
-        `[reversal_retry_requested_at=${nowIso}]`,
-      ].filter(Boolean).join(" ");
+      const retryReason = [existingReason, `[reversal_retry_requested_at=${nowIso}]`]
+        .filter(Boolean)
+        .join(" ");
 
       const existingProviderResponse = (() => {
         const raw = String(disbursement.provider_response_json || "").trim();
@@ -1230,7 +1578,9 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
       });
 
       if (Number(updateResult.count || 0) !== 1) {
-        throw new DomainValidationError("B2C disbursement state changed before reversal retry could be recorded");
+        throw new DomainValidationError(
+          "B2C disbursement state changed before reversal retry could be recorded",
+        );
       }
 
       const refreshed = await tx.mobile_money_b2c_disbursements.findUnique({
@@ -1305,9 +1655,13 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
       throw new DomainValidationError("B2C disbursement record not found");
     }
 
-    const currentStatus = String(disbursement.status || "").trim().toLowerCase();
+    const currentStatus = String(disbursement.status || "")
+      .trim()
+      .toLowerCase();
     if (!["core_failed", "accepted", "core_pending"].includes(currentStatus)) {
-      throw new DomainValidationError("Core disbursement retry is only allowed for accepted/core_failed/core_pending B2C disbursements");
+      throw new DomainValidationError(
+        "Core disbursement retry is only allowed for accepted/core_failed/core_pending B2C disbursements",
+      );
     }
 
     const nowIso = new Date().toISOString();
@@ -1318,7 +1672,9 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
           notes: [
             `B2C core retry disbursementId=${disbursementId}`,
             `requestId=${String(disbursement.request_id || "")}`.trim(),
-          ].filter(Boolean).join(" | "),
+          ]
+            .filter(Boolean)
+            .join(" | "),
         },
         user: { sub: requestedByUserId },
         ipAddress: args.ipAddress || null,
@@ -1338,7 +1694,9 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         },
       });
       if (Number(updateResult.count || 0) !== 1) {
-        throw new DomainValidationError("B2C disbursement state changed before core retry could be finalized");
+        throw new DomainValidationError(
+          "B2C disbursement state changed before core retry could be finalized",
+        );
       }
 
       await writeAuditLog({
@@ -1371,7 +1729,9 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         String(disbursement.failure_reason || "").trim(),
         `[core_retry_failed_at=${nowIso}]`,
         String(errorMessage || "").trim(),
-      ].filter(Boolean).join(" ");
+      ]
+        .filter(Boolean)
+        .join(" ");
 
       await prisma.mobile_money_b2c_disbursements.updateMany({
         where: { id: disbursementId },
@@ -1403,10 +1763,12 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
     }
   }
 
-  async function processPendingB2CCoreDisbursements(args: {
-    limit?: number;
-    minAgeMs?: number;
-  } = {}) {
+  async function processPendingB2CCoreDisbursements(
+    args: {
+      limit?: number;
+      minAgeMs?: number;
+    } = {},
+  ) {
     if (!b2cEnabled) {
       return {
         skipped: true,
@@ -1478,7 +1840,9 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         const nextFailureReason = [
           String(row.failure_reason || "").trim(),
           `[core_retry_missing_user_at=${nowIso}]`,
-        ].filter(Boolean).join(" ");
+        ]
+          .filter(Boolean)
+          .join(" ");
 
         await prisma.mobile_money_b2c_disbursements.updateMany({
           where: {
@@ -1524,10 +1888,22 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
 
   async function handleB2CCallback(args: {
     body: Record<string, any>;
+    rawBody?: string | null;
     signature: string | null;
+    timestamp?: string | null;
     ipAddress?: string | null | undefined;
   }) {
-    assertB2CCallbackSignature(args.signature, args.body || {});
+    assertCallbackSignature({
+      callbackName: "B2C",
+      signature: args.signature,
+      rawBody: args.rawBody || null,
+      body: args.body || {},
+      enabled: b2cEnabled,
+    });
+    assertWebhookFreshness(
+      "B2C",
+      toIsoWebhookTimestamp(args.timestamp || null) || extractB2CCallbackTimestamp(args.body || {}),
+    );
 
     const parsed = parseB2CCallbackPayload(args.body || {});
     const providerRequestId = String(parsed.providerRequestId || "").trim();
@@ -1535,13 +1911,33 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
       throw new DomainValidationError("Missing provider_request_id in B2C callback payload");
     }
 
-    const callbackResult = await prisma.$transaction(async (tx: any) => {
+    // FIX: Resolve tenant_id from the disbursement record BEFORE entering the
+    // tenant-scoped transaction. The B2C callback arrives without a tenant
+    // context header, so we do a superuser-level pre-fetch (bypasses RLS) to
+    // find the authoritative tenant, then wrap everything below in runWithTenant.
+    const disbursementForTenant = await prisma.mobile_money_b2c_disbursements.findFirst({
+      where: {
+        OR: [{ provider_request_id: providerRequestId }, { request_id: providerRequestId }],
+      },
+      select: { id: true, tenant_id: true },
+    });
+
+    if (!disbursementForTenant) {
+      return {
+        status: "unmatched",
+        message: "No disbursement record found for provider request id",
+        providerRequestId,
+      };
+    }
+
+    const resolvedTenantId = String(disbursementForTenant.tenant_id || "default");
+
+    const callbackResult = await runWithTenant(resolvedTenantId, () =>
+      prisma.$transaction(async (tx: PrismaTransactionClient) => {
       const disbursement = await tx.mobile_money_b2c_disbursements.findFirst({
         where: {
-          OR: [
-            { provider_request_id: providerRequestId },
-            { request_id: providerRequestId },
-          ],
+          OR: [{ provider_request_id: providerRequestId }, { request_id: providerRequestId }],
+          tenant_id: resolvedTenantId,
         },
         select: {
           id: true,
@@ -1561,12 +1957,15 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         };
       }
 
+      await lockRowForUpdate(tx, "mobile_money_b2c_disbursements", Number(disbursement.id || 0));
+
       const nextStatus = parsed.status === "completed" ? "completed" : "failed";
-      const currentStatus = String(disbursement.status || "").trim().toLowerCase();
+      const currentStatus = String(disbursement.status || "")
+        .trim()
+        .toLowerCase();
       const nowIso = new Date().toISOString();
-      const failureReason = nextStatus === "failed"
-        ? String(parsed.failureReason || "B2C callback reported failure")
-        : null;
+      const failureReason =
+        nextStatus === "failed" ? String(parsed.failureReason || "B2C callback reported failure") : null;
 
       if (currentStatus === "completed" && nextStatus === "failed") {
         return {
@@ -1582,9 +1981,10 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         };
       }
 
-      const allowedStatuses = nextStatus === "completed"
-        ? ["initiated", "accepted", "core_pending", "core_disbursed", "completed"]
-        : ["initiated", "accepted", "core_pending", "core_disbursed", "failed", "core_failed"];
+      const allowedStatuses =
+        nextStatus === "completed"
+          ? ["initiated", "accepted", "core_pending", "core_disbursed", "completed"]
+          : ["initiated", "accepted", "core_pending", "core_disbursed", "failed", "core_failed"];
 
       const updateResult = await tx.mobile_money_b2c_disbursements.updateMany({
         where: {
@@ -1615,9 +2015,14 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         });
 
         return {
-          status: String(latest?.status || "failed").trim().toLowerCase(),
+          status: String(latest?.status || "failed")
+            .trim()
+            .toLowerCase(),
           message: "B2C callback received but no state transition was applied",
-          reversalRequired: String(latest?.status || "").trim().toLowerCase() === "failed",
+          reversalRequired:
+            String(latest?.status || "")
+              .trim()
+              .toLowerCase() === "failed",
           disbursementId: Number(latest?.id || disbursement.id),
           loanId: Number(latest?.loan_id || disbursement.loan_id || 0),
           providerRequestId,
@@ -1629,9 +2034,10 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
 
       return {
         status: nextStatus,
-        message: nextStatus === "completed"
-          ? "B2C disbursement callback reconciled as completed"
-          : "B2C disbursement callback reconciled as failed",
+        message:
+          nextStatus === "completed"
+            ? "B2C disbursement callback reconciled as completed"
+            : "B2C disbursement callback reconciled as failed",
         reversalRequired: nextStatus === "failed",
         disbursementId: Number(disbursement.id),
         loanId: Number(disbursement.loan_id || 0),
@@ -1640,7 +2046,8 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         failureReason,
         skipAudit: false,
       };
-    });
+    })
+    );
 
     if (callbackResult.status === "unmatched") {
       return callbackResult;
@@ -1661,6 +2068,26 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
         }),
         ipAddress: args.ipAddress || null,
       });
+
+      // Alert finance ops — B2C failure means funds may or may not have left the
+      // B2C float account. reversalRequired=true signals manual provider follow-up.
+      if (logger && typeof logger.warn === "function") {
+        logger.warn("mobile_money.b2c.callback_failed_alert", {
+          disbursementId: Number(callbackResult.disbursementId),
+          loanId: Number(callbackResult.loanId || 0),
+          requestId: callbackResult.requestId,
+          providerRequestId,
+          failureReason: callbackResult.failureReason,
+          reversalRequired: true,
+          action_required:
+            "Manual review: verify with provider whether funds left the B2C float account. " +
+            "Use retry-reversal endpoint if confirmed transferred, or close if not sent.",
+        });
+      }
+
+      if (metrics && typeof metrics.observePaymentFailure === "function") {
+        metrics.observePaymentFailure("b2c.callback_failed");
+      }
     } else if (callbackResult.status === "completed" && !callbackResult.skipAudit) {
       await writeAuditLog({
         userId: null,
@@ -1699,16 +2126,4 @@ function createMobileMoneyService(deps: MobileMoneyServiceDeps) {
   };
 }
 
-export {
-  createMobileMoneyService,
-};
-
-
-
-
-
-
-
-
-
-
+export { createMobileMoneyService };

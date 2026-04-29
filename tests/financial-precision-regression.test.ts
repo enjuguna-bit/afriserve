@@ -6,6 +6,11 @@ import { api, approveLoan, loginAsAdmin, startServer, createHighRiskReviewerToke
 
 import { createPenaltyEngine } from "../src/services/penaltyEngine.js";
 import { createInterestAccrualEngine } from "../src/services/interestAccrualEngine.js";
+import { RepaymentScheduleService } from "../src/domain/loan/services/RepaymentScheduleService.js";
+import { InterestRate } from "../src/domain/loan/value-objects/InterestRate.js";
+import { LoanTerm } from "../src/domain/loan/value-objects/LoanTerm.js";
+import { Money } from "../src/domain/shared/value-objects/Money.js";
+import { calculateExpectedTotal } from "../src/utils/helpers.js";
 
 test("loan schedule allocation preserves exact cents total after disbursement", async () => {
   const { baseUrl, stop } = await startServer();
@@ -212,6 +217,33 @@ test("concurrent repayments cannot both over-collect the same outstanding balanc
   }
 });
 
+test("calculateExpectedTotal and RepaymentScheduleService.calculateFlatInterest stay aligned", () => {
+  const repaymentScheduleService = new RepaymentScheduleService();
+  const cases = [
+    { principal: 10000, ratePct: 5, termWeeks: 10 },
+    { principal: 5000, ratePct: 2, termWeeks: 7 },
+    { principal: 30000, ratePct: 8, termWeeks: 12 },
+  ];
+
+  for (const testCase of cases) {
+    const scheduleTotal = Money.fromNumber(testCase.principal)
+      .add(repaymentScheduleService.calculateFlatInterest(
+        Money.fromNumber(testCase.principal),
+        InterestRate.fromPercentage(testCase.ratePct),
+        LoanTerm.fromWeeks(testCase.termWeeks),
+      ))
+      .amount;
+
+    const legacyTotal = calculateExpectedTotal(testCase.principal, testCase.ratePct, testCase.termWeeks);
+
+    assert.equal(
+      Number(scheduleTotal.toFixed(2)),
+      Number(legacyTotal.toFixed(2)),
+      `Mismatch for principal=${testCase.principal} rate=${testCase.ratePct}% term=${testCase.termWeeks}w`,
+    );
+  }
+});
+
 test("financial services import decimal.js and avoid toFixed() arithmetic", async () => {
   const root = path.resolve(process.cwd());
   const targets = [
@@ -304,7 +336,42 @@ test("penalty engine applies flat penalty with exact cents and no drift", async 
   const installmentUpdate = capturedRuns.find((item) => item.sql.includes("UPDATE loan_installments"));
   assert.ok(installmentUpdate);
   assert.equal(Number(installmentUpdate?.params?.[0] || 0), 0.3);
-  assert.equal(Number(installmentUpdate?.params?.[1] || 0), 0.3);
+  assert.equal(String(installmentUpdate?.sql || "").includes("amount_due"), false);
+  assert.ok(!Number.isNaN(Date.parse(String(installmentUpdate?.params?.[1] || ""))));
+});
+
+test("penalty engine reports successful background metrics when the batch completes cleanly", async () => {
+  const metricCalls = [];
+  const engine = createPenaltyEngine({
+    get: async (_sql: string, params?: unknown[]) => {
+      const accountCode = String(params?.[0] || "");
+      if (accountCode === "LOAN_RECEIVABLE") {
+        return { id: 11 };
+      }
+      if (accountCode === "PENALTY_INCOME") {
+        return { id: 12 };
+      }
+      return null;
+    },
+    all: async () => [],
+    executeTransaction: async (callback) => callback({
+      get: async () => null,
+      all: async () => [],
+      run: async () => ({ changes: 0, lastID: 0 }),
+    } as any),
+    logger: null,
+    metrics: {
+      observeBackgroundTask: (taskName: string, payload?: Record<string, unknown>) => {
+        metricCalls.push({ taskName, payload });
+      },
+    },
+  });
+
+  const summary = await engine.applyPenalties();
+  assert.equal(summary.failedInstallments, 0);
+  assert.equal(metricCalls.length, 1);
+  assert.equal(metricCalls[0].taskName, "installment_penalty_apply");
+  assert.equal(metricCalls[0].payload?.success, true);
 });
 
 test("interest accrual engine posts deferred-interest daily recognition journals", async () => {
@@ -368,4 +435,37 @@ test("interest accrual engine posts deferred-interest daily recognition journals
   assert.ok(profileUpdate, "Expected loan_interest_profiles update");
   const journalInsert = capturedRuns.find((item) => item.sql.includes("INSERT INTO gl_journals"));
   assert.ok(journalInsert, "Expected GL journal insert for interest accrual");
+});
+
+test("interest accrual engine reports successful background metrics when the batch completes cleanly", async () => {
+  const metricCalls = [];
+  const engine = createInterestAccrualEngine({
+    get: async (_sql: string, params?: unknown[]) => {
+      const accountCode = String(params?.[0] || "");
+      if (accountCode === "UNEARNED_INTEREST") {
+        return { id: 31 };
+      }
+      if (accountCode === "INTEREST_INCOME") {
+        return { id: 32 };
+      }
+      return null;
+    },
+    all: async () => [],
+    executeTransaction: async (callback) => callback({
+      get: async () => null,
+      run: async () => ({ changes: 0, lastID: 0 }),
+    } as any),
+    logger: null,
+    metrics: {
+      observeBackgroundTask: (taskName: string, payload?: Record<string, unknown>) => {
+        metricCalls.push({ taskName, payload });
+      },
+    },
+  });
+
+  const summary = await engine.applyDailyAccruals();
+  assert.equal(summary.failedLoans, 0);
+  assert.equal(metricCalls.length, 1);
+  assert.equal(metricCalls[0].taskName, "loan_interest_accrual_apply");
+  assert.equal(metricCalls[0].payload?.success, true);
 });

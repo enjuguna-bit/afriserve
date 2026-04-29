@@ -88,6 +88,7 @@ export interface MetricsSnapshot {
   backgroundTasks: Record<string, BackgroundTaskSnapshot>;
   reportCache: ReportCacheSnapshot;
   dbQueries: Record<string, DbQuerySnapshot>;
+  dbPools: Record<string, DbPoolSnapshot>;
 }
 
 export interface DbQueryObservation {
@@ -100,4 +101,23 @@ export interface DbQuerySnapshot {
   totalMs: number;
   avgMs: number;
   maxMs: number;
+}
+
+export interface DbPoolAlertSnapshot {
+  highAcquireWait: boolean;
+  poolExhausted: boolean;
+}
+
+export interface DbPoolSnapshot {
+  maxConnections: number;
+  totalConnections: number;
+  activeConnections: number;
+  idleConnections: number;
+  waitingClients: number;
+  acquires: number;
+  averageAcquireWaitMs: number;
+  maxAcquireWaitMs: number;
+  lastAcquireWaitMs: number;
+  acquireTimeouts: number;
+  alerts: DbPoolAlertSnapshot;
 }

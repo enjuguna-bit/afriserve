@@ -5,6 +5,8 @@
 import { Decimal } from "decimal.js";
 import { DomainValidationError } from "../../../domain/errors.js";
 
+export type LoanRepaymentCadence = "weekly" | "business_daily";
+
 export function toMoneyDecimal(value: Decimal.Value): Decimal {
   return new Decimal(value || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 }
@@ -29,13 +31,77 @@ export function normalizeOptionalText(value: unknown): string | null {
   return s ? s : null;
 }
 
-export function buildInstallmentAmounts(expectedTotal: number, termWeeks: number): number[] {
+export function resolveLoanRepaymentCadence(value: unknown): LoanRepaymentCadence {
+  return normalizeInterestAccrualMethod(value) === "daily_eod" ? "business_daily" : "weekly";
+}
+
+export function getInstallmentCountForTerm(termWeeks: number, cadence: LoanRepaymentCadence): number {
+  const normalizedTermWeeks = Math.max(0, Math.floor(Number(termWeeks || 0)));
+  if (cadence === "business_daily") {
+    return normalizedTermWeeks * 6;
+  }
+  return normalizedTermWeeks;
+}
+
+export function addBusinessDaysIso(isoDate: string, businessDays: number): string {
+  const anchor = new Date(isoDate);
+  if (Number.isNaN(anchor.getTime())) {
+    throw new DomainValidationError("Schedule start date is invalid");
+  }
+
+  const steps = Math.max(0, Math.floor(Number(businessDays || 0)));
+  const nextDate = new Date(anchor);
+  let counted = 0;
+
+  while (counted < steps) {
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+    if (nextDate.getUTCDay() === 0) {
+      continue;
+    }
+    counted += 1;
+  }
+
+  return nextDate.toISOString();
+}
+
+export function addRepaymentIntervalIso(params: {
+  startIso: string;
+  intervalCount: number;
+  cadence: LoanRepaymentCadence;
+  addWeeksIso: (isoDate: string, weeks: number) => string;
+}): string {
+  const intervalCount = Math.max(0, Math.floor(Number(params.intervalCount || 0)));
+  if (params.cadence === "business_daily") {
+    return addBusinessDaysIso(params.startIso, intervalCount);
+  }
+  return params.addWeeksIso(params.startIso, intervalCount);
+}
+
+export function getScheduleMaturityIso(params: {
+  startIso: string;
+  termWeeks: number;
+  cadence: LoanRepaymentCadence;
+  addWeeksIso: (isoDate: string, weeks: number) => string;
+}): string {
+  const installmentCount = getInstallmentCountForTerm(params.termWeeks, params.cadence);
+  return addRepaymentIntervalIso({
+    startIso: params.startIso,
+    intervalCount: installmentCount,
+    cadence: params.cadence,
+    addWeeksIso: params.addWeeksIso,
+  });
+}
+
+export function buildInstallmentAmounts(expectedTotal: number, installmentCount: number): number[] {
+  if (!Number.isInteger(installmentCount) || installmentCount <= 0) {
+    throw new DomainValidationError("Installment count must be a positive integer");
+  }
   const total = toMoneyDecimal(expectedTotal);
-  const baseAmount = total.dividedBy(termWeeks).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-  const amounts = Array.from({ length: termWeeks }, () => baseAmount.toNumber());
-  const assigned = baseAmount.mul(termWeeks).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const baseAmount = total.dividedBy(installmentCount).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const amounts = Array.from({ length: installmentCount }, () => baseAmount.toNumber());
+  const assigned = baseAmount.mul(installmentCount).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
   const delta = total.minus(assigned).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-  amounts[termWeeks - 1] = baseAmount.plus(delta).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
+  amounts[installmentCount - 1] = baseAmount.plus(delta).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
   return amounts;
 }
 

@@ -1,5 +1,11 @@
 import { apiClient } from './apiClient'
-import type { BoardSummaryReport, DailyCollectionsReport, PortfolioReport } from '../types/report'
+import type {
+  BoardSummaryReport,
+  DailyCollectionsReport,
+  MonthlyPerformanceReport,
+  PortfolioReport,
+  StakeholderCashFlowStatusReport,
+} from '../types/report'
 
 export type ReportFormat = 'json' | 'csv' | 'pdf' | 'xlsx'
 export type ReportQueryParams = Record<string, unknown>
@@ -132,6 +138,40 @@ export async function getOfficerPerformanceReport(params: ReportQueryParams = {}
   return getReport<ReportPayload>('/reports/officer-performance', params)
 }
 
+// Gap 8 — advanced reports
+export async function getArrearsAgingReport(params: ReportQueryParams = {}): Promise<ReportPayload> {
+  return getReport<ReportPayload>('/reports/arrears-aging', params)
+}
+
+export async function getOfficerPerformanceV2Report(params: ReportQueryParams = {}): Promise<ReportPayload> {
+  return getReport<ReportPayload>('/reports/officer-performance-v2', params)
+}
+
+export async function getBranchPnLReport(params: ReportQueryParams = {}): Promise<ReportPayload> {
+  return getReport<ReportPayload>('/reports/branch-pnl', params)
+}
+
+export async function getWriteOffsPortfolioReport(params: ReportQueryParams = {}): Promise<ReportPayload> {
+  return getReport<ReportPayload>('/reports/write-offs-portfolio', params)
+}
+
+export async function getCapitalAdequacyReport(params: ReportQueryParams = {}): Promise<ReportPayload> {
+  return getReport<ReportPayload>('/reports/capital-adequacy', params)
+}
+
+export async function getClientRetentionReport(params: ReportQueryParams = {}): Promise<ReportPayload> {
+  return getReport<ReportPayload>('/reports/client-retention', params)
+}
+
+// Finance — GL-based reports (distinct from the performance/cashflow endpoint)
+export async function getBalanceSheetReport(params: ReportQueryParams = {}): Promise<ReportPayload> {
+  return getReport<ReportPayload>('/reports/balance-sheet', params)
+}
+
+export async function getGlCashFlowStatementReport(params: ReportQueryParams = {}): Promise<ReportPayload> {
+  return getReport<ReportPayload>('/reports/cash-flow', params)
+}
+
 export async function getReportFilterOptions(params: ReportQueryParams = {}): Promise<ReportPayload> {
   return getReport<ReportPayload>('/reports/filter-options', params)
 }
@@ -140,12 +180,21 @@ export async function getReportByPath(path: string, params: ReportQueryParams = 
   return getReport<ReportPayload>(path, params)
 }
 
-export async function getMonthlyPerformanceReport(params: ReportQueryParams = {}): Promise<ReportPayload> {
-  return getReport<ReportPayload>('/reports/performance/monthly', params)
+export async function getMonthlyPerformanceReport(params: ReportQueryParams = {}): Promise<MonthlyPerformanceReport> {
+  return getReport<MonthlyPerformanceReport>('/reports/performance/monthly', params)
 }
 
-export async function getCashFlowReport(params: ReportQueryParams = {}): Promise<ReportPayload> {
-  return getReport<ReportPayload>('/reports/performance/cashflow', params)
+/** Cash flow status from the performance / income-tracking service. */
+export async function getCashFlowStatusReport(params: ReportQueryParams = {}): Promise<StakeholderCashFlowStatusReport> {
+  return getReport<StakeholderCashFlowStatusReport>('/reports/performance/cashflow', params)
+}
+
+/**
+ * @deprecated Use getCashFlowStatusReport() for the performance cashflow endpoint,
+ * or getGlCashFlowStatementReport() for the GL-based cash flow statement.
+ */
+export async function getCashFlowReport(params: ReportQueryParams = {}): Promise<StakeholderCashFlowStatusReport> {
+  return getCashFlowStatusReport(params)
 }
 
 export async function downloadReport(

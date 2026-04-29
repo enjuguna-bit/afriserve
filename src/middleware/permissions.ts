@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { checkUserPermission, hasRolePermissionFallback } from "../services/permissionService.js";
 import type { PermissionCode } from "../services/permissionService.js";
 import { resolveAssignedRoles } from "../services/userRoleService.js";
+import type { LoggerLike } from "../types/runtime.js";
 
 type RequestWithUser = Request & {
   user?: {
@@ -14,7 +15,8 @@ type RequestWithUser = Request & {
 };
 
 function logPermissionDecision(req: RequestWithUser, level: "debug" | "warn", payload: Record<string, unknown>): void {
-  const logger = (req as any)?.app?.locals?.logger;
+  const appLocals = (req as unknown as { app?: { locals?: { logger?: LoggerLike } } }).app?.locals;
+  const logger = appLocals?.logger;
   if (!logger || typeof logger[level] !== "function") {
     return;
   }

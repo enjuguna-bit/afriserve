@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import {
   useActiveBranches,
+  useActivateUser,
   useCreateUser,
   useDeactivateUser,
   useResetUserPassword,
@@ -10,6 +11,7 @@ import {
 import { AsyncState } from '../../../components/common/AsyncState'
 import { useToastStore } from '../../../store/toastStore'
 import type { CreateUserRequest } from '../../../types/admin'
+import { formatDisplayText } from '../../../utils/displayFormatting'
 import { buildBranchAreaOptions } from '../utils/branchAssignment'
 import styles from './UserManagementPage.module.css'
 
@@ -22,6 +24,16 @@ type CreateUserFormState = {
   branchId: string
   areaKey: string
   branchIds: number[]
+}
+
+type ResetPasswordTarget = {
+  userId: number
+  fullName: string
+}
+
+type ResetPasswordFormState = {
+  newPassword: string
+  confirmPassword: string
 }
 
 const DEFAULT_ROLE = 'loan_officer'
@@ -59,6 +71,12 @@ export function UserManagementPage() {
   const [search, setSearch] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [resetPasswordTarget, setResetPasswordTarget] = useState<ResetPasswordTarget | null>(null)
+  const [resetPasswordForm, setResetPasswordForm] = useState<ResetPasswordFormState>({
+    newPassword: '',
+    confirmPassword: '',
+  })
+  const [resetPasswordError, setResetPasswordError] = useState<string | null>(null)
   const [formState, setFormState] = useState<CreateUserFormState>({
     fullName: '',
     email: '',
@@ -73,6 +91,7 @@ export function UserManagementPage() {
   const usersQuery = useUsers({ limit: 100, offset: 0, search: search || undefined })
   const rolesQuery = useUserRoles()
   const branchesQuery = useActiveBranches()
+  const activateUserMutation = useActivateUser()
   const createUserMutation = useCreateUser()
   const deactivateUserMutation = useDeactivateUser()
   const resetPasswordMutation = useResetUserPassword()
@@ -88,7 +107,7 @@ export function UserManagementPage() {
   const branchOptions = useMemo(
     () => activeBranches.map((branch) => ({
       id: Number(branch.id),
-      label: `${branch.region_name || 'Region'} - ${branch.name}${branch.code ? ` (${branch.code})` : ''}`,
+      label: `${formatDisplayText(branch.region_name, 'Region')} - ${formatDisplayText(branch.name, `Branch #${branch.id}`)}${formatDisplayText(branch.code, '') ? ` (${formatDisplayText(branch.code, '')})` : ''}`,
     })),
     [activeBranches],
   )
@@ -131,6 +150,15 @@ export function UserManagementPage() {
       branchIds: [],
     })
     setCreateError(null)
+  }
+
+  function closeResetPasswordModal() {
+    setResetPasswordTarget(null)
+    setResetPasswordForm({
+      newPassword: '',
+      confirmPassword: '',
+    })
+    setResetPasswordError(null)
   }
 
   function handleCreateUser(event: FormEvent<HTMLFormElement>) {
@@ -205,6 +233,49 @@ export function UserManagementPage() {
     })
   }
 
+  function handleSubmitPasswordReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!resetPasswordTarget) {
+      return
+    }
+
+    const nextPassword = resetPasswordForm.newPassword
+    const confirmPassword = resetPasswordForm.confirmPassword
+
+    if (!nextPassword || !confirmPassword) {
+      setResetPasswordError('Enter and confirm the new password.')
+      return
+    }
+    if (!isStrongPassword(nextPassword)) {
+      setResetPasswordError('Password must be at least 12 chars with upper, lower, number, and symbol.')
+      return
+    }
+    if (nextPassword !== confirmPassword) {
+      setResetPasswordError('Passwords do not match.')
+      return
+    }
+
+    setResetPasswordError(null)
+    resetPasswordMutation.mutate(
+      {
+        userId: resetPasswordTarget.userId,
+        payload: { newPassword: nextPassword },
+      },
+      {
+        onSuccess: () => {
+          pushToast({ type: 'success', message: `Password reset for ${resetPasswordTarget.fullName}.` })
+          closeResetPasswordModal()
+        },
+        onError: (error) => {
+          const message = getApiErrorMessage(error, `Failed to reset password for ${resetPasswordTarget.fullName}.`)
+          setResetPasswordError(message)
+          pushToast({ type: 'error', message })
+        },
+      },
+    )
+  }
+
   return (
     <div>
       <div className={styles.header}>
@@ -252,50 +323,63 @@ export function UserManagementPage() {
             </tr>
           </thead>
           <tbody>
-            {usersQuery.data.data.map((user) => (
-              <tr key={user.id}>
-                <td>{user.full_name}</td>
-                <td>{Array.isArray(user.roles) && user.roles.length > 0 ? user.roles.join(', ') : user.role}</td>
-                <td>{user.branch_name || '-'}</td>
-                <td>{user.is_active === 1 ? 'active' : 'inactive'}</td>
-                <td>
-                  <div className={styles.actions}>
-                    <button
-                      type="button"
-                      disabled={deactivateUserMutation.isPending || user.is_active !== 1}
-                      onClick={() => {
-                        deactivateUserMutation.mutate(user.id, {
-                          onSuccess: () => {
-                            pushToast({ type: 'success', message: `User ${user.full_name} deactivated.` })
-                          },
-                          onError: () => {
-                            pushToast({ type: 'error', message: `Failed to deactivate ${user.full_name}.` })
-                          },
-                        })
-                      }}
-                    >
-                      Deactivate
-                    </button>
-                    <button
-                      type="button"
-                      disabled={resetPasswordMutation.isPending || user.is_active !== 1}
-                      onClick={() => {
-                        resetPasswordMutation.mutate(user.id, {
-                          onSuccess: () => {
-                            pushToast({ type: 'success', message: `Password reset initiated for ${user.full_name}.` })
-                          },
-                          onError: () => {
-                            pushToast({ type: 'error', message: `Failed to reset password for ${user.full_name}.` })
-                          },
-                        })
-                      }}
-                    >
-                      Reset password
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+            {(usersQuery.data?.data ?? []).map((user) => {
+              const displayName = formatDisplayText(user.full_name, `User #${user.id}`)
+              const roleNames = Array.isArray(user.roles)
+                ? user.roles.map((role) => formatDisplayText(role, '')).filter(Boolean)
+                : []
+              const roleLabel = roleNames.length > 0 ? roleNames.join(', ') : formatDisplayText(user.role)
+
+              return (
+                <tr key={user.id}>
+                  <td>{displayName}</td>
+                  <td>{roleLabel}</td>
+                  <td>{formatDisplayText(user.branch_name)}</td>
+                  <td>{user.is_active === 1 ? 'active' : 'inactive'}</td>
+                  <td>
+                    <div className={styles.actions}>
+                      <button
+                        type="button"
+                        disabled={activateUserMutation.isPending || deactivateUserMutation.isPending}
+                        onClick={() => {
+                          const isActive = user.is_active === 1
+                          const mutation = isActive ? deactivateUserMutation : activateUserMutation
+                          mutation.mutate(user.id, {
+                            onSuccess: () => {
+                              pushToast({ type: 'success', message: `User ${displayName} ${isActive ? 'deactivated' : 'reactivated'}.` })
+                            },
+                            onError: (error) => {
+                              pushToast({
+                                type: 'error',
+                                message: getApiErrorMessage(error, `Failed to ${isActive ? 'deactivate' : 'reactivate'} ${displayName}.`),
+                              })
+                            },
+                          })
+                        }}
+                      >
+                        {activateUserMutation.isPending || deactivateUserMutation.isPending
+                          ? (user.is_active === 1 ? 'Deactivating...' : 'Reactivating...')
+                          : (user.is_active === 1 ? 'Deactivate' : 'Reactivate')}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={resetPasswordMutation.isPending && resetPasswordTarget?.userId === user.id}
+                        onClick={() => {
+                          setResetPasswordTarget({ userId: user.id, fullName: displayName })
+                          setResetPasswordForm({
+                            newPassword: '',
+                            confirmPassword: '',
+                          })
+                          setResetPasswordError(null)
+                        }}
+                      >
+                        Reset password
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       ) : null}
@@ -460,6 +544,53 @@ export function UserManagementPage() {
                     setCreateError(null)
                   }}
                 >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {resetPasswordTarget ? (
+        <div className={styles.overlay} role="dialog" aria-modal="true">
+          <div className={styles.modal}>
+            <h2>Reset password</h2>
+            <p className={styles.helperText}>Set a new password for {resetPasswordTarget.fullName}. Existing sessions will be invalidated.</p>
+            <form className={styles.form} onSubmit={handleSubmitPasswordReset}>
+              <label className={styles.field}>
+                <span>New password</span>
+                <input
+                  type="password"
+                  value={resetPasswordForm.newPassword}
+                  onChange={(event) => {
+                    setResetPasswordForm((prev) => ({ ...prev, newPassword: event.target.value }))
+                    setResetPasswordError(null)
+                  }}
+                  autoComplete="new-password"
+                  required
+                />
+              </label>
+              <label className={styles.field}>
+                <span>Confirm password</span>
+                <input
+                  type="password"
+                  value={resetPasswordForm.confirmPassword}
+                  onChange={(event) => {
+                    setResetPasswordForm((prev) => ({ ...prev, confirmPassword: event.target.value }))
+                    setResetPasswordError(null)
+                  }}
+                  autoComplete="new-password"
+                  required
+                />
+              </label>
+              <p className={styles.helperText}>Password must be at least 12 characters and include uppercase, lowercase, number, and symbol.</p>
+              {resetPasswordError ? <p className={styles.error}>{resetPasswordError}</p> : null}
+              <div className={styles.modalActions}>
+                <button type="submit" disabled={resetPasswordMutation.isPending}>
+                  {resetPasswordMutation.isPending ? 'Resetting...' : 'Reset password'}
+                </button>
+                <button type="button" onClick={closeResetPasswordModal}>
                   Cancel
                 </button>
               </div>

@@ -4,6 +4,7 @@ import {
   UpstreamServiceError,
 } from "../domain/errors.js";
 import { prisma, type PrismaTransactionClient } from "../db/prismaClient.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 import { Decimal } from "decimal.js";
 
 const ACCOUNT_CODES = Object.freeze({
@@ -29,7 +30,7 @@ interface LedgerLine {
 
 interface PostJournalOptions {
   run?: (sql: string, params?: unknown[]) => Promise<{ lastID?: number }>;
-  get?: (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
+  get?: (sql: string, params?: unknown[]) => Promise<Record<string, unknown> | null | undefined>;
   tx?: PrismaTransactionClient;
   referenceType: string;
   // Idempotency key component. Must be a positive integer per source event.
@@ -61,11 +62,11 @@ interface PostJournalOptions {
 
 interface ReverseJournalOptions {
   run?: (sql: string, params?: unknown[]) => Promise<{ lastID?: number }>;
-  get?: (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
+  get?: (sql: string, params?: unknown[]) => Promise<Record<string, unknown> | null | undefined>;
   // `all` is required when using the raw-SQL path (run/get) rather than a
   // Prisma transaction, because fetching the original journal's entries needs
   // a multi-row query. Callers that supply `tx` do not need to provide `all`.
-  all?: (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
+  all?: (sql: string, params?: unknown[]) => Promise<Array<Record<string, unknown>>>;
   tx?: PrismaTransactionClient;
   originalJournalId: number;
   reversalReason: string;
@@ -79,6 +80,25 @@ interface ReverseJournalOptions {
     details?: string | null;
     ipAddress?: string | null;
   }) => Promise<void> | void;
+}
+
+interface GlEntryRow {
+  id: number | bigint;
+  account_id: number | bigint;
+  side: string;
+  amount: number | string | bigint;
+  transaction_amount?: number | string | bigint | null;
+  transaction_currency?: string | null;
+  memo?: string | null;
+}
+
+interface ReversalLine {
+  accountId: number;
+  side: "debit" | "credit";
+  amount: number;
+  transactionAmount: number | undefined;
+  transactionCurrency: string | null | undefined;
+  memo: string;
 }
 
 function createGeneralLedgerService() {
@@ -133,6 +153,7 @@ function createGeneralLedgerService() {
     const accountIdByCode: Map<string, number> = new Map();
     let totalDebit = new Decimal(0);
     let totalCredit = new Decimal(0);
+    const tenantId = getCurrentTenantId();
     const postingAtIso = toIsoDateTime(postedAt);
     const postingDateOnly = postingAtIso.slice(0, 10);
 
@@ -146,6 +167,7 @@ function createGeneralLedgerService() {
     if (tx || (!run && !get)) {
       const seenReference = await db.gl_journals.findFirst({
         where: {
+          tenant_id: tenantId,
           reference_type: referenceTypeValue,
           reference_id: normalizedReferenceId,
         },
@@ -180,9 +202,10 @@ function createGeneralLedgerService() {
           FROM gl_journals
           WHERE reference_type = ?
             AND reference_id = ?
+            AND tenant_id = ?
           LIMIT 1
         `,
-        [referenceTypeValue, normalizedReferenceId],
+        [referenceTypeValue, normalizedReferenceId, tenantId],
       );
       if (seenReference) {
         throw new DomainConflictError("General ledger journal already exists for this source event");
@@ -194,13 +217,13 @@ function createGeneralLedgerService() {
           FROM gl_period_locks
           WHERE LOWER(TRIM(COALESCE(status, ''))) = 'locked'
             AND (
-              (LOWER(TRIM(COALESCE(lock_type, ''))) = 'eod' AND lock_date = ?) OR
-              (LOWER(TRIM(COALESCE(lock_type, ''))) = 'eom' AND lock_date LIKE ?) OR
-              (LOWER(TRIM(COALESCE(lock_type, ''))) = 'eoy' AND lock_date LIKE ?)
+              (LOWER(TRIM(COALESCE(lock_type, ''))) = 'eod' AND CAST(lock_date AS TEXT) LIKE ?) OR
+              (LOWER(TRIM(COALESCE(lock_type, ''))) = 'eom' AND CAST(lock_date AS TEXT) LIKE ?) OR
+              (LOWER(TRIM(COALESCE(lock_type, ''))) = 'eoy' AND CAST(lock_date AS TEXT) LIKE ?)
             )
           LIMIT 1
         `,
-        [postingDateOnly, `${postingDateOnly.slice(0, 7)}%`, `${postingDateOnly.slice(0, 4)}%`],
+        [`${postingDateOnly}%`, `${postingDateOnly.slice(0, 7)}%`, `${postingDateOnly.slice(0, 4)}%`],
       );
       if (periodLock) {
         throw new DomainConflictError(`General ledger posting date is locked by ${periodLock?.lock_type || 'period'} close`);
@@ -265,6 +288,7 @@ function createGeneralLedgerService() {
     const journalId = tx || (!run && !get)
       ? Number((await db.gl_journals.create({
         data: {
+          tenant_id: tenantId,
           reference_type: referenceTypeValue,
           reference_id: normalizedReferenceId,
           loan_id: loanId ?? null,
@@ -282,7 +306,7 @@ function createGeneralLedgerService() {
       })).id || 0)
       : Number((await run!(
         `
-          INSERT INTO gl_journals (
+          INSERT INTO gl_journals (tenant_id, 
             reference_type,
             reference_id,
             loan_id,
@@ -296,9 +320,10 @@ function createGeneralLedgerService() {
             posted_at,
             external_reference_id
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
+          tenantId,
           referenceTypeValue,
           normalizedReferenceId,
           loanId ?? null,
@@ -325,6 +350,7 @@ function createGeneralLedgerService() {
       if (tx || (!run && !get)) {
         await db.gl_entries.create({
           data: {
+            tenant_id: tenantId,
             journal_id: journalId,
             account_id: accountId,
             side,
@@ -336,7 +362,7 @@ function createGeneralLedgerService() {
       } else {
         await run!(
           `
-            INSERT INTO gl_entries (
+            INSERT INTO gl_entries (tenant_id, 
               journal_id,
               account_id,
               side,
@@ -344,9 +370,9 @@ function createGeneralLedgerService() {
               memo,
               created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
           `,
-          [journalId, accountId, side, amount, line.memo || null, postingAtIso],
+          [getCurrentTenantId(), journalId, accountId, side, amount, line.memo || null, postingAtIso],
         );
       }
     }
@@ -395,11 +421,15 @@ function createGeneralLedgerService() {
 
     const orgJournalIdNum = Number(originalJournalId);
     const { all } = options;
+    const tenantId = getCurrentTenantId();
 
     // Fetch original journal and its entries
     const originalJournal = tx || (!run && !get)
-      ? await db.gl_journals.findUnique({
-          where: { id: orgJournalIdNum },
+      ? await db.gl_journals.findFirst({
+          where: {
+            id: orgJournalIdNum,
+            tenant_id: tenantId,
+          },
           include: { entries: true },
         })
       : await (async () => {
@@ -412,9 +442,9 @@ function createGeneralLedgerService() {
               + "Pass options.all when not using a Prisma transaction.",
             );
           }
-          const j = await get(`SELECT * FROM gl_journals WHERE id = ?`, [orgJournalIdNum]);
+          const j = await get(`SELECT * FROM gl_journals WHERE id = ? AND tenant_id = ?`, [orgJournalIdNum, tenantId]);
           if (!j) return null;
-          const e = await all(`SELECT * FROM gl_entries WHERE journal_id = ?`, [orgJournalIdNum]);
+          const e = await all(`SELECT * FROM gl_entries WHERE journal_id = ? AND tenant_id = ?`, [orgJournalIdNum, tenantId]);
           return { ...j, entries: e };
         })();
 
@@ -427,26 +457,65 @@ function createGeneralLedgerService() {
       ? await db.gl_journals.findFirst({
         where: {
           reference_type: "reversal",
-           reference_id: orgJournalIdNum
+          reference_id: orgJournalIdNum,
+          tenant_id: tenantId,
         }
       }) : await get!(
-        `SELECT id FROM gl_journals WHERE reference_type = 'reversal' AND reference_id = ? LIMIT 1`,
-        [orgJournalIdNum]
+        `SELECT id FROM gl_journals WHERE reference_type = 'reversal' AND reference_id = ? AND tenant_id = ? LIMIT 1`,
+        [orgJournalIdNum, tenantId]
       );
 
     if (alreadyReversed) {
         throw new DomainConflictError("Journal has already been reversed");
     }
     
-    const lines = originalJournal.entries.map((entry: any) => ({
-      accountCode: "RAW_ID_USED_BELOW_DO_NOT_USE_CODE", // We bypass code lookup since we have ID
-      accountId: entry.account_id,
-      side: entry.side === "debit" ? "credit" : "debit" as "debit"|"credit",
-      amount: Number(entry.amount),
-      transactionAmount: entry.transaction_amount ? Number(entry.transaction_amount) : undefined,
-      transactionCurrency: entry.transaction_currency,
-      memo: `Reversal of entry ${entry.id}: ${reversalReason}`,
-    }));
+    const rawEntries = (originalJournal as { entries?: GlEntryRow[] }).entries ?? [];
+    if (rawEntries.length === 0) {
+      throw new DomainValidationError("Original journal has no entries to reverse");
+    }
+
+    // Validate every account is still active before writing any reversal line.
+    // Previously this was bypassed by using account IDs directly — that skipped
+    // the is_active guard that postJournal enforces on the forward path.
+    const lines: ReversalLine[] = [];
+    for (const entry of rawEntries) {
+      const entryAccountId = Number(entry.account_id);
+      if (!Number.isInteger(entryAccountId) || entryAccountId <= 0) {
+        throw new DomainValidationError(
+          `Reversal entry has invalid account id: ${String(entry.account_id)}`,
+        );
+      }
+
+      const activeAccount = (tx !== undefined || (run === undefined && get === undefined))
+        ? await db.gl_accounts.findFirst({
+            where: { id: entryAccountId, is_active: 1 },
+            select: { id: true },
+          })
+        : typeof get === "function"
+          ? await get(
+              `SELECT id FROM gl_accounts WHERE id = ? AND is_active = 1 LIMIT 1`,
+              [entryAccountId],
+            )
+          : null;
+
+      if (!activeAccount) {
+        throw new UpstreamServiceError(
+          `GL account id ${entryAccountId} is no longer active — reversal of journal ${orgJournalIdNum} is blocked`,
+        );
+      }
+
+      const rawSide = String(entry.side || "").trim().toLowerCase();
+      const reversedSide: "debit" | "credit" = rawSide === "debit" ? "credit" : "debit";
+
+      lines.push({
+        accountId: entryAccountId,
+        side: reversedSide,
+        amount: Number(entry.amount),
+        transactionAmount: entry.transaction_amount != null ? Number(entry.transaction_amount) : undefined,
+        transactionCurrency: entry.transaction_currency ?? null,
+        memo: `Reversal of entry ${Number(entry.id)}: ${reversalReason}`,
+      });
+    }
 
     const postingAtIso = toIsoDateTime(postedAt);
     const postingDateOnly = postingAtIso.slice(0, 10);
@@ -475,13 +544,13 @@ function createGeneralLedgerService() {
         FROM gl_period_locks
         WHERE LOWER(TRIM(COALESCE(status, ''))) = 'locked'
           AND (
-            (LOWER(TRIM(COALESCE(lock_type, ''))) = 'eod' AND lock_date = ?) OR
-            (LOWER(TRIM(COALESCE(lock_type, ''))) = 'eom' AND lock_date LIKE ?) OR
-            (LOWER(TRIM(COALESCE(lock_type, ''))) = 'eoy' AND lock_date LIKE ?)
+            (LOWER(TRIM(COALESCE(lock_type, ''))) = 'eod' AND CAST(lock_date AS TEXT) LIKE ?) OR
+            (LOWER(TRIM(COALESCE(lock_type, ''))) = 'eom' AND CAST(lock_date AS TEXT) LIKE ?) OR
+            (LOWER(TRIM(COALESCE(lock_type, ''))) = 'eoy' AND CAST(lock_date AS TEXT) LIKE ?)
           )
         LIMIT 1
       `,
-      [postingDateOnly, `${postingDateOnly.slice(0, 7)}%`, `${postingDateOnly.slice(0, 4)}%`]
+      [`${postingDateOnly}%`, `${postingDateOnly.slice(0, 7)}%`, `${postingDateOnly.slice(0, 4)}%`]
     );
     
     if (periodLock) {
@@ -494,6 +563,7 @@ function createGeneralLedgerService() {
     const journalId = tx || (!run && !get)
       ? Number((await db.gl_journals.create({
         data: {
+          tenant_id: tenantId,
           reference_type: "reversal",
           reference_id: orgJournalIdNum,
           loan_id: originalJournal.loan_id,
@@ -513,7 +583,7 @@ function createGeneralLedgerService() {
       })).id || 0) 
       : Number((await run!(
         `
-          INSERT INTO gl_journals (
+          INSERT INTO gl_journals (tenant_id, 
             reference_type,
             reference_id,
             loan_id,
@@ -529,9 +599,10 @@ function createGeneralLedgerService() {
             total_credit,
             posted_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
+          tenantId,
           "reversal",
           orgJournalIdNum,
           originalJournal.loan_id ?? null,
@@ -557,6 +628,7 @@ function createGeneralLedgerService() {
       if (tx || (!run && !get)) {
         await db.gl_entries.create({
           data: {
+            tenant_id: tenantId,
             journal_id: journalId,
             account_id: line.accountId,
             side: line.side,
@@ -570,7 +642,7 @@ function createGeneralLedgerService() {
       } else {
         await run!(
           `
-            INSERT INTO gl_entries (
+            INSERT INTO gl_entries (tenant_id, 
               journal_id,
               account_id,
               side,
@@ -580,9 +652,10 @@ function createGeneralLedgerService() {
               memo,
               created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           `,
           [
+            tenantId,
             journalId,
             line.accountId,
             line.side,

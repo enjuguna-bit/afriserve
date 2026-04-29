@@ -1,6 +1,4 @@
-import { prisma } from "../db/prismaClient.js";
-import { Prisma } from "../db/prismaClient.js";
-import type { DbRunResult } from "../types/dataLayer.js";
+import type { DbRunResult, DbTransactionContext } from "../types/dataLayer.js";
 import {
   ClientNotFoundError,
   DomainValidationError,
@@ -9,16 +7,28 @@ import {
   LoanNotFoundError,
   LoanStateConflictError,
 } from "../domain/errors.js";
+import { LoanApplicationSubmitted } from "../domain/loan/events/LoanApplicationSubmitted.js";
+import type { DomainEventPublisher, HierarchyServiceLike } from "../types/serviceContracts.js";
 import { getClientOnboardingSnapshot } from "./loanWorkflowSnapshotService.js";
 import { buildLoanContractSnapshotTx, recordLoanContractVersionTx } from "./loanContractVersioning.js";
 import { calculateLoanProductPricing } from "./loanProductPricing.js";
 import { checkUserPermission } from "./permissionService.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
+
+type LoanApplicationSubmittedTxHandler = {
+  handle: (event: LoanApplicationSubmitted, tx?: DbTransactionContext) => Promise<void>;
+};
+
+type LoanApplicationSubmittedAsyncHandler = {
+  handle: (event: LoanApplicationSubmitted) => Promise<void>;
+};
 
 interface LoanServiceDeps {
   get: (sql: string, params?: unknown[]) => Promise<Record<string, unknown> | null | undefined>;
-  run: (sql: string, params?: unknown[]) => Promise<unknown>;
-  executeTransaction: (callback: (tx: { run: (sql: string, params?: unknown[]) => Promise<DbRunResult> }) => Promise<unknown>) => Promise<unknown>;
-  hierarchyService: any;
+  all: (sql: string, params?: unknown[]) => Promise<Array<Record<string, unknown>>>;
+  run: (sql: string, params?: unknown[]) => Promise<DbRunResult>;
+  executeTransaction: (callback: (tx: DbTransactionContext) => Promise<unknown>) => Promise<unknown>;
+  hierarchyService: HierarchyServiceLike;
   calculateExpectedTotal: (principal: number, interestRate: number, termWeeks: number) => number;
   resolveLoanProduct: (payload: { productId?: number }) => Promise<Record<string, unknown>>;
   writeAuditLog: (payload: {
@@ -31,21 +41,31 @@ interface LoanServiceDeps {
   }) => Promise<void> | void;
   invalidateReportCaches: () => Promise<void>;
   allowConcurrentLoans: boolean;
+  publishDomainEvent?: DomainEventPublisher;
   loanUnderwritingService?: {
     refreshLoanAssessment: (loanId: number) => Promise<unknown>;
   } | null;
+  loanOnboardingLinkSaga?: LoanApplicationSubmittedTxHandler | null;
+  loanContractVersionSaga?: LoanApplicationSubmittedTxHandler | null;
+  loanUnderwritingRefreshSaga?: LoanApplicationSubmittedAsyncHandler | null;
 }
 
 function createLoanService(deps: LoanServiceDeps) {
   const {
     get,
+    run,
+    executeTransaction,
     hierarchyService,
     calculateExpectedTotal,
     resolveLoanProduct,
     writeAuditLog,
     invalidateReportCaches,
     allowConcurrentLoans,
+    publishDomainEvent,
     loanUnderwritingService = null,
+    loanOnboardingLinkSaga = null,
+    loanContractVersionSaga = null,
+    loanUnderwritingRefreshSaga = null,
   } = deps;
 
   async function canOverridePricing(user: {
@@ -73,31 +93,6 @@ function createLoanService(deps: LoanServiceDeps) {
     return checkUserPermission(Number(user.sub), effectiveRoles, "loan.approve");
   }
 
-  function isSerializableConflictError(error: unknown): boolean {
-    // Prisma serialization failure — typed access via discriminated union
-    // TS2503: Prisma is a dynamically-resolved value; use structural check instead of
-    // instanceof on the namespace type to keep strict mode happy.
-    const prismaError = error as { code?: string; constructor?: { name?: string } };
-    if (
-      (typeof prismaError?.code === "string" && prismaError.code === "P2034")
-      || (typeof prismaError?.constructor?.name === "string"
-          && prismaError.constructor.name === "PrismaClientKnownRequestError"
-          && prismaError.code === "P2034")
-    ) {
-      return true;
-    }
-
-    const message = String((error as { message?: unknown })?.message || "").toLowerCase();
-    return message.includes("serialization")
-      || message.includes("deadlock")
-      || message.includes("transaction conflict");
-  }
-
-  function isUnsupportedIsolationLevelError(error: unknown): boolean {
-    const message = String((error as { message?: unknown })?.message || "").toLowerCase();
-    return message.includes("isolation level") && message.includes("not supported");
-  }
-
   async function createLoan({
     payload,
     user,
@@ -114,49 +109,32 @@ function createLoanService(deps: LoanServiceDeps) {
       branchId?: number;
       officerId?: number;
       /** Loan purpose — stored for CBK reporting compliance */
-      purpose?: string;
+      purpose?: string | null;
     };
     user: { sub: number; role?: string; roles?: string[]; permissions?: string[]; branchId?: number | null };
     ipAddress: string | null | undefined;
   }) {
+    const tenantId = getCurrentTenantId();
     const scope = await hierarchyService.resolveHierarchyScope(user);
-    const client = await prisma.clients.findUnique({
-      where: { id: payload.clientId },
-      select: {
-        id: true,
-        branch_id: true,
-        is_active: true,
-        officer_id: true,
-        created_by_user_id: true,
-        fee_payment_status: true,
-      },
-    });
+
+    const client = await get(
+      `SELECT id, branch_id, is_active, officer_id, created_by_user_id, fee_payment_status
+       FROM clients WHERE id = ? AND tenant_id = ?`,
+      [payload.clientId, tenantId],
+    );
 
     if (!client) {
       throw new ClientNotFoundError();
     }
 
-    if (Number(client.is_active || 0) !== 1) {
+    if (Number(client["is_active"] || 0) !== 1) {
       throw new DomainValidationError("Cannot create a loan for an inactive client");
-    }
-    const clientOnboarding = await getClientOnboardingSnapshot({
-      get,
-      clientId: Number(payload.clientId),
-    });
-    if (!clientOnboarding) {
-      throw new ClientNotFoundError();
-    }
-    if (!clientOnboarding.ready_for_loan_application) {
-      throw new DomainValidationError("Cannot create loan: client onboarding is incomplete", {
-        blockers: clientOnboarding.blockers,
-        clientId: payload.clientId,
-      });
     }
 
     const normalizedUserRole = String(user.role || "").trim().toLowerCase();
     if (normalizedUserRole === "loan_officer") {
-      const clientOfficerId = Number(client.officer_id || 0) || null;
-      const clientCreatedByUserId = Number(client.created_by_user_id || 0) || null;
+      const clientOfficerId = Number(client["officer_id"] || 0) || null;
+      const clientCreatedByUserId = Number(client["created_by_user_id"] || 0) || null;
       const canAccessClient = (
         (Number.isInteger(clientOfficerId) && Number(clientOfficerId) > 0 && Number(clientOfficerId) === Number(user.sub))
         || (Number.isInteger(clientCreatedByUserId) && Number(clientCreatedByUserId) > 0 && Number(clientCreatedByUserId) === Number(user.sub))
@@ -166,7 +144,7 @@ function createLoanService(deps: LoanServiceDeps) {
       }
     }
 
-    let branchId = client.branch_id || payload.branchId || null;
+    let branchId: number | null = Number(client["branch_id"] || 0) || Number(payload.branchId || 0) || null;
     if (scope.level === "branch") {
       if (branchId && Number(branchId) !== Number(scope.branchId)) {
         throw new ForbiddenScopeError("Forbidden: selected branch is outside your scope");
@@ -191,31 +169,43 @@ function createLoanService(deps: LoanServiceDeps) {
       throw new ForbiddenScopeError("Forbidden: selected branch is outside your scope");
     }
 
-    if (client.branch_id && Number(client.branch_id) !== Number(branchId)) {
+    if (client["branch_id"] && Number(client["branch_id"]) !== Number(branchId)) {
       throw new DomainValidationError("Loan branch must match client branch assignment");
     }
 
-    if (!client.branch_id) {
-      await prisma.clients.update({
-        where: { id: payload.clientId },
-        data: {
-          branch_id: Number(branchId),
-          updated_at: new Date().toISOString(),
-        },
+    const clientOnboarding = await getClientOnboardingSnapshot({
+      get,
+      clientId: Number(payload.clientId),
+    });
+    if (!clientOnboarding) {
+      throw new ClientNotFoundError();
+    }
+    if (!clientOnboarding.ready_for_loan_application) {
+      throw new DomainValidationError("Cannot create loan: client onboarding is incomplete", {
+        blockers: clientOnboarding.blockers,
+        clientId: payload.clientId,
       });
     }
 
+    // Assign branch to client if not yet set
+    if (!client["branch_id"]) {
+      await run(
+        "UPDATE clients SET branch_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ?",
+        [Number(branchId), new Date().toISOString(), payload.clientId, tenantId],
+      );
+    }
+
     const selectedProduct = await resolveLoanProduct(payload);
-    const minTermWeeks = Number(selectedProduct.min_term_weeks || 0);
-    const maxTermWeeks = Number(selectedProduct.max_term_weeks || 0);
+    const minTermWeeks = Number(selectedProduct["min_term_weeks"] || 0);
+    const maxTermWeeks = Number(selectedProduct["max_term_weeks"] || 0);
     if (payload.termWeeks < minTermWeeks || payload.termWeeks > maxTermWeeks) {
       throw new DomainValidationError(
         `termWeeks must be between ${minTermWeeks} and ${maxTermWeeks} for the selected loan product`,
       );
     }
 
-    const rawMinPrincipal = Number(selectedProduct.min_principal);
-    const rawMaxPrincipal = Number(selectedProduct.max_principal);
+    const rawMinPrincipal = Number(selectedProduct["min_principal"]);
+    const rawMaxPrincipal = Number(selectedProduct["max_principal"]);
     const minPrincipal = Number.isFinite(rawMinPrincipal) && rawMinPrincipal > 0 ? rawMinPrincipal : 1;
     const maxPrincipal = Number.isFinite(rawMaxPrincipal) && rawMaxPrincipal >= minPrincipal ? rawMaxPrincipal : Number.MAX_SAFE_INTEGER;
     if (payload.principal < minPrincipal || payload.principal > maxPrincipal) {
@@ -238,7 +228,7 @@ function createLoanService(deps: LoanServiceDeps) {
 
     const payloadOfficerId = Number(payload.officerId || 0) || null;
     const hasPayloadOfficerId = payloadOfficerId !== null && Number.isInteger(payloadOfficerId) && payloadOfficerId > 0;
-    const clientOfficerId = Number(client.officer_id || 0) || null;
+    const clientOfficerId = Number(client["officer_id"] || 0) || null;
     const hasClientOfficerId = clientOfficerId !== null && Number.isInteger(clientOfficerId) && clientOfficerId > 0;
     const selectedOfficerId = hasPayloadOfficerId
       ? payloadOfficerId
@@ -251,24 +241,23 @@ function createLoanService(deps: LoanServiceDeps) {
     }
 
     if (selectedOfficerId) {
-      const selectedOfficer = await prisma.users.findUnique({
-        where: { id: Number(selectedOfficerId) },
-        select: { id: true, role: true, is_active: true, branch_id: true },
-      });
-
+      const selectedOfficer = await get(
+        "SELECT id, role, is_active, branch_id FROM users WHERE id = ? AND tenant_id = ?",
+        [Number(selectedOfficerId), tenantId],
+      );
       if (!selectedOfficer) {
         throw new DomainValidationError("Selected loan officer was not found");
       }
-      if (String(selectedOfficer.role || "").trim().toLowerCase() !== "loan_officer") {
+      if (String(selectedOfficer["role"] || "").trim().toLowerCase() !== "loan_officer") {
         throw new DomainValidationError("Selected user is not a loan officer");
       }
-      if (Number(selectedOfficer.is_active || 0) !== 1) {
+      if (Number(selectedOfficer["is_active"] || 0) !== 1) {
         throw new DomainValidationError("Selected loan officer is inactive");
       }
-      if (!Number.isInteger(Number(selectedOfficer.branch_id)) || Number(selectedOfficer.branch_id) <= 0) {
+      if (!Number.isInteger(Number(selectedOfficer["branch_id"])) || Number(selectedOfficer["branch_id"]) <= 0) {
         throw new DomainValidationError("Selected loan officer has no branch assignment");
       }
-      if (Number(selectedOfficer.branch_id) !== Number(branchId)) {
+      if (Number(selectedOfficer["branch_id"]) !== Number(branchId)) {
         throw new DomainValidationError("Selected loan officer belongs to a different branch");
       }
     }
@@ -278,204 +267,132 @@ function createLoanService(deps: LoanServiceDeps) {
       ? payload.purpose.trim()
       : null;
 
-    // Use string rather than Prisma.TransactionIsolationLevel — Prisma is a
-    // dynamically-resolved value export from prismaClient.ts and TypeScript
-    // cannot resolve its namespace types at compile time in strict mode.
-    const executeCreateLoanTransaction = async (isolationLevel?: string) =>
-      prisma.$transaction(async (tx: any) => {
-        // Write-lock this client row to prevent concurrent TOCTOU races
-        await tx.$executeRaw`
-          UPDATE clients
-          SET updated_at = COALESCE(updated_at, created_at)
-          WHERE id = ${Number(payload.clientId)}
-        `;
+    const createResult = await executeTransaction(async (tx: DbTransactionContext) => {
+      // Optimistic write-lock on the client row to prevent TOCTOU races
+      await tx.run(
+        "UPDATE clients SET updated_at = COALESCE(updated_at, created_at) WHERE id = ? AND tenant_id = ?",
+        [Number(payload.clientId), tenantId],
+      );
 
-        if (!allowConcurrentLoans) {
-          const inFlightCount = await tx.loans.count({
-            where: {
-              client_id: payload.clientId,
-              status: { in: ["pending_approval", "approved", "active", "restructured"] },
-            },
-          });
-          if (Number(inFlightCount || 0) > 0) {
-            throw new LoanStateConflictError(
-              "Client already has an active or pending loan. Concurrent loan applications are not allowed.",
-            );
-          }
-        }
-
-        // isFirstLoan: count only actually-disbursed loans (not rejected/cancelled)
-        const disbursedLoanCount = await tx.loans.count({
-          where: {
-            client_id: payload.clientId,
-            status: { in: ["active", "restructured", "closed", "written_off"] },
-          },
-        });
-        const isFirstLoan = Number(disbursedLoanCount || 0) === 0;
-
-        if (hasPricingOverride) {
-          interestRate = typeof payload.interestRate === "number"
-            ? Number(payload.interestRate)
-            : Number(selectedProduct.interest_rate || 0);
-          registrationFee = isFirstLoan
-            ? (typeof payload.registrationFee === "number"
-              ? Number(payload.registrationFee)
-              : Number(selectedProduct.registration_fee || 0))
-            : 0;
-          processingFee = typeof payload.processingFee === "number"
-            ? Number(payload.processingFee)
-            : Number(selectedProduct.processing_fee || 0);
-          const scheduledRepaymentTotal = calculateExpectedTotal(payload.principal, interestRate, payload.termWeeks);
-          expectedTotal = Number(scheduledRepaymentTotal.toFixed(2));
-        } else {
-          try {
-            const derivedPricing = calculateLoanProductPricing({
-              product: selectedProduct,
-              principal: payload.principal,
-              termWeeks: payload.termWeeks,
-              isFirstLoan,
-              calculateExpectedTotal,
-            });
-            interestRate = derivedPricing.interestRate;
-            registrationFee = derivedPricing.registrationFee;
-            processingFee = derivedPricing.processingFee;
-            expectedTotal = derivedPricing.expectedTotal;
-          } catch (pricingError) {
-            throw new DomainValidationError(
-              pricingError instanceof Error ? pricingError.message : "Invalid loan product pricing configuration",
-            );
-          }
-        }
-
-        const createdLoan = await tx.loans.create({
-          data: {
-            client_id: payload.clientId,
-            product_id: selectedProduct.id,
-            branch_id: Number(branchId),
-            created_by_user_id: user.sub,
-            principal: payload.principal,
-            interest_rate: interestRate,
-            term_months: termMonths,
-            term_weeks: payload.termWeeks,
-            registration_fee: registrationFee,
-            processing_fee: processingFee,
-            expected_total: expectedTotal,
-            balance: expectedTotal,
-            status: "pending_approval",
-            officer_id: selectedOfficerId,
-            // CBK requires loan purpose to be recorded; nullable for backward compat
-            purpose: loanPurpose,
-            created_at: new Date().toISOString(),
-          },
-        });
-
-        const [clientGuarantors, clientCollaterals] = await Promise.all([
-          tx.$queryRaw<Array<{ id: number; guarantee_amount: number }>>`
-            SELECT id, guarantee_amount
-            FROM guarantors
-            WHERE client_id = ${Number(payload.clientId)}
-              AND is_active = 1
-          `,
-          tx.collateral_assets.findMany({
-            where: { client_id: payload.clientId, status: { in: ["active", "released"] } },
-            select: { id: true, status: true },
-          }),
-        ]);
-
-        if (clientGuarantors.length > 0) {
-          const guarantorsMissingCoverage = clientGuarantors
-            .filter((g: { id: number; guarantee_amount: number }) => Number(g.guarantee_amount || 0) <= 0)
-            .map((g: { id: number; guarantee_amount: number }) => Number(g.id));
-          if (guarantorsMissingCoverage.length > 0) {
-            throw new DomainValidationError(
-              "All onboarding guarantors must have a positive guarantee amount before loan creation",
-              { guarantorIds: guarantorsMissingCoverage },
-            );
-          }
-
-          await tx.loan_guarantors.createMany({
-            data: clientGuarantors.map((g: { id: number; guarantee_amount: number }) => ({
-              loan_id: createdLoan.id,
-              guarantor_id: g.id,
-              guarantee_amount: Number(g.guarantee_amount || 0),
-              liability_type: "individual",
-              note: "Auto-linked from client onboarding guarantor",
-              created_by_user_id: user.sub,
-              created_at: new Date().toISOString(),
-            })),
-          });
-        }
-
-        if (clientCollaterals.length > 0) {
-          await tx.loan_collaterals.createMany({
-            data: clientCollaterals.map((c: { id: number; status: string }) => ({
-              loan_id: createdLoan.id,
-              collateral_asset_id: c.id,
-              forced_sale_value: null,
-              lien_rank: 1,
-              note: "Auto-linked from client onboarding collateral",
-              created_by_user_id: user.sub,
-              created_at: new Date().toISOString(),
-            })),
-          });
-
-          const releasedIds = clientCollaterals
-            .filter((c: { id: number; status: string }) => c.status === "released")
-            .map((c: { id: number; status: string }) => c.id);
-          if (releasedIds.length > 0) {
-            await tx.collateral_assets.updateMany({
-              where: { id: { in: releasedIds } },
-              data: { status: "active", updated_at: new Date().toISOString() },
-            });
-          }
-        }
-
-        const creationSnapshot = await buildLoanContractSnapshotTx(tx, createdLoan.id, {
-          onboarding: {
-            status: clientOnboarding.onboarding_status,
-            blockers: clientOnboarding.blockers,
-            guarantorCount: clientOnboarding.guarantor_count,
-            collateralCount: clientOnboarding.collateral_count,
-            readyForLoanApplication: clientOnboarding.ready_for_loan_application,
-          },
-          product: { id: selectedProduct.id, name: selectedProduct.name },
-          branchId: Number(branchId),
-          officerId: selectedOfficerId,
-        });
-
-        await recordLoanContractVersionTx(tx, {
-          loanId: createdLoan.id,
-          eventType: "creation",
-          note: "Loan application created",
-          createdByUserId: user.sub,
-          snapshotJson: creationSnapshot,
-          principal: payload.principal,
-          interestRate,
-          termWeeks: payload.termWeeks,
-          expectedTotal,
-          repaidTotal: 0,
-          balance: expectedTotal,
-        });
-
-        return createdLoan.id;
-      }, isolationLevel ? { isolationLevel } : undefined);
-
-    const maxLoanCreationAttempts = 3;
-    let createdLoanId = 0;
-    for (let attempt = 1; attempt <= maxLoanCreationAttempts; attempt += 1) {
-      try {
-        createdLoanId = await executeCreateLoanTransaction(Prisma.TransactionIsolationLevel.Serializable);
-        break;
-      } catch (txError) {
-        if (isUnsupportedIsolationLevelError(txError)) {
-          createdLoanId = await executeCreateLoanTransaction();
-          break;
-        }
-        if (attempt >= maxLoanCreationAttempts || !isSerializableConflictError(txError)) {
-          throw txError;
+      if (!allowConcurrentLoans) {
+        const inFlightRow = await tx.get(
+          `SELECT status FROM loans
+           WHERE client_id = ? AND tenant_id = ?
+             AND status IN ('active', 'overdue', 'restructured')
+           ORDER BY
+             CASE
+               WHEN status = 'active' THEN 0
+               WHEN status = 'overdue' THEN 1
+               WHEN status = 'restructured' THEN 2
+               ELSE 99
+             END,
+             id DESC
+           LIMIT 1`,
+          [payload.clientId, tenantId],
+        );
+        const conflictingStatus = String(inFlightRow?.["status"] || "").trim().toLowerCase();
+        if (conflictingStatus) {
+          const message = conflictingStatus === "restructured"
+            ? "Client already has a restructured loan. Concurrent active loans are not allowed."
+            : "Client already has an active loan. Concurrent active loans are not allowed.";
+          throw new LoanStateConflictError(
+            message,
+          );
         }
       }
-    }
+
+      const disbursedRow = await tx.get(
+        `SELECT COUNT(*) AS total FROM loans
+         WHERE client_id = ? AND tenant_id = ?
+           AND status IN ('active', 'restructured', 'closed', 'written_off')`,
+        [payload.clientId, tenantId],
+      );
+      const isFirstLoan = Number(disbursedRow?.["total"] || 0) === 0;
+
+      if (hasPricingOverride) {
+        interestRate = typeof payload.interestRate === "number"
+          ? Number(payload.interestRate)
+          : Number(selectedProduct["interest_rate"] || 0);
+        registrationFee = isFirstLoan
+          ? (typeof payload.registrationFee === "number"
+            ? Number(payload.registrationFee)
+            : Number(selectedProduct["registration_fee"] || 0))
+          : 0;
+        processingFee = typeof payload.processingFee === "number"
+          ? Number(payload.processingFee)
+          : Number(selectedProduct["processing_fee"] || 0);
+        expectedTotal = Number(calculateExpectedTotal(payload.principal, interestRate, payload.termWeeks).toFixed(2));
+      } else {
+        try {
+          const derivedPricing = calculateLoanProductPricing({
+            product: selectedProduct,
+            principal: payload.principal,
+            termWeeks: payload.termWeeks,
+            isFirstLoan,
+            calculateExpectedTotal,
+          });
+          interestRate = derivedPricing.interestRate;
+          registrationFee = derivedPricing.registrationFee;
+          processingFee = derivedPricing.processingFee;
+          expectedTotal = derivedPricing.expectedTotal;
+        } catch (pricingError) {
+          throw new DomainValidationError(
+            pricingError instanceof Error ? pricingError.message : "Invalid loan product pricing configuration",
+          );
+        }
+      }
+
+      const createdAt = new Date().toISOString();
+      const insertResult = await tx.run(
+        `INSERT INTO loans (
+          client_id, product_id, branch_id, created_by_user_id,
+          principal, interest_rate, term_months, term_weeks,
+          registration_fee, processing_fee,
+          expected_total, balance, repaid_total,
+          status, officer_id, purpose,
+          tenant_id, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          payload.clientId, selectedProduct["id"], Number(branchId), user.sub,
+          payload.principal, interestRate, termMonths, payload.termWeeks,
+          registrationFee, processingFee,
+          expectedTotal, expectedTotal, 0,
+          "pending_approval", selectedOfficerId, loanPurpose,
+          tenantId, createdAt,
+        ],
+      );
+      const newLoanId = Number(insertResult.lastID || 0);
+      const submittedEvent = new LoanApplicationSubmitted({
+        loanId: newLoanId,
+        clientId: Number(payload.clientId),
+        principal: Number(payload.principal),
+        termWeeks: Number(payload.termWeeks),
+        branchId: branchId ?? null,
+        createdByUserId: Number(user.sub),
+        occurredAt: new Date(createdAt),
+      });
+
+      if (loanOnboardingLinkSaga) {
+        await loanOnboardingLinkSaga.handle(submittedEvent, tx);
+      }
+
+      if (loanContractVersionSaga) {
+        await loanContractVersionSaga.handle(submittedEvent, tx);
+      }
+
+      if (publishDomainEvent) {
+        await publishDomainEvent(
+          {
+            ...submittedEvent.toOutboxPayload(),
+            tenantId,
+          },
+          tx,
+        );
+      }
+
+      return { loanId: newLoanId, submittedEvent };
+    }) as { loanId: number; submittedEvent: LoanApplicationSubmitted };
+    const createdLoanId = createResult.loanId;
 
     await writeAuditLog({
       userId: user.sub,
@@ -485,8 +402,8 @@ function createLoanService(deps: LoanServiceDeps) {
       details: JSON.stringify({
         clientId: payload.clientId,
         principal: payload.principal,
-        productId: selectedProduct.id,
-        productName: selectedProduct.name,
+        productId: selectedProduct["id"],
+        productName: selectedProduct["name"],
         interestRate,
         termWeeks: payload.termWeeks,
         pricingOverridesApplied: hasPricingOverride,
@@ -502,8 +419,13 @@ function createLoanService(deps: LoanServiceDeps) {
       ipAddress: ipAddress || null,
     });
 
-    const createdLoan = await prisma.loans.findUnique({ where: { id: Number(createdLoanId) } });
-    if (loanUnderwritingService) {
+    const createdLoan = await get(
+      "SELECT * FROM loans WHERE id = ? AND tenant_id = ?",
+      [Number(createdLoanId), getCurrentTenantId()],
+    );
+    if (loanUnderwritingRefreshSaga) {
+      await loanUnderwritingRefreshSaga.handle(createResult.submittedEvent);
+    } else if (loanUnderwritingService) {
       await loanUnderwritingService.refreshLoanAssessment(Number(createdLoanId));
     }
     await invalidateReportCaches();
@@ -527,40 +449,48 @@ function createLoanService(deps: LoanServiceDeps) {
     user: { sub: number; role?: string; roles?: string[]; permissions?: string[] };
     ipAddress: string | null | undefined;
   }) {
+    const tenantId = getCurrentTenantId();
     const scope = await hierarchyService.resolveHierarchyScope(user);
-    const updateResult = await prisma.$transaction(async (tx: any) => {
-      const loan = await tx.loans.findUnique({ where: { id: Number(loanId) } });
+
+    const updateResult = await executeTransaction(async (tx: DbTransactionContext) => {
+      const loan = await tx.get(
+        "SELECT * FROM loans WHERE id = ? AND tenant_id = ?",
+        [Number(loanId), tenantId],
+      );
 
       if (!loan) { throw new LoanNotFoundError(); }
-      if (!hierarchyService.isBranchInScope(scope, loan.branch_id)) {
+      if (!hierarchyService.isBranchInScope(scope, loan["branch_id"])) {
         throw new ForbiddenScopeError("Forbidden: loan is outside your scope");
       }
-      if (String(loan.status || "").trim().toLowerCase() !== "pending_approval") {
+      if (String(loan["status"] || "").trim().toLowerCase() !== "pending_approval") {
         throw new LoanStateConflictError(
           "Only loans in pending_approval can be edited. Use loan lifecycle actions after approval or disbursement.",
-          { loanId, status: loan.status },
+          { loanId, status: loan["status"] },
         );
       }
 
-      const [installmentCount, repaymentCount, trancheCount] = await Promise.all([
-        tx.loan_installments.count({ where: { loan_id: Number(loanId) } }),
-        tx.repayments.count({ where: { loan_id: Number(loanId) } }),
-        tx.loan_disbursement_tranches.count({ where: { loan_id: Number(loanId) } }),
+      const [installmentRow, repaymentRow, trancheRow] = await Promise.all([
+        tx.get("SELECT COUNT(*) AS total FROM loan_installments WHERE loan_id = ?", [Number(loanId)]),
+        tx.get("SELECT COUNT(*) AS total FROM repayments WHERE loan_id = ?", [Number(loanId)]),
+        tx.get("SELECT COUNT(*) AS total FROM loan_disbursement_tranches WHERE loan_id = ?", [Number(loanId)]),
       ]);
-      if (Number(installmentCount || 0) > 0 || Number(repaymentCount || 0) > 0 || Number(trancheCount || 0) > 0) {
+      const installmentCount = Number(installmentRow?.["total"] || 0);
+      const repaymentCount = Number(repaymentRow?.["total"] || 0);
+      const trancheCount = Number(trancheRow?.["total"] || 0);
+      if (installmentCount > 0 || repaymentCount > 0 || trancheCount > 0) {
         throw new LoanStateConflictError("Loan details cannot be edited after financial execution records exist", {
           loanId, installmentCount, repaymentCount, trancheCount,
         });
       }
 
-      const currentPrincipal = Number(loan.principal || 0);
-      const currentTermWeeks = Number(loan.term_weeks || 0);
-      const currentInterestRate = Number(loan.interest_rate || 0);
-      const currentRegistrationFee = Number(loan.registration_fee || 0);
-      const currentProcessingFee = Number(loan.processing_fee || 0);
-      const currentExpectedTotal = Number(loan.expected_total || 0);
-      const currentBalance = Number(loan.balance || 0);
-      const repaidTotal = Number(loan.repaid_total || 0);
+      const currentPrincipal = Number(loan["principal"] || 0);
+      const currentTermWeeks = Number(loan["term_weeks"] || 0);
+      const currentInterestRate = Number(loan["interest_rate"] || 0);
+      const currentRegistrationFee = Number(loan["registration_fee"] || 0);
+      const currentProcessingFee = Number(loan["processing_fee"] || 0);
+      const currentExpectedTotal = Number(loan["expected_total"] || 0);
+      const currentBalance = Number(loan["balance"] || 0);
+      const repaidTotal = Number(loan["repaid_total"] || 0);
 
       const nextPrincipal = typeof payload.principal === "number" ? Number(payload.principal) : currentPrincipal;
       const nextTermWeeks = typeof payload.termWeeks === "number" ? Number(payload.termWeeks) : currentTermWeeks;
@@ -581,22 +511,27 @@ function createLoanService(deps: LoanServiceDeps) {
       if (nextBalance !== currentBalance) changedFields["balance"] = { previous: currentBalance, next: nextBalance };
 
       if (Object.keys(changedFields).length === 0) {
-        return { updatedLoan: loan, changedFields, applied: false };
+        return { loan, changedFields, applied: false };
       }
 
-      const updatedLoan = await tx.loans.update({
-        where: { id: Number(loanId) },
-        data: {
-          principal: nextPrincipal,
-          interest_rate: nextInterestRate,
-          term_weeks: nextTermWeeks,
-          term_months: nextTermMonths,
-          registration_fee: nextRegistrationFee,
-          processing_fee: nextProcessingFee,
-          expected_total: nextExpectedTotal,
-          balance: nextBalance,
-        },
-      });
+      await tx.run(
+        `UPDATE loans SET
+          principal = ?, interest_rate = ?, term_weeks = ?, term_months = ?,
+          registration_fee = ?, processing_fee = ?,
+          expected_total = ?, balance = ?
+        WHERE id = ? AND tenant_id = ?`,
+        [
+          nextPrincipal, nextInterestRate, nextTermWeeks, nextTermMonths,
+          nextRegistrationFee, nextProcessingFee,
+          nextExpectedTotal, nextBalance,
+          Number(loanId), tenantId,
+        ],
+      );
+
+      const updatedLoan = await tx.get(
+        "SELECT * FROM loans WHERE id = ? AND tenant_id = ?",
+        [Number(loanId), tenantId],
+      );
 
       const contractSnapshot = await buildLoanContractSnapshotTx(tx, Number(loanId), {
         previousLoan: loan,
@@ -617,11 +552,11 @@ function createLoanService(deps: LoanServiceDeps) {
         balance: nextBalance,
       });
 
-      return { updatedLoan, changedFields, applied: true };
-    }, { maxWait: 10000, timeout: 20000 });
+      return { loan: updatedLoan, changedFields, applied: true };
+    }) as { loan: Record<string, any> | null; changedFields: Record<string, any>; applied: boolean };
 
     if (!updateResult.applied) {
-      return { loan: updateResult.updatedLoan, applied: false, changedFields: updateResult.changedFields };
+      return { loan: updateResult.loan, applied: false, changedFields: updateResult.changedFields };
     }
 
     if (loanUnderwritingService) {
@@ -638,7 +573,7 @@ function createLoanService(deps: LoanServiceDeps) {
     });
 
     await invalidateReportCaches();
-    return { loan: updateResult.updatedLoan, applied: true, changedFields: updateResult.changedFields };
+    return { loan: updateResult.loan, applied: true, changedFields: updateResult.changedFields };
   }
 
   return {

@@ -4,6 +4,7 @@ import { LoanTerm } from "../value-objects/LoanTerm.js";
 import { Decimal } from "decimal.js";
 
 export type InstallmentStatus = "pending" | "paid" | "overdue" | "partial";
+export type RepaymentScheduleCadence = "weekly" | "business_daily";
 
 export interface Installment {
   readonly installmentNumber: number;
@@ -27,6 +28,10 @@ export interface RepaymentScheduleProps {
 export class RepaymentSchedule {
   private constructor(private readonly _props: RepaymentScheduleProps) {}
 
+  private static getInstallmentCount(term: LoanTerm, cadence: RepaymentScheduleCadence): number {
+    return cadence === "business_daily" ? term.weeks * 6 : term.weeks;
+  }
+
   // ------------------------------------------------------------------
   // Factory
   // ------------------------------------------------------------------
@@ -42,20 +47,24 @@ export class RepaymentSchedule {
     term: LoanTerm;
     startDate: Date;
     addWeeksIso: (isoDate: string, weeks: number) => string;
+    cadence?: RepaymentScheduleCadence;
+    addBusinessDaysIso?: (isoDate: string, businessDays: number) => string;
   }): RepaymentSchedule {
+    const cadence = params.cadence || "weekly";
+    const installmentCount = RepaymentSchedule.getInstallmentCount(params.term, cadence);
     const total = params.expectedTotal.decimal;
     const baseAmount = total
-      .dividedBy(params.term.weeks)
+      .dividedBy(installmentCount)
       .toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
-    const amounts: number[] = Array.from({ length: params.term.weeks }, () =>
+    const amounts: number[] = Array.from({ length: installmentCount }, () =>
       baseAmount.toNumber(),
     );
 
     // Absorb rounding delta in the last instalment
-    const assigned = baseAmount.times(params.term.weeks).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const assigned = baseAmount.times(installmentCount).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     const delta = total.minus(assigned).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    amounts[params.term.weeks - 1] = baseAmount
+    amounts[installmentCount - 1] = baseAmount
       .plus(delta)
       .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
       .toNumber();
@@ -63,7 +72,9 @@ export class RepaymentSchedule {
     const startIso = params.startDate.toISOString();
     const installments: Installment[] = amounts.map((amountDue, i) => ({
       installmentNumber: i + 1,
-      dueDate: params.addWeeksIso(startIso, i + 1),
+      dueDate: cadence === "business_daily" && params.addBusinessDaysIso
+        ? params.addBusinessDaysIso(startIso, i + 1)
+        : params.addWeeksIso(startIso, i + 1),
       amountDue,
       amountPaid: 0,
       status: "pending" as InstallmentStatus,

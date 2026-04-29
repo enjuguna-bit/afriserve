@@ -1,11 +1,58 @@
 import bcrypt from "bcryptjs";
 import { HQ_SEED, KENYA_REGIONS, KENYA_BRANCH_SEED } from "../config/kenyaHierarchy.js";
 import { INITIAL_PRODUCT_GUIDE_CONFIG, INITIAL_PRODUCT_GUIDE_NAME } from "../services/loanProductPricing.js";
+import { parseBooleanEnv } from "../utils/env.js";
+import { getConfiguredDbClient } from "../utils/env.js";
+
+const DEFAULT_ADMIN_FULL_NAME = "System Administrator";
+const DEFAULT_ADMIN_EMAIL = "admin@afriserve.local";
+const DEFAULT_ADMIN_PASSWORD = "Admin@123";
+const SQLITE_NOW_ISO = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+const DB_NOW_EXPRESSION =
+  getConfiguredDbClient() === "postgres" ? "CURRENT_TIMESTAMP" : SQLITE_NOW_ISO;
 type SeedDeps = {
   run: (sql: string, params?: unknown[]) => Promise<any>;
   get: (sql: string, params?: unknown[]) => Promise<any>;
   all: (sql: string, params?: unknown[]) => Promise<any[]>;
 };
+
+function shouldSeedDefaultAdmin(env: NodeJS.ProcessEnv = process.env): boolean {
+  const explicitToggle = String(env.SEED_DEFAULT_ADMIN_ON_EMPTY_DB || "").trim();
+  if (explicitToggle) {
+    return parseBooleanEnv(explicitToggle, false);
+  }
+
+  return String(env.NODE_ENV || "").trim().toLowerCase() !== "production";
+}
+
+function resolveDefaultAdminSeedConfig(env: NodeJS.ProcessEnv = process.env): {
+  fullName: string;
+  email: string;
+  password: string;
+} | null {
+  if (!shouldSeedDefaultAdmin(env)) {
+    return null;
+  }
+
+  const isProduction = String(env.NODE_ENV || "").trim().toLowerCase() === "production";
+  const fullName = String(env.DEFAULT_ADMIN_FULL_NAME || DEFAULT_ADMIN_FULL_NAME).trim() || DEFAULT_ADMIN_FULL_NAME;
+  const email = String(env.DEFAULT_ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL).trim().toLowerCase() || DEFAULT_ADMIN_EMAIL;
+  const password = String(
+    env.DEFAULT_ADMIN_PASSWORD || (isProduction ? "" : DEFAULT_ADMIN_PASSWORD),
+  ).trim();
+
+  if (isProduction && !password) {
+    throw new Error(
+      "DEFAULT_ADMIN_PASSWORD is required when SEED_DEFAULT_ADMIN_ON_EMPTY_DB=true in production.",
+    );
+  }
+
+  return {
+    fullName,
+    email,
+    password,
+  };
+}
 
 function createSeedApi(deps: SeedDeps) {
   const { run, get, all } = deps;
@@ -17,7 +64,7 @@ function createSeedApi(deps: SeedDeps) {
       const hqInsert = await run(
         `
           INSERT INTO headquarters (name, code, location, contact_phone, contact_email, created_at)
-          VALUES (?, ?, ?, ?, ?, datetime('now'))
+          VALUES (?, ?, ?, ?, ?, ${DB_NOW_EXPRESSION})
         `,
         [HQ_SEED.name, HQ_SEED.code, HQ_SEED.location, HQ_SEED.contactPhone, HQ_SEED.contactEmail],
       );
@@ -28,7 +75,7 @@ function createSeedApi(deps: SeedDeps) {
       await run(
         `
           INSERT INTO regions (hq_id, name, code, is_active, created_at)
-          VALUES (?, ?, ?, 1, datetime('now'))
+          VALUES (?, ?, ?, 1, ${DB_NOW_EXPRESSION})
           ON CONFLICT(code) DO UPDATE SET
             name = excluded.name,
             hq_id = excluded.hq_id
@@ -61,7 +108,7 @@ function createSeedApi(deps: SeedDeps) {
             created_at,
             updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ${DB_NOW_EXPRESSION}, ${DB_NOW_EXPRESSION})
           ON CONFLICT(code) DO NOTHING
         `,
         [
@@ -79,18 +126,23 @@ function createSeedApi(deps: SeedDeps) {
   }
 
   async function seedDefaultAdmin() {
+    const seedConfig = resolveDefaultAdminSeedConfig();
+    if (!seedConfig) {
+      return;
+    }
+
     const userCount = await get("SELECT COUNT(*) AS total_users FROM users");
-    if (!userCount || userCount.total_users === 0) {
-      const defaultPasswordHash = await bcrypt.hash("Admin@123", 10);
+    if (!userCount || Number(userCount.total_users || 0) === 0) {
+      const defaultPasswordHash = await bcrypt.hash(seedConfig.password, 10);
       const defaultBranch = await get(
         "SELECT id FROM branches WHERE is_active = 1 ORDER BY id ASC LIMIT 1",
       );
       await run(
         `
           INSERT INTO users (full_name, email, password_hash, role, branch_id, created_at)
-          VALUES (?, ?, ?, 'admin', ?, datetime('now'))
+          VALUES (?, ?, ?, 'admin', ?, ${DB_NOW_EXPRESSION})
         `,
-        ["System Administrator", "admin@afriserve.local", defaultPasswordHash, defaultBranch?.id || null],
+        [seedConfig.fullName, seedConfig.email, defaultPasswordHash, defaultBranch?.id || null],
       );
     }
   }
@@ -119,7 +171,7 @@ function createSeedApi(deps: SeedDeps) {
             created_at,
             updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ${DB_NOW_EXPRESSION}, ${DB_NOW_EXPRESSION})
         `,
         [
           "Standard Working Capital",
@@ -164,7 +216,7 @@ function createSeedApi(deps: SeedDeps) {
             created_at,
             updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ${DB_NOW_EXPRESSION}, ${DB_NOW_EXPRESSION})
         `,
         [
           INITIAL_PRODUCT_GUIDE_NAME,
@@ -206,7 +258,7 @@ function createSeedApi(deps: SeedDeps) {
     await run(
       `
         INSERT INTO users (full_name, email, password_hash, role, branch_id, created_at)
-        VALUES (?, ?, ?, ?, ?, datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ${DB_NOW_EXPRESSION})
       `,
       [officerFullName, officerEmail, passwordHash, officerRole, nakuruBranch.id]
     );

@@ -1,13 +1,29 @@
-import type { ILoanRepository } from "../../../domain/loan/repositories/ILoanRepository.js";
-import type { IClientRepository } from "../../../domain/client/repositories/IClientRepository.js";
-import type { IEventBus } from "../../../infrastructure/events/IEventBus.js";
 import type { CreateLoanApplicationCommand } from "../commands/LoanCommands.js";
-import { Loan } from "../../../domain/loan/entities/Loan.js";
-import { LoanId } from "../../../domain/loan/value-objects/LoanId.js";
-import { Money } from "../../../domain/shared/value-objects/Money.js";
-import { InterestRate } from "../../../domain/loan/value-objects/InterestRate.js";
-import { LoanTerm } from "../../../domain/loan/value-objects/LoanTerm.js";
-import { ClientId } from "../../../domain/client/value-objects/ClientId.js";
+
+interface LoanCreationWorkflowLike {
+  createLoan: (args: {
+    payload: {
+      clientId: number;
+      principal: number;
+      termWeeks: number;
+      productId?: number;
+      interestRate?: number;
+      registrationFee?: number;
+      processingFee?: number;
+      branchId?: number;
+      officerId?: number;
+      purpose?: string | null;
+    };
+    user: {
+      sub: number;
+      role?: string;
+      roles?: string[];
+      permissions?: string[];
+      branchId?: number | null;
+    };
+    ipAddress: string | null | undefined;
+  }) => Promise<Record<string, unknown> | null | undefined>;
+}
 
 export interface CreateLoanApplicationResult {
   loanId: number;
@@ -16,54 +32,46 @@ export interface CreateLoanApplicationResult {
 /**
  * Command handler: CreateLoanApplication
  *
- * Validates client eligibility, builds the Loan aggregate, persists it,
- * and publishes the uncommitted domain events to the event bus.
+ * Today this is intentionally a thin adapter over the authoritative
+ * loanService.createLoan workflow. The aggregate-first implementation is not
+ * production-ready because it does not yet reproduce pricing, KYC, branch,
+ * and concurrency checks performed by the service layer.
  */
 export class CreateLoanApplicationHandler {
-  constructor(
-    private readonly loanRepository: ILoanRepository,
-    private readonly clientRepository: IClientRepository,
-    private readonly eventBus: IEventBus,
-  ) {}
+  constructor(private readonly loanCreationWorkflow: LoanCreationWorkflowLike) {}
 
   async handle(command: CreateLoanApplicationCommand): Promise<CreateLoanApplicationResult> {
-    // 1. Verify client exists and is ready for a loan
-    const client = await this.clientRepository.findById(
-      ClientId.fromNumber(command.clientId),
-    );
-    if (!client) {
-      throw new Error(`Client ${command.clientId} not found`);
-    }
-    if (!client.isReadyForLoan()) {
-      throw new Error(
-        `Client ${command.clientId} is not eligible for a loan ` +
-        `(KYC status: ${client.kycStatus.value}, onboarding: ${client.onboardingStatus.value})`,
-      );
-    }
-
-    // 2. Build the aggregate
-    const loan = Loan.createApplication({
-      id: command.id,
-      clientId: command.clientId,
-      productId: command.productId ?? null,
-      branchId: command.branchId ?? null,
-      createdByUserId: command.createdByUserId,
-      officerId: command.officerId ?? null,
-      principal: Money.fromNumber(command.principal),
-      interestRate: InterestRate.fromPercentage(command.interestRate),
-      term: LoanTerm.fromWeeks(command.termWeeks, command.termMonths),
-      registrationFee: Money.fromNumber(command.registrationFee),
-      processingFee: Money.fromNumber(command.processingFee),
-      expectedTotal: Money.fromNumber(command.expectedTotal),
+    const createdLoan = await this.loanCreationWorkflow.createLoan({
+      payload: {
+        clientId: command.clientId,
+        principal: command.principal,
+        termWeeks: command.termWeeks,
+        productId: command.productId ?? undefined,
+        // Only forward pricing overrides when explicitly set — undefined means
+        // "derive from loan product".  Passing 0 would trigger hasPricingOverride
+        // in loanService and override with zero rates, which is almost never intended.
+        ...(typeof command.interestRate === "number" ? { interestRate: command.interestRate } : {}),
+        ...(typeof command.registrationFee === "number" ? { registrationFee: command.registrationFee } : {}),
+        ...(typeof command.processingFee === "number" ? { processingFee: command.processingFee } : {}),
+        branchId: command.branchId ?? undefined,
+        officerId: command.officerId ?? undefined,
+        purpose: command.purpose ?? null,
+      },
+      user: {
+        sub: command.createdByUserId,
+        role: command.createdByRole ?? undefined,
+        roles: command.createdByRoles,
+        permissions: command.createdByPermissions,
+        branchId: command.createdByBranchId ?? null,
+      },
+      ipAddress: command.ipAddress ?? null,
     });
 
-    // 3. Persist
-    await this.loanRepository.save(loan);
+    const loanId = Number(createdLoan?.["id"] || 0);
+    if (!Number.isInteger(loanId) || loanId <= 0) {
+      throw new Error("Loan creation workflow did not return a valid loan id");
+    }
 
-    // 4. Publish domain events
-    await this.eventBus.publishAll(loan.getUncommittedEvents());
-    loan.clearEvents();
-
-    return { loanId: loan.id.value };
+    return { loanId };
   }
 }

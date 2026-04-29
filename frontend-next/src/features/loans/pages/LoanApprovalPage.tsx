@@ -1,5 +1,6 @@
 ﻿import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import axios from 'axios'
 import { AsyncState } from '../../../components/common/AsyncState'
 import { hasAnyRole } from '../../../app/roleAccess'
 import { useAuth } from '../../../hooks/useAuth'
@@ -11,6 +12,8 @@ import {
   useReviewApprovalRequest,
 } from '../hooks/useLoans'
 import { useToastStore } from '../../../store/toastStore'
+import { formatDisplayDateTime, parseDisplayDate } from '../../../utils/dateFormatting'
+import { formatDisplayText, resolveDisplayText } from '../../../utils/displayFormatting'
 import type { PendingApprovalLoanRecord } from '../../../types/loan'
 import { formatWorkflowText, getPendingApprovalReviewState } from '../utils/workflow'
 import styles from './LoanApprovalPage.module.css'
@@ -102,7 +105,8 @@ function normalizePendingLoans(payload: unknown): PendingApprovalLoanRecord[] {
 }
 
 function formatRequestType(value: string): string {
-  return value
+  return formatDisplayText(value, 'Unknown')
+    .toLowerCase()
     .replace(/^loan_/, '')
     .split('_')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
@@ -110,12 +114,13 @@ function formatRequestType(value: string): string {
 }
 
 function formatDateTime(value: string | null): string {
-  return value ? new Date(value).toLocaleString() : '-'
+  return formatDisplayDateTime(value, '-')
 }
 
 function formatTimeInQueue(submittedAt: string | null): string {
   if (!submittedAt) return '-'
-  const submitTime = new Date(submittedAt).getTime()
+  const submitTime = parseDisplayDate(submittedAt)?.getTime()
+  if (submitTime == null) return '-'
   if (Number.isNaN(submitTime)) return '-'
   const diffMs = Date.now() - submitTime
   if (diffMs < 0) return 'Just now'
@@ -133,15 +138,61 @@ function formatCurrency(value: number | null | undefined) {
   }).format(Number(value || 0))
 }
 
+function getApiErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof axios.AxiosError) {
+    const payload = error.response?.data as {
+      message?: unknown
+      requestId?: unknown
+      issues?: Array<{ path?: unknown[]; message?: unknown }>
+      debugDetails?: { cause?: unknown; errorCode?: unknown; errorName?: unknown }
+    } | undefined
+    const message = String(payload?.message || '').trim()
+    const validationDetails = Array.isArray(payload?.issues)
+      ? payload.issues
+        .map((issue) => {
+          const path = Array.isArray(issue?.path) ? issue.path.join('.') : ''
+          const issueMessage = String(issue?.message || '').trim()
+          return path ? `${path}: ${issueMessage}` : issueMessage
+        })
+        .filter(Boolean)
+        .join('; ')
+      : ''
+    const cause = String(payload?.debugDetails?.cause || '').trim()
+    const requestId = String(payload?.requestId || '').trim()
+    const parts = [message || fallback]
+
+    if (validationDetails) {
+      parts.push(validationDetails)
+    }
+    if (cause) {
+      parts.push(`Cause: ${cause}`)
+    }
+    if (requestId) {
+      parts.push(`Request ID: ${requestId}`)
+    }
+
+    const combined = parts.filter(Boolean).join(' | ').trim()
+    if (combined) {
+      return combined
+    }
+  }
+
+  return fallback
+}
+
 function snapshotSummary(value: unknown): string {
   if (!value) {
     return '-'
   }
   if (typeof value === 'string') {
-    return value.length > 80 ? `${value.slice(0, 80)}...` : value
+    const normalized = formatDisplayText(value, '')
+    if (!normalized) {
+      return '-'
+    }
+    return normalized.length > 80 ? `${normalized.slice(0, 80)}...` : normalized
   }
   if (typeof value !== 'object') {
-    return String(value)
+    return formatDisplayText(value)
   }
 
   const entries = Object.entries(value as Record<string, unknown>).slice(0, 3)
@@ -150,7 +201,7 @@ function snapshotSummary(value: unknown): string {
   }
 
   return entries
-    .map(([key, entryValue]) => `${key}: ${typeof entryValue === 'object' ? '[object]' : String(entryValue)}`)
+    .map(([key, entryValue]) => `${key}: ${typeof entryValue === 'object' && entryValue !== null ? `[${Array.isArray(entryValue) ? 'array' : 'object'}]` : formatDisplayText(entryValue)}`)
     .join(' | ')
 }
 
@@ -168,8 +219,10 @@ export function LoanApprovalPage() {
   const [selectedLoanIds, setSelectedLoanIds] = useState<Set<number>>(new Set())
   const [isBatchApproving, setIsBatchApproving] = useState(false)
 
-  const canReviewPendingLoans = hasAnyRole(user, ['admin', 'operations_manager', 'area_manager'])
+  const canReviewPendingLoans = hasAnyRole(user, ['admin', 'operations_manager', 'finance', 'area_manager'])
+    && (!Array.isArray(user?.permissions) || user.permissions.includes('loan.approve'))
   const canRejectPendingLoans = hasAnyRole(user, ['admin', 'operations_manager'])
+    && (!Array.isArray(user?.permissions) || user.permissions.includes('loan.reject'))
   const isLoanOfficer = hasAnyRole(user, ['loan_officer'])
 
   const pendingLoansQuery = usePendingApprovalLoans({}, canReviewPendingLoans)
@@ -186,6 +239,16 @@ export function LoanApprovalPage() {
 
   const pendingLoans = useMemo(() => normalizePendingLoans(pendingLoansQuery.data), [pendingLoansQuery.data])
   const rows = useMemo(() => normalizeApprovalRows(approvalsQuery.data), [approvalsQuery.data])
+  const pendingLoanReviewStates = useMemo(
+    () => new Map(pendingLoans.map((loan) => [loan.loan_id, getPendingApprovalReviewState(loan, user)])),
+    [pendingLoans, user],
+  )
+  const approvableLoanIds = useMemo(
+    () => pendingLoans
+      .filter((loan) => pendingLoanReviewStates.get(loan.loan_id)?.canApprove)
+      .map((loan) => loan.loan_id),
+    [pendingLoans, pendingLoanReviewStates],
+  )
 
   function updateDecisionNote(requestId: number, nextValue: string) {
     setDecisionNotes((current) => ({
@@ -217,8 +280,8 @@ export function LoanApprovalPage() {
             message: decision === 'approve' ? 'Approval request approved.' : 'Approval request rejected.',
           })
         },
-        onError: () => {
-          pushToast({ type: 'error', message: 'Failed to review approval request.' })
+        onError: (error) => {
+          pushToast({ type: 'error', message: getApiErrorMessage(error, 'Failed to review approval request.') })
         },
         onSettled: () => {
           setActiveRequestId(null)
@@ -249,8 +312,8 @@ export function LoanApprovalPage() {
           })
           pushToast({ type: 'success', message: 'Loan approved and routed to the next stage.' })
         },
-        onError: () => {
-          pushToast({ type: 'error', message: 'Failed to approve loan.' })
+        onError: (error) => {
+          pushToast({ type: 'error', message: getApiErrorMessage(error, 'Failed to approve loan.') })
         },
         onSettled: () => {
           setActiveLoanId(null)
@@ -283,8 +346,8 @@ export function LoanApprovalPage() {
           })
           pushToast({ type: 'success', message: 'Loan rejected and removed from the pending queue.' })
         },
-        onError: () => {
-          pushToast({ type: 'error', message: 'Failed to reject loan.' })
+        onError: (error) => {
+          pushToast({ type: 'error', message: getApiErrorMessage(error, 'Failed to reject loan.') })
         },
         onSettled: () => {
           setActiveLoanId(null)
@@ -300,13 +363,14 @@ export function LoanApprovalPage() {
     setIsBatchApproving(true)
     const ids = Array.from(selectedLoanIds)
     let successCount = 0
+    const failedMessages: string[] = []
 
     for (const loanId of ids) {
       try {
         await approveLoanMutation.mutateAsync({ loanId })
         successCount++
-      } catch (err) {
-        // Silently continue to process others
+      } catch (error) {
+        failedMessages.push(`Loan #${loanId}: ${getApiErrorMessage(error, 'Failed to approve loan.')}`)
       }
     }
 
@@ -321,8 +385,13 @@ export function LoanApprovalPage() {
     if (successCount > 0) {
       pushToast({ type: 'success', message: `${successCount} loan(s) approved successfully.` })
     }
-    if (successCount < ids.length) {
-      pushToast({ type: 'error', message: `Failed to approve ${ids.length - successCount} loan(s).` })
+    if (failedMessages.length > 0) {
+      pushToast({
+        type: 'error',
+        message: failedMessages.length === 1
+          ? failedMessages[0]
+          : `Failed to approve ${failedMessages.length} loan(s). First error: ${failedMessages[0]}`,
+      })
     }
   }
 
@@ -382,7 +451,7 @@ export function LoanApprovalPage() {
       ) : null}
 
       <h2>Pending Loan Applications</h2>
-      <p className={styles.subtle}>New loan applications stay here until a branch or area approval role reviews them.</p>
+      <p className={styles.subtle}>New loan applications stay here until a branch, finance, or area approval role reviews them.</p>
 
       {canReviewPendingLoans ? (
         <>
@@ -431,16 +500,16 @@ export function LoanApprovalPage() {
                     <th style={{ width: 40 }}>
                       <input 
                         type="checkbox" 
-                        checked={selectedLoanIds.size > 0 && selectedLoanIds.size === pendingLoans.filter(l => getPendingApprovalReviewState(l).approvalReady).length}
+                        checked={selectedLoanIds.size > 0 && selectedLoanIds.size === approvableLoanIds.length}
                         onChange={(e) => {
                           const checked = e.target.checked
                           if (checked) {
-                            setSelectedLoanIds(new Set(pendingLoans.filter(l => getPendingApprovalReviewState(l).approvalReady).map(l => l.loan_id)))
+                            setSelectedLoanIds(new Set(approvableLoanIds))
                           } else {
                             setSelectedLoanIds(new Set())
                           }
                         }}
-                        disabled={isBatchApproving || pendingLoans.filter(l => getPendingApprovalReviewState(l).approvalReady).length === 0}
+                        disabled={isBatchApproving || approvableLoanIds.length === 0}
                       />
                     </th>
                     <th>Loan</th>
@@ -454,8 +523,11 @@ export function LoanApprovalPage() {
                   {pendingLoans.map((loan) => {
                     const isApproving = approveLoanMutation.isPending && activeLoanId === loan.loan_id && activeLoanDecision === 'approve'
                     const isRejecting = rejectLoanMutation.isPending && activeLoanId === loan.loan_id && activeLoanDecision === 'reject'
-                    const reviewState = getPendingApprovalReviewState(loan)
+                    const reviewState = pendingLoanReviewStates.get(loan.loan_id) ?? getPendingApprovalReviewState(loan, user)
                     const isSelected = selectedLoanIds.has(loan.loan_id)
+                    const branchLabel = resolveDisplayText([loan.branch_name, loan.branch_code], 'Unassigned branch')
+                    const clientLabel = resolveDisplayText([loan.client_name, loan.client_id ? `Client #${loan.client_id}` : null], 'Unknown client')
+                    const makerLabel = resolveDisplayText([loan.created_by_name, loan.created_by_user_id ? `User #${loan.created_by_user_id}` : null])
 
                     return (
                       <tr key={loan.loan_id} style={isSelected ? { background: 'rgba(0, 220, 150, 0.06)' } : {}}>
@@ -463,7 +535,7 @@ export function LoanApprovalPage() {
                           <input 
                             type="checkbox"
                             checked={isSelected}
-                            disabled={isBatchApproving || !reviewState.approvalReady || isApproving || isRejecting}
+                            disabled={isBatchApproving || !reviewState.canApprove || isApproving || isRejecting}
                             onChange={(e) => {
                               const checked = e.target.checked
                               setSelectedLoanIds(current => {
@@ -480,13 +552,13 @@ export function LoanApprovalPage() {
                             <strong><Link to={`/loans/${loan.loan_id}`}>Loan #{loan.loan_id}</Link></strong>
                             <span>Principal: Ksh {formatCurrency(loan.principal)}</span>
                             <span>Expected total: Ksh {formatCurrency(loan.expected_total)}</span>
-                            <span>Branch: {loan.branch_name || loan.branch_code || 'Unassigned branch'}</span>
+                            <span>Branch: {branchLabel}</span>
                           </div>
                         </td>
                         <td>
                           <div className={styles.metaBlock}>
-                            <strong>{loan.client_name || `Client #${loan.client_id}`}</strong>
-                            <span>Officer: {loan.officer_name || '-'}</span>
+                            <strong>{clientLabel}</strong>
+                            <span>Officer: {formatDisplayText(loan.officer_name)}</span>
                             <span style={{ color: 'var(--warning-text)' }}>In queue: {formatTimeInQueue(loan.submitted_at)}</span>
                             <span>Submitted: {formatDateTime(loan.submitted_at)}</span>
                           </div>
@@ -496,7 +568,7 @@ export function LoanApprovalPage() {
                             <strong>{reviewState.readinessLabel}</strong>
                             <span>Stage: {reviewState.workflowStageLabel}</span>
                           <span>Guarantors: {loan.guarantor_count} | Collateral: {loan.collateral_count}</span>
-                          <span>Fees: {String(loan.fee_payment_status || '-')}</span>
+                          <span>Fees: {formatDisplayText(loan.fee_payment_status)}</span>
                           {reviewState.approvalBlockers.length > 0 ? (
                             <ul className={styles.blockerList}>
                               {reviewState.approvalBlockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
@@ -508,7 +580,7 @@ export function LoanApprovalPage() {
                       </td>
                       <td>
                         <div className={styles.metaBlock}>
-                          <strong>{loan.created_by_name || `User #${loan.created_by_user_id || '-'}`}</strong>
+                          <strong>{makerLabel}</strong>
                           <span>Status: {reviewState.loanStatusLabel}</span>
                         </div>
                       </td>
@@ -527,7 +599,7 @@ export function LoanApprovalPage() {
                             </Link>
                             <button
                               type="button"
-                              disabled={isApproving || isRejecting || !reviewState.approvalReady}
+                              disabled={isApproving || isRejecting || !reviewState.canApprove}
                               onClick={() => approvePendingLoan(loan.loan_id)}
                             >
                               {isApproving ? 'Approving...' : 'Approve loan'}
@@ -536,7 +608,7 @@ export function LoanApprovalPage() {
                               <button
                                 type="button"
                                 className={styles.reject}
-                                disabled={isApproving || isRejecting}
+                                disabled={isApproving || isRejecting || !reviewState.canReject}
                                 onClick={() => rejectPendingLoan(loan.loan_id)}
                               >
                                 {isRejecting ? 'Rejecting...' : 'Reject loan'}
@@ -554,7 +626,7 @@ export function LoanApprovalPage() {
           ) : null}
         </>
       ) : (
-        <p className={styles.subtle}>Your role can review lifecycle approval requests here, but standard pending loan applications are routed to branch and area approval roles.</p>
+        <p className={styles.subtle}>Your role can review lifecycle approval requests here, but standard pending loan applications are routed to branch, finance, and area approval roles.</p>
       )}
 
       <h2>Lifecycle Approval Requests</h2>
@@ -611,6 +683,12 @@ export function LoanApprovalPage() {
             {rows.map((row) => {
               const isPending = reviewMutation.isPending && activeRequestId === row.id
               const isReviewable = row.status === 'pending'
+              const clientLabel = resolveDisplayText([row.client_name, row.client_id ? `Client #${row.client_id}` : null], 'Unknown client')
+              const branchLabel = formatDisplayText(row.branch_name, 'Unassigned branch')
+              const branchCode = formatDisplayText(row.branch_code, 'No branch code')
+              const makerLabel = resolveDisplayText([row.requested_by_name, row.requested_by_user_id ? `User #${row.requested_by_user_id}` : null])
+              const checkerLabel = resolveDisplayText([row.checker_name, row.checker_user_id ? `User #${row.checker_user_id}` : null])
+              const loanStatus = formatDisplayText(row.loan_status, '')
 
               return (
                 <tr key={row.id}>
@@ -619,27 +697,27 @@ export function LoanApprovalPage() {
                       <strong>
                         {row.loan_id > 0 ? <Link to={`/loans/${row.loan_id}`}>Loan #{row.loan_id}</Link> : '-'}
                       </strong>
-                      <span>{row.client_name || 'Unknown client'}</span>
-                      <span>{row.loan_status ? `Loan status: ${formatWorkflowText(row.loan_status)}` : 'Loan status unavailable'}</span>
+                      <span>{clientLabel}</span>
+                      <span>{loanStatus ? `Loan status: ${formatWorkflowText(loanStatus)}` : 'Loan status unavailable'}</span>
                     </div>
                   </td>
                   <td>
                     <div className={styles.metaBlock}>
-                      <strong>{row.branch_name || 'Unassigned branch'}</strong>
-                      <span>{row.branch_code || 'No branch code'}</span>
+                      <strong>{branchLabel}</strong>
+                      <span>{branchCode}</span>
                     </div>
                   </td>
                   <td>{formatRequestType(row.request_type)}</td>
                   <td>
                     <div className={styles.metaBlock}>
-                      <strong>{row.requested_by_name || `User #${row.requested_by_user_id ?? '-'}`}</strong>
+                      <strong>{makerLabel}</strong>
                       <span>Requested: {formatDateTime(row.requested_at)}</span>
                     </div>
                   </td>
                   <td>
                     <div className={styles.metaBlock}>
                       <strong>{row.status}</strong>
-                      <span>{row.execution_state || '-'}</span>
+                      <span>{formatDisplayText(row.execution_state)}</span>
                     </div>
                   </td>
                   <td>
@@ -652,8 +730,8 @@ export function LoanApprovalPage() {
                   <td>
                     <div className={styles.metaBlock}>
                       <span>{snapshotSummary(row.request_payload)}</span>
-                      <span>Request note: {row.request_note || '-'}</span>
-                      <span>Review note: {row.review_note || '-'}</span>
+                      <span>Request note: {formatDisplayText(row.request_note)}</span>
+                      <span>Review note: {formatDisplayText(row.review_note)}</span>
                     </div>
                   </td>
                   <td>
@@ -677,8 +755,8 @@ export function LoanApprovalPage() {
                       </div>
                     ) : (
                       <div className={styles.metaBlock}>
-                        <strong>{row.checker_name || `User #${row.checker_user_id ?? '-'}`}</strong>
-                        <span>{row.review_note || 'No review note recorded'}</span>
+                        <strong>{checkerLabel}</strong>
+                        <span>{formatDisplayText(row.review_note, 'No review note recorded')}</span>
                         <span>
                           {row.approved_at
                             ? `Approved: ${formatDateTime(row.approved_at)}`

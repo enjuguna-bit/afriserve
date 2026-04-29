@@ -1,4 +1,4 @@
-import type { RouteRegistrar } from "../types/routeDeps.js";
+import type { ClientHierarchyServiceLike, RouteRegistrar } from "../types/routeDeps.js";
 import type { CapitalTransactionType, CapitalTransactionStatus } from "../services/capitalTransactionService.js";
 import { createCapitalTransactionService } from "../services/capitalTransactionService.js";
 
@@ -7,7 +7,7 @@ interface CapitalRouteContext {
   authorize:          (...roles: string[]) => any;
   parseId:            (id: unknown) => number | null;
   writeAuditLog:      (payload: Record<string, any>) => Promise<void> | void;
-  hierarchyService:   any;
+  hierarchyService:   ClientHierarchyServiceLike;
   // NOTE: generalLedgerService is NOT listed here — the capital service
   // instantiates it directly. Injecting it caused the
   // "Cannot read properties of undefined (reading 'postJournal')" crash

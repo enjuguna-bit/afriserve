@@ -19,6 +19,8 @@ type ReportResultsPanelProps = {
 }
 
 const LOCAL_PAGE_SIZE = 25
+const EAT_LOCALE = 'en-KE'
+const EAT_TZ = 'Africa/Nairobi'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
@@ -37,14 +39,147 @@ function toLabel(key: string): string {
 }
 
 function formatAmount(value: number): string {
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat(EAT_LOCALE, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(Number(value || 0))
 }
 
 function formatNumber(value: number): string {
-  return new Intl.NumberFormat().format(Number(value || 0))
+  return new Intl.NumberFormat(EAT_LOCALE).format(Number(value || 0))
+}
+
+function normalizeMetricKey(key: string): string {
+  return String(key || '')
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[\s-]+/g, '_')
+    .toLowerCase()
+}
+
+function isPercentageMetricKey(key: string): boolean {
+  const normalizedKey = normalizeMetricKey(key)
+  return /(^|_)(ratio|rate|pct|percent|percentage)$/.test(normalizedKey)
+}
+
+function isCountMetricKey(key: string): boolean {
+  const normalizedKey = normalizeMetricKey(key)
+
+  if (/^par\d+_count$/.test(normalizedKey)) {
+    return true
+  }
+
+  if (/(^|_)(count|day|days|week|weeks|month|months|year|years|id)$/.test(normalizedKey)) {
+    return true
+  }
+
+  if (/^(total|active|restructured|written_off|overdue|pending|unique)_(loans|clients|branches|regions|users|borrowers|officers|installments|repayments|payments)$/.test(normalizedKey)) {
+    return true
+  }
+
+  if (/^(loans|clients|branches|regions|users|borrowers|officers|installments|repayments|payments)_in_[a-z0-9_]+$/.test(normalizedKey)) {
+    return true
+  }
+
+  return false
+}
+
+function isCurrencyMetricKey(key: string): boolean {
+  const normalizedKey = normalizeMetricKey(key)
+
+  if (/^par\d+_(balance|arrears)$/.test(normalizedKey)) {
+    return true
+  }
+
+  if (/_total$/.test(normalizedKey)) {
+    return true
+  }
+
+  return /(amount|balance|arrears|olb|due|collected|principal|repaid|income|expense|cash|disbursed|interest|value|target)/.test(normalizedKey)
+}
+
+/**
+ * Normalise a raw phone value coming from the API into a
+ * human-readable Kenyan international format:  +254 7XX XXX XXX
+ *
+ * Handles every variant the backend may still return (07..., 7..., 2547...).
+ */
+function formatPhoneForDisplay(value: unknown): string {
+  if (value == null) return '-'
+  const raw = String(value).trim()
+  if (!raw || raw === '-') return '-'
+
+  const digits = raw.replace(/\D+/g, '')
+
+  let normalized = digits
+  // 254-prefixed (12 digits)
+  if (digits.length === 12 && digits.startsWith('254')) {
+    normalized = digits
+  } else if (digits.length === 10 && digits.startsWith('0')) {
+    // 07XXXXXXXX -> 2547XXXXXXXX
+    normalized = `254${digits.slice(1)}`
+  } else if (digits.length === 9 && /^[71]/.test(digits)) {
+    // 7XXXXXXXX -> 2547XXXXXXXX
+    normalized = `254${digits}`
+  } else {
+    // Unrecognised - return as-is
+    return raw
+  }
+
+  // Format as +254 7XX XXX XXX
+  // normalized = 254 + 9 digits = 12 digits total
+  const cc = normalized.slice(0, 3)      // 254
+  const p1 = normalized.slice(3, 6)      // 7XX
+  const p2 = normalized.slice(6, 9)      // XXX
+  const p3 = normalized.slice(9, 12)     // XXX
+  return `+${cc} ${p1} ${p2} ${p3}`
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]+)?$/
+
+/**
+ * Attempt to render an ISO date/datetime string in human-readable
+ * East-Africa Time.  Falls back to the raw string if parsing fails.
+ */
+function formatDateCell(value: unknown): string {
+  if (value == null) return '-'
+  const raw = String(value).trim()
+  if (!raw) return '-'
+  if (!ISO_DATE_RE.test(raw)) return raw
+
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return raw
+
+  // If no time component (date-only), show date only
+  const hasTime = raw.includes('T') && !raw.endsWith('T00:00:00.000Z') && raw !== raw.slice(0, 10) + 'T00:00:00.000Z'
+  if (hasTime) {
+    return new Intl.DateTimeFormat(EAT_LOCALE, {
+      timeZone: EAT_TZ,
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(d)
+  }
+  return new Intl.DateTimeFormat(EAT_LOCALE, {
+    timeZone: EAT_TZ,
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(d)
+}
+
+function isPhoneColumn(key: string): boolean {
+  return /phone|mobile|msisdn/i.test(key)
+}
+
+function isDateColumn(key: string, value: unknown): boolean {
+  if (/date|_at$|borrowdate|cleardate|duedate|maturity/i.test(key)) return true
+  // Also detect by value shape even if key doesn't hint
+  if (typeof value === 'string' && ISO_DATE_RE.test(value)) return true
+  return false
 }
 
 function formatValueByKey(key: string, value: unknown): string {
@@ -52,12 +187,22 @@ function formatValueByKey(key: string, value: unknown): string {
     return '-'
   }
 
+  if (isPhoneColumn(key)) {
+    return formatPhoneForDisplay(value)
+  }
+
+  if (isDateColumn(key, value) && typeof value === 'string') {
+    return formatDateCell(value)
+  }
+
   if (typeof value === 'number') {
-    if (/ratio|rate|pct|percent|par/i.test(key)) {
-      const normalizedPercent = Number(value) <= 1 ? Number(value) * 100 : Number(value)
-      return `${normalizedPercent.toFixed(2)}%`
+    if (isPercentageMetricKey(key)) {
+      return `${(Number(value) * 100).toFixed(2)}%`
     }
-    if (/amount|balance|total|olb|arrears|due|collected|principal|repaid|income|expense|cash|write/i.test(key)) {
+    if (isCountMetricKey(key)) {
+      return formatNumber(value)
+    }
+    if (isCurrencyMetricKey(key)) {
       return `Ksh ${formatAmount(value)}`
     }
     return formatNumber(value)
@@ -116,7 +261,7 @@ function extractMetricRows(payload: unknown): Array<{ key: string; label: string
   })
 
   return entries
-    .slice(0, 16)
+    .slice(0, 24)
     .map((entry) => ({
       key: entry.key,
       label: entry.label,
@@ -161,17 +306,21 @@ function extractTabularSections(payload: unknown): TabularSection[] {
     'arrearsDetails',
     'loanAgingDetails',
     'branchBreakdown',
+    'branch_breakdown',
     'regionBreakdown',
     'statusBreakdown',
     'branchPerformance',
+    'branches',
+    'officers',
+    'cycles',
+    'loans',
+    'writeOffs',
     'dailyCollections',
     'daily_collections',
     'top_risk_branches',
     'daily',
     'ledgerEntries',
-    'officers',
     'buckets',
-    'writeOffs',
     'data',
     'entries',
   ]

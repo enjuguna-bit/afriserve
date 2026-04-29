@@ -1,9 +1,5 @@
-import { dbClient, run } from "../db/connection.js";
-import type { PrismaClientLike } from "../db/prismaClient.js";
-
-interface CreateAuditServiceOptions {
-  prisma: PrismaClientLike;
-}
+import { run } from "../db/connection.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 
 interface WriteAuditLogPayload {
   userId?: number | null;
@@ -14,7 +10,12 @@ interface WriteAuditLogPayload {
   ipAddress?: string | null;
 }
 
-function createAuditService({ prisma }: CreateAuditServiceOptions) {
+/**
+ * Audit service — raw SQL for both SQLite and Postgres.
+ * The audit_logs table is append-only (enforced by a database trigger that
+ * blocks UPDATE and DELETE), so we only ever INSERT here.
+ */
+function createAuditService() {
   async function writeAuditLog({
     userId = null,
     action,
@@ -24,28 +25,14 @@ function createAuditService({ prisma }: CreateAuditServiceOptions) {
     ipAddress = null,
   }: WriteAuditLogPayload): Promise<void> {
     const createdAt = new Date().toISOString();
-    if (dbClient === "sqlite") {
-      await run(
-        `
-          INSERT INTO audit_logs (user_id, action, target_type, target_id, details, ip_address, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `,
-        [userId, action, targetType, targetId, details, ipAddress, createdAt],
-      );
-      return;
-    }
-
-    await prisma.audit_logs.create({
-      data: {
-        user_id: userId,
-        action,
-        target_type: targetType,
-        target_id: targetId,
-        details,
-        ip_address: ipAddress,
-        created_at: createdAt,
-      },
-    });
+    const tenantId = getCurrentTenantId();
+    await run(
+      `
+        INSERT INTO audit_logs (tenant_id, user_id, action, target_type, target_id, details, ip_address, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [tenantId, userId, action, targetType, targetId, details, ipAddress, createdAt],
+    );
   }
 
   return {

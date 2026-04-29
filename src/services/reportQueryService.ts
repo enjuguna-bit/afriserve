@@ -1,4 +1,4 @@
-﻿import { ForbiddenScopeError } from "../domain/errors.js";
+import { ForbiddenScopeError } from "../domain/errors.js";
 import { createSqlWhereBuilder } from "../utils/sqlBuilder.js";
 import { getCurrentTenantId } from "../utils/tenantStore.js";
 
@@ -27,7 +27,7 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
     resolveCachedReport,
   } = deps;
 
-  // ─── shared helpers ──────────────────────────────────────────────────────
+  // --- shared helpers ------------------------------------------------------
 
   function normalizeOverdueAsOf(value: unknown, fallbackDateTo?: string | null): string {
     const explicitValue = String(value || fallbackDateTo || "").trim();
@@ -185,6 +185,7 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
           l.id,
           l.branch_id,
           l.status,
+          l.disbursed_at,
           COALESCE(l.principal, 0) AS principal,
           COALESCE(l.expected_total, 0) AS expected_total,
           -- FIX #7: loans.repaid_total resets to 0 on restructure/refinance/term-extension.
@@ -211,7 +212,7 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
     const whereBuilder = createSqlWhereBuilder();
     whereBuilder.addCondition(loanCondition);
     whereBuilder.addClause("LOWER(COALESCE(status, '')) <> 'paid'");
-    whereBuilder.addClause("datetime(due_date) < datetime(?)", [overdueAsOf]);
+    whereBuilder.addClause("date(due_date) < date(?)", [overdueAsOf]);
 
     return readAll(
       `
@@ -329,7 +330,7 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
   }
 
   function aggregateLoanPortfolio(loans: Array<Record<string, any>>) {
-    const activeStatuses = new Set(["active", "restructured"]);
+    const activeStatuses = new Set(["active", "restructured", "overdue"]);
 
     const totals = {
       total_loans: loans.length,
@@ -345,12 +346,15 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
 
     for (const loan of loans) {
       const status = String(loan.status || "").toLowerCase();
+      const isDisbursed = Boolean(loan.disbursed_at);
       const principal = Number(loan.principal || 0);
       const expectedTotal = Number(loan.expected_total || 0);
       const repaidTotal = Number(loan.repaid_total || 0);
       const balance = Number(loan.balance || 0);
 
-      totals.principal_disbursed += principal;
+      if (isDisbursed) {
+        totals.principal_disbursed += principal;
+      }
       totals.expected_total += expectedTotal;
       totals.repaid_total += repaidTotal;
 
@@ -377,7 +381,7 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
     };
   }
 
-  // ─── existing reports ─────────────────────────────────────────────────────
+  // --- existing reports -----------------------------------------------------
 
   async function getPortfolioReport({
     user,
@@ -433,7 +437,7 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
         const totals = aggregateLoanPortfolio(loans);
 
         const activeLoanIds = loans
-          .filter((loan) => ["active", "restructured"].includes(String(loan.status || "").toLowerCase()))
+          .filter((loan) => ["active", "restructured", "overdue"].includes(String(loan.status || "").toLowerCase()))
           .map((loan) => Number(loan.id));
         const overdueInstallments = activeLoanIds.length > 0
           ? await listOverdueInstallments(activeLoanIds, normalizedOverdueAsOf)
@@ -802,13 +806,13 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
     };
   }
 
-  // ─── Gap 8: new reports ───────────────────────────────────────────────────
+  // --- Gap 8: new reports ---------------------------------------------------
 
   /**
    * Collections / arrears aging report.
    *
    * Groups overdue outstanding balances into four standard aging buckets:
-   *   1–30 days, 31–60 days, 61–90 days, 91+ days past due.
+   *   1�30 days, 31�60 days, 61�90 days, 91+ days past due.
    *
    * Each bucket contains the count of affected loans, the number of
    * affected clients, and the aggregate outstanding arrears value.
@@ -852,7 +856,7 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
               l.officer_id,
               COALESCE(l.balance, 0) AS outstanding_balance,
               CAST(
-                (julianday(?) - julianday(li.due_date))
+                (julianday(date(?)) - julianday(date(li.due_date)))
               AS INTEGER) AS days_past_due,
               COALESCE(li.amount_due, 0) - COALESCE(li.amount_paid, 0) AS arrears_amount
             FROM loan_installments li
@@ -861,9 +865,9 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
               AND l.tenant_id = ?
               AND l.status IN ('active', 'restructured', 'overdue')
               AND LOWER(COALESCE(li.status, '')) <> 'paid'
-              AND datetime(li.due_date) < datetime(?)
+              AND date(li.due_date) < date(?)
           `,
-          [...scopeCond.params, asOf, tenantId, asOf],
+          [asOf, ...scopeCond.params, tenantId, asOf],
         );
 
         // Bucket boundaries
@@ -949,8 +953,8 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
           .sort((a, b) => String(a.branch_name || "").localeCompare(String(b.branch_name || "")));
 
         const totals = (() => {
-          let totalLoans = new Set<number>();
-          let totalClients = new Set<number>();
+          const totalLoans = new Set<number>();
+          const totalClients = new Set<number>();
           let totalArrears = 0;
           let totalOutstanding = 0;
           for (const agg of globalBuckets.values()) {
@@ -1052,10 +1056,10 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
               ROUND(COALESCE(SUM(CASE WHEN l.status IN ('active','restructured','overdue')
                 THEN l.balance ELSE 0 END), 0), 2)   AS outstanding_balance,
               ROUND(COALESCE(SUM(
-                (SELECT COALESCE(SUM(r.applied_amount),0) FROM repayments r
+                (SELECT COALESCE(SUM(COALESCE(r.applied_amount, r.amount, 0)),0) FROM repayments r
                  WHERE r.loan_id = l.id
-                   AND (? IS NULL OR datetime(r.repaid_at) >= datetime(?))
-                   AND (? IS NULL OR datetime(r.repaid_at) <= datetime(?)))
+                   AND (? IS NULL OR datetime(r.paid_at) >= datetime(?))
+                   AND (? IS NULL OR datetime(r.paid_at) <= datetime(?)))
               ), 0), 2)                               AS collected_in_period,
               COUNT(DISTINCT CASE WHEN l.status = 'written_off' THEN l.id END) AS written_off_loans,
               ROUND(COALESCE(SUM(CASE WHEN l.status = 'written_off'
@@ -1063,11 +1067,11 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
             FROM users u
             LEFT JOIN loans l
                    ON l.officer_id = u.id
-                  AND l.tenant_id = getCurrentTenantId()
+                  AND l.tenant_id = ?
                   ${scopeCond.sql ? `AND (${scopeCond.sql})` : ""}
                   ${branchClause}
             WHERE u.role = 'loan_officer'
-              AND u.tenant_id = getCurrentTenantId()
+              AND u.tenant_id = ?
               ${officerClause}
             GROUP BY u.id
             ORDER BY u.full_name ASC
@@ -1077,6 +1081,7 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
             dateFrom, dateFrom, dateTo, dateTo,
             dateFrom, dateFrom, dateTo, dateTo,
             ...scopeCond.params,
+            getCurrentTenantId(), getCurrentTenantId(),
             ...normalizedOfficerIds,
           ],
         );
@@ -1095,12 +1100,12 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
               FROM loan_installments li
               INNER JOIN loans l ON l.id = li.loan_id
               WHERE l.officer_id IN (${officerIdsInResult.map(() => "?").join(",")})
-                AND l.tenant_id = getCurrentTenantId()
+                AND l.tenant_id = ?
                 AND l.status IN ('active','restructured','overdue')
                 AND LOWER(COALESCE(li.status,'')) <> 'paid'
-                AND datetime(li.due_date) < datetime(?)
+                AND date(li.due_date) < date(?)
             `,
-            [...officerIdsInResult, asOf],
+            [...officerIdsInResult, getCurrentTenantId(), asOf],
           );
 
           for (const row of overdueRows) {
@@ -1233,8 +1238,8 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
               COALESCE(l.balance, 0)             AS balance,
               COALESCE((
                 SELECT SUM(r.applied_amount) FROM repayments r WHERE r.loan_id = l.id
-                  AND (? IS NULL OR datetime(r.repaid_at) >= datetime(?))
-                  AND (? IS NULL OR datetime(r.repaid_at) <= datetime(?))
+                  AND (? IS NULL OR datetime(r.paid_at) >= datetime(?))
+                  AND (? IS NULL OR datetime(r.paid_at) <= datetime(?))
               ), 0)                              AS collected_in_period
             FROM loans l
             ${scopeCond.sql ? `WHERE (${scopeCond.sql}) ${branchClause}` : `WHERE 1=1 ${branchClause}`}
@@ -1430,8 +1435,8 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
               l.officer_id,
               COALESCE(l.principal, 0)                   AS principal,
               COALESCE(l.repaid_total, 0)                AS repaid_total,
-              COALESCE(l.balance, 0)                     AS net_loss,
-              l.updated_at                               AS written_off_at,
+              ROUND(COALESCE(l.principal, 0) - COALESCE(l.repaid_total, 0), 2) AS net_loss,
+              COALESCE(l.written_off_at, l.updated_at)   AS written_off_at,
               b.name                                     AS branch_name,
               u.full_name                                AS officer_name,
               c.full_name                                AS client_name
@@ -1443,9 +1448,9 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
               AND l.tenant_id = ?
               AND l.status = 'written_off'
               ${officerClause}
-              AND (? IS NULL OR datetime(l.updated_at) >= datetime(?))
-              AND (? IS NULL OR datetime(l.updated_at) <= datetime(?))
-            ORDER BY l.updated_at DESC
+              AND (? IS NULL OR datetime(COALESCE(l.written_off_at, l.updated_at)) >= datetime(?))
+              AND (? IS NULL OR datetime(COALESCE(l.written_off_at, l.updated_at)) <= datetime(?))
+            ORDER BY COALESCE(l.written_off_at, l.updated_at) DESC
           `,
           [
             ...scopeCond.params,
@@ -1503,7 +1508,7 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
    *
    * Produces a simplified capital adequacy snapshot:
    *   - Total portfolio (gross book value of all disbursed loans)
-   *   - Portfolio at risk (PAR30 — outstanding balance of loans with 30+ day arrears)
+   *   - Portfolio at risk (PAR30 � outstanding balance of loans with 30+ day arrears)
    *   - Provision for credit loss (outstanding balance of overdue + restructured loans)
    *   - Written-off balance (total net loss on written-off loans)
    *   - PAR30 ratio, PAR90 ratio
@@ -1555,32 +1560,41 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
           [...scopeCond.params, tenantId],
         );
 
-        // PAR30 and PAR90: loans with at least one installment 30+ / 90+ days overdue
+        // PAR buckets are mutually exclusive: 1-30, 31-60, 61-90, and 91+ days overdue.
         const parRows = await readAll(
           `
             SELECT
               l.id AS loan_id,
               COALESCE(l.balance, 0) AS balance,
-              MAX(CAST((julianday(?) - julianday(li.due_date)) AS INTEGER)) AS max_dpd
+              MAX(CAST((julianday(date(?)) - julianday(date(li.due_date))) AS INTEGER)) AS max_dpd
             FROM loan_installments li
             INNER JOIN loans l ON l.id = li.loan_id
             ${scopeCond.sql ? `WHERE (${scopeCond.sql})` : "WHERE 1=1"}
               AND l.tenant_id = ?
               AND l.status IN ('active','restructured','overdue')
               AND LOWER(COALESCE(li.status,'')) <> 'paid'
-              AND datetime(li.due_date) < datetime(?)
+              AND date(li.due_date) < date(?)
             GROUP BY l.id
           `,
           [asOf, ...scopeCond.params, tenantId, asOf],
         );
 
         let par30Balance = 0;
+        let par60Balance = 0;
         let par90Balance = 0;
+        let nplBalance = 0;
         for (const row of parRows) {
           const dpd = Number(row["max_dpd"] || 0);
           const bal = Number(row["balance"] || 0);
-          if (dpd >= 30) par30Balance += bal;
-          if (dpd >= 90) par90Balance += bal;
+          if (dpd >= 1 && dpd <= 30) {
+            par30Balance += bal;
+          } else if (dpd >= 31 && dpd <= 60) {
+            par60Balance += bal;
+          } else if (dpd >= 61 && dpd <= 90) {
+            par90Balance += bal;
+          } else if (dpd >= 91) {
+            nplBalance += bal;
+          }
         }
 
         const grossOutstanding = Number(portfolioRow?.["gross_outstanding"] || 0);
@@ -1595,12 +1609,20 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
           written_off_principal:     Number(portfolioRow?.["written_off_principal"] || 0),
           written_off_net_loss:      Number(portfolioRow?.["written_off_net_loss"] || 0),
           par30_balance:             Number(par30Balance.toFixed(2)),
+          par60_balance:             Number(par60Balance.toFixed(2)),
           par90_balance:             Number(par90Balance.toFixed(2)),
+          npl_balance:               Number(nplBalance.toFixed(2)),
           par30_ratio:               grossOutstanding > 0
             ? Number((par30Balance / grossOutstanding).toFixed(4))
             : 0,
+          par60_ratio:               grossOutstanding > 0
+            ? Number((par60Balance / grossOutstanding).toFixed(4))
+            : 0,
           par90_ratio:               grossOutstanding > 0
             ? Number((par90Balance / grossOutstanding).toFixed(4))
+            : 0,
+          npl_ratio:                 grossOutstanding > 0
+            ? Number((nplBalance / grossOutstanding).toFixed(4))
             : 0,
           write_off_rate:            totalPrincipal > 0
             ? Number((Number(portfolioRow?.["written_off_principal"] || 0) / totalPrincipal).toFixed(4))
@@ -1769,7 +1791,7 @@ function createReportQueryService(deps: ReportQueryServiceDeps) {
   return {
     getPortfolioReport,
     getDisbursementsReport,
-    // Gap 8 — new reports
+    // Gap 8 � new reports
     getCollectionsArrearsAgingReport,
     getOfficerPerformanceReport,
     getBranchPnLReport,

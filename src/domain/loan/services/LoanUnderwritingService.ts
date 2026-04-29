@@ -1,8 +1,5 @@
 import { Money } from "../../shared/value-objects/Money.js";
-import { InterestRate } from "../value-objects/InterestRate.js";
-import { LoanTerm } from "../value-objects/LoanTerm.js";
 import type { ILoanRepository } from "../repositories/ILoanRepository.js";
-import type { LoanId } from "../value-objects/LoanId.js";
 
 export interface UnderwritingResult {
   eligible: boolean;

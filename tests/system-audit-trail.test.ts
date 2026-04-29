@@ -59,16 +59,6 @@ test("system audit trail allows admin, ceo, and operations_manager with action/d
 
   try {
     const adminToken = await loginAsAdmin(baseUrl);
-    const adminLogin = await api(baseUrl, "/api/auth/login", {
-      method: "POST",
-      body: {
-        email: "admin@afriserve.local",
-        password: "Admin@123",
-      },
-    });
-    assert.equal(adminLogin.status, 200);
-    const adminUserId = Number(adminLogin.data.user.id);
-
     const branches = await api(baseUrl, "/api/branches?limit=1&sortBy=id&sortOrder=asc", {
       token: adminToken,
     });
@@ -122,6 +112,10 @@ test("system audit trail allows admin, ceo, and operations_manager with action/d
     assert.equal(createLoan.status, 201);
 
     const checkerToken = await createHighRiskReviewerToken(baseUrl, adminToken);
+    const checkerMe = await api(baseUrl, "/api/auth/me", { token: checkerToken });
+    assert.equal(checkerMe.status, 200);
+    const checkerUserId = Number(checkerMe.data.id);
+    assert.ok(Number.isInteger(checkerUserId) && checkerUserId > 0);
     const approve = await approveLoan(baseUrl, Number(createLoan.data.id), checkerToken, {
       notes: "Approve for audit trail test",
     });
@@ -130,14 +124,14 @@ test("system audit trail allows admin, ceo, and operations_manager with action/d
 
     const dateFrom = new Date(Date.now() - 2 * 60 * 1000).toISOString();
     const dateTo = new Date(Date.now() + 2 * 60 * 1000).toISOString();
-    const query = `/api/system/audit-trail?action=loan.approved&userId=${adminUserId}&dateFrom=${encodeURIComponent(dateFrom)}&dateTo=${encodeURIComponent(dateTo)}&limit=20&offset=0`;
+    const query = `/api/system/audit-trail?action=loan.approved&userId=${checkerUserId}&dateFrom=${encodeURIComponent(dateFrom)}&dateTo=${encodeURIComponent(dateTo)}&limit=20&offset=0`;
 
     const adminTrail = await api(baseUrl, query, { token: adminToken });
     assert.equal(adminTrail.status, 200);
     assert.ok(Array.isArray(adminTrail.data.data));
     assert.equal(Number(adminTrail.data?.paging?.total || 0) >= 1, true);
     assert.equal(
-      adminTrail.data.data.some((row) => String(row.action) === "loan.approved" && Number(row.user_id) === adminUserId),
+      adminTrail.data.data.some((row) => String(row.action) === "loan.approved" && Number(row.user_id) === checkerUserId),
       true,
     );
 

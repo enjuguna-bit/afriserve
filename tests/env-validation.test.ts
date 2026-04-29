@@ -128,12 +128,28 @@ test("environment validation accepts observability and monitoring settings", () 
     SENTRY_DSN: "https://public@example.ingest.sentry.io/123",
     SENTRY_TRACES_SAMPLE_RATE: "0.1",
     SENTRY_PROFILES_SAMPLE_RATE: "0.05",
+    OTEL_EXPORTER_OTLP_ENDPOINT: "https://otel.example.com",
+    OTEL_TRACE_SAMPLE_RATIO: "0.25",
+    OTEL_SERVICE_NAME: "afriserve-api",
     UPTIME_HEARTBEAT_URL: "https://uptime.example.com/ping/abc123",
     UPTIME_HEARTBEAT_INTERVAL_MS: "60000",
     HTTPS_ENFORCEMENT_MODE: "redirect",
     HTTPS_REDIRECT_STATUS_CODE: "308",
   });
   assert.equal(result.errors.length, 0);
+});
+
+test("environment validation rejects invalid OpenTelemetry tracing settings", () => {
+  const result = validateEnvironment({
+    JWT_SECRET: "test-secret",
+    OTEL_EXPORTER_OTLP_ENDPOINT: "ftp://otel.example.com",
+    OTEL_TRACE_SAMPLE_RATIO: "1.5",
+    OTEL_SERVICE_NAME: "   ",
+  });
+
+  assert.ok(result.errors.some((item) => item.includes("OTEL_EXPORTER_OTLP_ENDPOINT")));
+  assert.ok(result.errors.some((item) => item.includes("OTEL_TRACE_SAMPLE_RATIO")));
+  assert.ok(result.errors.some((item) => item.includes("OTEL_SERVICE_NAME")));
 });
 
 test("environment validation rejects non-boolean ACCOUNTING_GL_SHADOW_MODE", () => {

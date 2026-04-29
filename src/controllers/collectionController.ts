@@ -1,5 +1,5 @@
-import type { CollectionRouteDeps, RouteRegistrar } from "../types/routeDeps.js";
-import { registerCollectionServiceRoutes } from "../services/collectionRouteService.js";
+﻿import type { CollectionRouteDeps, RouteRegistrar } from "../types/routeDeps.js";
+import { registerCollectionServiceRoutes } from "../routes/services/collectionRouteService.js";
 
 function registerCollectionControllerRoutes(app: RouteRegistrar, deps: CollectionRouteDeps) {
   registerCollectionServiceRoutes(app, deps);
@@ -8,3 +8,4 @@ function registerCollectionControllerRoutes(app: RouteRegistrar, deps: Collectio
 export {
   registerCollectionControllerRoutes,
 };
+

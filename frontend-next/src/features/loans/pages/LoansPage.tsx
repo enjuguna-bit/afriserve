@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { hasAnyRole } from '../../../app/roleAccess'
 import { AsyncState } from '../../../components/common/AsyncState'
 import { DynamicTable, type DynamicTableColumn } from '../../../components/common/DynamicTable'
@@ -10,6 +10,8 @@ import { queryKeys } from '../../../services/queryKeys'
 import { queryPolicies } from '../../../services/queryPolicies'
 import { listLoans } from '../../../services/loanService'
 import type { LoanRecord } from '../../../types/loan'
+import { formatDisplayDate } from '../../../utils/dateFormatting'
+import { formatDisplayText, resolveDisplayText } from '../../../utils/displayFormatting'
 import { useLoans } from '../hooks/useLoans'
 import { formatWorkflowText, getLoanActionState } from '../utils/workflow'
 import styles from './LoansPage.module.css'
@@ -52,6 +54,11 @@ function statusClassName(status: string) {
   return styles.statusOther
 }
 
+function parsePositiveIntSearchParam(value: string | null): number | undefined {
+  const parsed = Number(value || 0)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
+}
+
 function buildLoanColumns(): Array<DynamicTableColumn<LoanRecord>> {
   return [
     {
@@ -70,8 +77,8 @@ function buildLoanColumns(): Array<DynamicTableColumn<LoanRecord>> {
       width: '22%',
       cell: (loan) => (
         <div className={styles.borrowerCell}>
-          <strong>{loan.client_name || `Client ${loan.client_id}`}</strong>
-          <span>{loan.disbursed_at ? new Date(loan.disbursed_at).toLocaleDateString() : 'Not disbursed'}</span>
+          <strong>{resolveDisplayText([loan.client_name, loan.client_id ? `Client ${loan.client_id}` : null], 'Unknown client')}</strong>
+          <span>{formatDisplayDate(loan.disbursed_at, 'Not disbursed')}</span>
         </div>
       ),
     },
@@ -102,7 +109,7 @@ function buildLoanColumns(): Array<DynamicTableColumn<LoanRecord>> {
       width: '12%',
       cell: (loan) => (
         <span className={`${styles.statusBadge} ${statusClassName(loan.status)}`}>
-          {formatWorkflowText(loan.workflow_stage || loan.status)}
+          {formatWorkflowText(resolveDisplayText([loan.workflow_stage, loan.status], 'unknown'))}
         </span>
       ),
     },
@@ -110,7 +117,7 @@ function buildLoanColumns(): Array<DynamicTableColumn<LoanRecord>> {
       id: 'unit',
       header: 'Unit',
       width: '7%',
-      cell: (loan) => loan.branch_code || '-',
+      cell: (loan) => formatDisplayText(loan.branch_code),
     },
     {
       id: 'action',
@@ -153,10 +160,16 @@ function buildLoanColumns(): Array<DynamicTableColumn<LoanRecord>> {
 
 export function LoansPage() {
   const queryClient = useQueryClient()
+  const [searchParams] = useSearchParams()
+  const searchQueryKey = searchParams.toString()
   const { user } = useAuth()
-  const [searchInput, setSearchInput] = useState('')
-  const [appliedSearch, setAppliedSearch] = useState('')
-  const [status, setStatus] = useState('')
+  const [searchInput, setSearchInput] = useState(() => String(searchParams.get('search') || '').trim())
+  const [appliedSearch, setAppliedSearch] = useState(() => String(searchParams.get('search') || '').trim())
+  const [status, setStatus] = useState(() => String(searchParams.get('status') || '').trim())
+  const [branchIdFilter, setBranchIdFilter] = useState<number | undefined>(() => parsePositiveIntSearchParam(searchParams.get('branchId')))
+  const [officerIdFilter, setOfficerIdFilter] = useState<number | undefined>(() => parsePositiveIntSearchParam(searchParams.get('officerId')))
+  const [statusGroupFilter, setStatusGroupFilter] = useState(() => String(searchParams.get('statusGroup') || '').trim())
+  const [workflowStageFilter, setWorkflowStageFilter] = useState(() => String(searchParams.get('workflowStage') || '').trim())
   const [limit, setLimit] = useState(DEFAULT_PAGE_SIZE)
   const [offset, setOffset] = useState(0)
   const canCreateLoans = hasAnyRole(user, ['admin', 'loan_officer'])
@@ -168,10 +181,14 @@ export function LoansPage() {
       offset,
       search: appliedSearch || undefined,
       status: status || undefined,
+      branchId: branchIdFilter,
+      officerId: officerIdFilter,
+      statusGroup: statusGroupFilter || undefined,
+      workflowStage: workflowStageFilter || undefined,
       sortBy: 'id',
       sortOrder: 'desc',
     }),
-    [appliedSearch, limit, offset, status],
+    [appliedSearch, branchIdFilter, limit, offset, officerIdFilter, status, statusGroupFilter, workflowStageFilter],
   )
 
   const loansQuery = useLoans(query)
@@ -179,7 +196,19 @@ export function LoansPage() {
   const totalRecords = Number(loansQuery.data?.paging.total || 0)
   const showingFrom = totalRecords === 0 ? 0 : offset + 1
   const showingTo = totalRecords === 0 ? 0 : Math.min(offset + loans.length, totalRecords)
-  const hasActiveFilters = Boolean(appliedSearch || status)
+  const hasActiveFilters = Boolean(appliedSearch || status || branchIdFilter || officerIdFilter || statusGroupFilter || workflowStageFilter)
+
+  useEffect(() => {
+    const nextSearch = String(searchParams.get('search') || '').trim()
+    setSearchInput(nextSearch)
+    setAppliedSearch(nextSearch)
+    setStatus(String(searchParams.get('status') || '').trim())
+    setBranchIdFilter(parsePositiveIntSearchParam(searchParams.get('branchId')))
+    setOfficerIdFilter(parsePositiveIntSearchParam(searchParams.get('officerId')))
+    setStatusGroupFilter(String(searchParams.get('statusGroup') || '').trim())
+    setWorkflowStageFilter(String(searchParams.get('workflowStage') || '').trim())
+    setOffset(0)
+  }, [searchParams, searchQueryKey])
 
   useEffect(() => {
     if (!loansQuery.data) {
@@ -292,6 +321,10 @@ export function LoansPage() {
               setSearchInput('')
               setAppliedSearch('')
               setStatus('')
+              setBranchIdFilter(undefined)
+              setOfficerIdFilter(undefined)
+              setStatusGroupFilter('')
+              setWorkflowStageFilter('')
             } : undefined}
             onRetry={() => {
               void loansQuery.refetch()
@@ -322,3 +355,4 @@ export function LoansPage() {
     </div>
   )
 }
+

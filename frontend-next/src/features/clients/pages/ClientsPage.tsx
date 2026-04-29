@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { hasAnyRole } from '../../../app/roleAccess'
 import { AsyncState } from '../../../components/common/AsyncState'
 import { DynamicTable, type DynamicTableColumn } from '../../../components/common/DynamicTable'
@@ -10,6 +10,7 @@ import { queryKeys } from '../../../services/queryKeys'
 import { queryPolicies } from '../../../services/queryPolicies'
 import { listClients } from '../../../services/clientService'
 import type { ClientKycStatus, ClientRecord } from '../../../types/client'
+import { formatDisplayText, resolveDisplayText } from '../../../utils/displayFormatting'
 import { useClients } from '../hooks/useClients'
 import styles from './ClientsPage.module.css'
 
@@ -25,7 +26,26 @@ function formatClientStatus(client: ClientRecord) {
 }
 
 function borrowerMeta(client: ClientRecord) {
-  return client.phone || client.national_id || 'No phone or national ID'
+  return resolveDisplayText([client.phone, client.national_id], 'No phone or national ID')
+}
+
+function parsePositiveIntSearchParam(value: string | null): number | undefined {
+  const parsed = Number(value || 0)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
+}
+
+function parseBooleanSearchParam(value: string | null): boolean | undefined {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!normalized) {
+    return undefined
+  }
+  if (['1', 'true', 'yes'].includes(normalized)) {
+    return true
+  }
+  if (['0', 'false', 'no'].includes(normalized)) {
+    return false
+  }
+  return undefined
 }
 
 function buildClientColumns(canManageClients: boolean): Array<DynamicTableColumn<ClientRecord>> {
@@ -36,7 +56,7 @@ function buildClientColumns(canManageClients: boolean): Array<DynamicTableColumn
       width: '22%',
       cell: (client) => (
         <div className={styles.nameCell}>
-          <strong>{client.full_name}</strong>
+          <strong>{formatDisplayText(client.full_name, `Client #${client.id}`)}</strong>
           <span>{borrowerMeta(client)}</span>
         </div>
       ),
@@ -51,7 +71,7 @@ function buildClientColumns(canManageClients: boolean): Array<DynamicTableColumn
       id: 'contact',
       header: 'Contact',
       width: '12%',
-      cell: (client) => <span className={styles.phoneCell}>{client.phone || '-'}</span>,
+      cell: (client) => <span className={styles.phoneCell}>{formatDisplayText(client.phone)}</span>,
     },
     {
       id: 'compliance',
@@ -59,8 +79,8 @@ function buildClientColumns(canManageClients: boolean): Array<DynamicTableColumn
       width: '15%',
       cell: (client) => (
         <div className={styles.complianceCell}>
-          <span className={styles.metaBadge}>{client.kyc_status || 'N/A KYC'}</span>
-          <span className={styles.metaBadge}>{client.fee_payment_status || 'N/A Fee'}</span>
+          <span className={styles.metaBadge}>{formatDisplayText(client.kyc_status, 'N/A KYC')}</span>
+          <span className={styles.metaBadge}>{formatDisplayText(client.fee_payment_status, 'N/A Fee')}</span>
         </div>
       ),
     },
@@ -68,13 +88,13 @@ function buildClientColumns(canManageClients: boolean): Array<DynamicTableColumn
       id: 'officer',
       header: 'Officer',
       width: '12%',
-      cell: (client) => client.assigned_officer_name || '-',
+      cell: (client) => formatDisplayText(client.assigned_officer_name),
     },
     {
       id: 'branch',
       header: 'Branch',
       width: '10%',
-      cell: (client) => client.branch_name || '-',
+      cell: (client) => formatDisplayText(client.branch_name),
     },
     {
       id: 'status',
@@ -116,12 +136,18 @@ function buildClientColumns(canManageClients: boolean): Array<DynamicTableColumn
 export function ClientsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const [searchParams] = useSearchParams()
+  const searchQueryKey = searchParams.toString()
   const { user } = useAuth()
-  const [searchInput, setSearchInput] = useState('')
-  const [appliedSearch, setAppliedSearch] = useState('')
-  const [kycStatus, setKycStatus] = useState<ClientKycStatus | ''>('')
-  const [onboardingStatus, setOnboardingStatus] = useState<'registered' | 'kyc_pending' | 'kyc_verified' | 'complete' | ''>('')
-  const [feePaymentStatus, setFeePaymentStatus] = useState<'unpaid' | 'paid' | 'waived' | ''>('')
+  const [searchInput, setSearchInput] = useState(() => String(searchParams.get('search') || '').trim())
+  const [appliedSearch, setAppliedSearch] = useState(() => String(searchParams.get('search') || '').trim())
+  const [kycStatus, setKycStatus] = useState<ClientKycStatus | ''>(() => String(searchParams.get('kycStatus') || '').trim() as ClientKycStatus | '')
+  const [onboardingStatus, setOnboardingStatus] = useState<'registered' | 'kyc_pending' | 'kyc_verified' | 'complete' | ''>(() => String(searchParams.get('onboardingStatus') || '').trim() as 'registered' | 'kyc_pending' | 'kyc_verified' | 'complete' | '')
+  const [feePaymentStatus, setFeePaymentStatus] = useState<'unpaid' | 'paid' | 'waived' | ''>(() => String(searchParams.get('feePaymentStatus') || '').trim() as 'unpaid' | 'paid' | 'waived' | '')
+  const [branchIdFilter, setBranchIdFilter] = useState<number | undefined>(() => parsePositiveIntSearchParam(searchParams.get('branchId')))
+  const [officerIdFilter, setOfficerIdFilter] = useState<number | undefined>(() => parsePositiveIntSearchParam(searchParams.get('officerId')))
+  const [minLoansFilter, setMinLoansFilter] = useState<number | undefined>(() => parsePositiveIntSearchParam(searchParams.get('minLoans')))
+  const [isActiveFilter, setIsActiveFilter] = useState<boolean | undefined>(() => parseBooleanSearchParam(searchParams.get('isActive')))
   const [limit, setLimit] = useState(DEFAULT_PAGE_SIZE)
   const [offset, setOffset] = useState(0)
 
@@ -131,12 +157,16 @@ export function ClientsPage() {
       kycStatus: kycStatus || undefined,
       onboardingStatus: onboardingStatus || undefined,
       feePaymentStatus: feePaymentStatus || undefined,
+      branchId: branchIdFilter,
+      officerId: officerIdFilter,
+      minLoans: minLoansFilter,
+      isActive: typeof isActiveFilter === 'boolean' ? isActiveFilter : undefined,
       limit,
       offset,
       sortBy: 'id' as const,
       sortOrder: 'desc' as const,
     }),
-    [appliedSearch, feePaymentStatus, kycStatus, limit, offset, onboardingStatus],
+    [appliedSearch, branchIdFilter, feePaymentStatus, isActiveFilter, kycStatus, limit, minLoansFilter, offset, officerIdFilter, onboardingStatus],
   )
 
   const clientsQuery = useClients(query)
@@ -147,8 +177,22 @@ export function ClientsPage() {
   const totalRecords = Number(clientsQuery.data?.paging.total || 0)
   const showingFrom = totalRecords === 0 ? 0 : offset + 1
   const showingTo = totalRecords === 0 ? 0 : Math.min(offset + clients.length, totalRecords)
-  const hasActiveFilters = Boolean(appliedSearch || feePaymentStatus || kycStatus || onboardingStatus)
+  const hasActiveFilters = Boolean(appliedSearch || feePaymentStatus || kycStatus || onboardingStatus || branchIdFilter || officerIdFilter || minLoansFilter || typeof isActiveFilter === 'boolean')
   const columns = buildClientColumns(canManageClients)
+
+  useEffect(() => {
+    const nextSearch = String(searchParams.get('search') || '').trim()
+    setSearchInput(nextSearch)
+    setAppliedSearch(nextSearch)
+    setKycStatus(String(searchParams.get('kycStatus') || '').trim() as ClientKycStatus | '')
+    setOnboardingStatus(String(searchParams.get('onboardingStatus') || '').trim() as 'registered' | 'kyc_pending' | 'kyc_verified' | 'complete' | '')
+    setFeePaymentStatus(String(searchParams.get('feePaymentStatus') || '').trim() as 'unpaid' | 'paid' | 'waived' | '')
+    setBranchIdFilter(parsePositiveIntSearchParam(searchParams.get('branchId')))
+    setOfficerIdFilter(parsePositiveIntSearchParam(searchParams.get('officerId')))
+    setMinLoansFilter(parsePositiveIntSearchParam(searchParams.get('minLoans')))
+    setIsActiveFilter(parseBooleanSearchParam(searchParams.get('isActive')))
+    setOffset(0)
+  }, [searchParams, searchQueryKey])
 
   useEffect(() => {
     if (!clientsQuery.data) {
@@ -286,6 +330,10 @@ export function ClientsPage() {
               setKycStatus('')
               setOnboardingStatus('')
               setFeePaymentStatus('')
+              setBranchIdFilter(undefined)
+              setOfficerIdFilter(undefined)
+              setMinLoansFilter(undefined)
+              setIsActiveFilter(undefined)
             } : undefined}
             onRetry={() => {
               void clientsQuery.refetch()
@@ -318,3 +366,4 @@ export function ClientsPage() {
     </div>
   )
 }
+

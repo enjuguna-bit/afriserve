@@ -1,6 +1,7 @@
 generator client {
   provider = "prisma-client-js"
   output   = "../generated/prisma/sqlite-client"
+  binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x"]
 }
 
 datasource db {
@@ -22,7 +23,7 @@ model users {
   branch_id             Int?
   primary_region_id     Int?
   tenant_id             String    @default("default")
-  created_at            DateTime
+  created_at            DateTime  @default(now())
 
   branch                         branches?                         @relation("UserBranch", fields: [branch_id], references: [id], onDelete: SetNull)
   primary_region                 regions?                          @relation("UserPrimaryRegion", fields: [primary_region_id], references: [id], onDelete: SetNull)
@@ -37,6 +38,9 @@ model users {
   approved_loans                 loans[]                           @relation("LoanApprovedByUser")
   rejected_loans                 loans[]                           @relation("LoanRejectedByUser")
   recorded_repayments            repayments[]                      @relation("RepaymentRecordedByUser")
+  submitted_capital_transactions capital_transactions[]            @relation("CapitalTransactionSubmittedByUser")
+  approved_capital_transactions  capital_transactions[]            @relation("CapitalTransactionApprovedByUser")
+  rejected_capital_transactions  capital_transactions[]            @relation("CapitalTransactionRejectedByUser")
   initiated_b2c_disbursements    mobile_money_b2c_disbursements[]  @relation("B2cInitiatedByUser")
   collection_actions             collection_actions[]              @relation("CollectionActionCreatedByUser")
   requested_approvals            approval_requests[]               @relation("ApprovalRequestedByUser")
@@ -49,14 +53,37 @@ model users {
   created_collateral_assets      collateral_assets[]               @relation("CollateralAssetCreatedByUser")
   created_loan_collaterals       loan_collaterals[]                @relation("LoanCollateralCreatedByUser")
   created_loan_contract_versions loan_contract_versions[]          @relation("LoanContractVersionCreatedByUser")
+  requested_profile_refreshes    client_profile_refreshes[]        @relation("ClientProfileRefreshRequestedByUser")
+  assigned_profile_refreshes     client_profile_refreshes[]        @relation("ClientProfileRefreshAssignedToUser")
+  submitted_profile_refreshes    client_profile_refreshes[]        @relation("ClientProfileRefreshSubmittedByUser")
+  reviewed_profile_refreshes     client_profile_refreshes[]        @relation("ClientProfileRefreshReviewedByUser")
+  created_profile_versions       client_profile_versions[]         @relation("ClientProfileVersionCreatedByUser")
+  approved_profile_versions      client_profile_versions[]         @relation("ClientProfileVersionApprovedByUser")
+  profile_refresh_events         client_profile_refresh_events[]   @relation("ClientProfileRefreshEventActorUser")
+  flagged_profile_feedback       client_profile_refresh_feedback[] @relation("ClientProfileRefreshFeedbackFlaggedByUser")
+  resolved_profile_feedback      client_profile_refresh_feedback[] @relation("ClientProfileRefreshFeedbackResolvedByUser")
   user_custom_permissions        user_custom_permissions[]         @relation("UserCustomPermissionsUser")
   granted_custom_permissions     user_custom_permissions[]         @relation("UserCustomPermissionsGrantor")
+  user_roles                     user_roles[]
 
   @@index([branch_id])
   @@index([primary_region_id])
   @@index([tenant_id])
   @@index([role, is_active], map: "idx_users_role_active")
   @@map("users")
+}
+
+model user_roles {
+  user_id    Int
+  role       String
+  created_at DateTime
+
+  user users @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@id([user_id, role])
+  @@index([user_id], map: "idx_user_roles_user_id")
+  @@index([role], map: "idx_user_roles_role")
+  @@map("user_roles")
 }
 
 model permissions {
@@ -96,6 +123,50 @@ model user_custom_permissions {
   @@index([permission_id])
   @@index([granted_by_user_id])
   @@map("user_custom_permissions")
+}
+
+model tenants {
+  id         String         @id
+  name       String
+  status     String         @default("active")
+  created_at DateTime
+  updated_at DateTime
+
+  domain_events domain_events[]
+
+  @@map("tenants")
+}
+
+model domain_events {
+  id             Int       @id @default(autoincrement())
+  tenant_id      String    @default("default")
+  event_type     String
+  aggregate_type String
+  aggregate_id   Int?
+  payload_json   String
+  metadata_json  String?
+  status         String    @default("pending")
+  attempt_count  Int       @default(0)
+  last_error     String?
+  occurred_at    DateTime
+  published_at   DateTime?
+  created_at     DateTime
+  updated_at     DateTime
+
+  tenant tenants @relation(fields: [tenant_id], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([status, id], map: "idx_domain_events_status_id")
+  @@index([tenant_id, status], map: "idx_domain_events_tenant_status")
+  @@index([tenant_id, status, id], map: "idx_domain_events_tenant_status_id")
+  @@index([event_type, created_at], map: "idx_domain_events_type_created_at")
+  @@map("domain_events")
+}
+
+model schema_migrations {
+  id         String   @id
+  applied_at DateTime @default(now())
+
+  @@map("schema_migrations")
 }
 
 model headquarters {
@@ -139,6 +210,7 @@ model branches {
   contact_phone    String?
   contact_email    String?
   region_id        Int
+  tenant_id   String   @default("default")
   is_active        Int      @default(1)
   created_at       DateTime
   updated_at       DateTime
@@ -153,11 +225,13 @@ model branches {
   transactions       transactions[]                    @relation("TransactionBranch")
   approval_requests  approval_requests[]               @relation("ApprovalBranch")
   gl_journals        gl_journals[]                     @relation("GlJournalBranch")
+  capital_transactions capital_transactions[]          @relation("CapitalTransactionBranch")
   guarantors         guarantors[]                      @relation("GuarantorBranch")
   collateral_assets  collateral_assets[]               @relation("CollateralAssetBranch")
 
   @@index([region_id])
   @@map("branches")
+  @@index([tenant_id])
 }
 
 model area_manager_branch_assignments {
@@ -205,6 +279,7 @@ model clients {
   created_by_user_id   Int?
   kra_pin              String?
   photo_url            String?
+  photo_metadata_json  String?
   id_document_url      String?
   kyc_status           String    @default("pending")
   onboarding_status    String    @default("registered")
@@ -217,6 +292,10 @@ model clients {
   business_years       Int?
   business_location    String?
   residential_address  String?
+  latitude             Float?
+  longitude            Float?
+  location_accuracy_meters Float?
+  location_captured_at DateTime?
   officer_id           Int?
   created_at           DateTime
   updated_at           DateTime?
@@ -229,6 +308,8 @@ model clients {
   gl_journals       gl_journals[]
   guarantors        guarantors[]        @relation("ClientGuarantors")
   collateral_assets collateral_assets[] @relation("ClientCollateralAssets")
+  profile_refreshes client_profile_refreshes[]
+  profile_versions  client_profile_versions[]
 
   @@index([branch_id])
   @@index([created_by_user_id])
@@ -238,11 +319,14 @@ model clients {
   @@index([fee_payment_status], map: "idx_clients_fee_payment_status")
   @@index([branch_id, created_at], map: "idx_clients_branch_created_at")
   @@index([tenant_id], map: "idx_clients_tenant_id")
+  @@index([tenant_id, branch_id], map: "idx_clients_tenant_branch")
+  @@index([tenant_id, officer_id], map: "idx_clients_tenant_officer")
   @@map("clients")
 }
 
 model loan_products {
   id                                 Int       @id @default(autoincrement())
+  tenant_id   String   @default("default")
   name                               String
   interest_rate                      Decimal
   interest_accrual_method            String    @default("upfront")
@@ -272,6 +356,7 @@ model loan_products {
   loans loans[]
 
   @@map("loan_products")
+  @@index([tenant_id])
 }
 
 model loans {
@@ -288,6 +373,7 @@ model loans {
   registration_fee     Decimal   @default(0)
   processing_fee       Decimal   @default(0)
   created_at           DateTime
+  updated_at           DateTime?
   disbursed_at         DateTime?
   status               String    @default("pending_approval")
   officer_id           Int?
@@ -299,11 +385,12 @@ model loans {
   rejected_at          DateTime?
   rejection_reason     String?
   archived_at          DateTime?
+  written_off_at       DateTime?
   expected_total       Decimal
   repaid_total         Decimal   @default(0)
   balance              Decimal
   external_reference   String?
-  /// Loan purpose — required for CBK regulatory reporting.
+  /// Loan purpose â€” required for CBK regulatory reporting.
   /// Nullable for backward compatibility with existing records.
   purpose              String?
 
@@ -383,11 +470,14 @@ model repayments {
   @@index([loan_id, paid_at], map: "idx_repayments_loan_paid_at")
   @@index([recorded_by_user_id, paid_at], map: "idx_repayments_recorded_by_paid_at")
   @@index([tenant_id], map: "idx_repayments_tenant_id")
+  @@index([tenant_id, paid_at], map: "idx_repayments_tenant_paid_at")
+  @@index([tenant_id, loan_id, paid_at], map: "idx_repayments_tenant_loan_paid_at")
   @@map("repayments")
 }
 
 model mobile_money_c2b_events {
   id                  Int       @id @default(autoincrement())
+  tenant_id           String    @default("default")
   provider            String
   external_receipt    String    @unique
   account_reference   String
@@ -408,11 +498,13 @@ model mobile_money_c2b_events {
   @@index([loan_id])
   @@index([repayment_id])
   @@index([status], map: "idx_mobile_money_c2b_status")
+  @@index([tenant_id], map: "idx_c2b_events_tenant_id")
   @@map("mobile_money_c2b_events")
 }
 
 model mobile_money_b2c_disbursements {
   id                         Int       @id @default(autoincrement())
+  tenant_id                  String    @default("default")
   request_id                 String    @unique
   loan_id                    Int
   provider                   String
@@ -427,14 +519,15 @@ model mobile_money_b2c_disbursements {
   failure_reason             String?
   reversal_attempts          Int       @default(0)
   reversal_last_requested_at DateTime?
-  created_at                 DateTime
-  updated_at                 DateTime
+  created_at                 DateTime  @default(now())
+  updated_at                 DateTime  @default(now())
 
   loan              loans  @relation(fields: [loan_id], references: [id], onDelete: Restrict)
   initiated_by_user users? @relation("B2cInitiatedByUser", fields: [initiated_by_user_id], references: [id], onDelete: SetNull)
 
   @@index([loan_id])
   @@index([initiated_by_user_id])
+  @@index([tenant_id], map: "idx_b2c_disbursements_tenant_id")
   @@map("mobile_money_b2c_disbursements")
 }
 
@@ -517,6 +610,7 @@ model loan_contract_versions {
 }
 
 model loan_underwriting_assessments {
+  tenant_id   String   @default("default")
   loan_id                           Int      @id
   client_id                         Int
   branch_id                         Int?
@@ -550,10 +644,12 @@ model loan_underwriting_assessments {
   @@index([client_id])
   @@index([branch_id])
   @@map("loan_underwriting_assessments")
+  @@index([tenant_id])
 }
 
 model loan_installments {
   id                                 Int       @id @default(autoincrement())
+  tenant_id                          String    @default("default")
   loan_id                            Int
   installment_number                 Int
   due_date                           DateTime
@@ -576,6 +672,8 @@ model loan_installments {
   collection_actions collection_actions[]
 
   @@index([loan_id])
+  @@index([tenant_id], map: "idx_loan_installments_tenant_id")
+  @@index([tenant_id, loan_id], map: "idx_loan_installments_tenant_loan")
   @@index([loan_id, status, due_date], map: "idx_installments_loan_status_due_date")
   @@index([due_date, status, loan_id], map: "idx_installments_due_status_loan_id")
   @@map("loan_installments")
@@ -583,6 +681,7 @@ model loan_installments {
 
 model collection_actions {
   id                  Int       @id @default(autoincrement())
+  tenant_id   String   @default("default")
   loan_id             Int
   branch_id           Int?
   installment_id      Int?
@@ -605,10 +704,12 @@ model collection_actions {
   @@index([created_by_user_id], map: "idx_collection_actions_created_by_user_id")
   @@index([action_status, next_follow_up_date], map: "idx_collection_actions_status_follow_up_date")
   @@map("collection_actions")
+  @@index([tenant_id])
 }
 
 model transactions {
   id          Int      @id @default(autoincrement())
+  tenant_id   String   @default("default")
   loan_id     Int?
   client_id   Int?
   branch_id   Int?
@@ -624,12 +725,15 @@ model transactions {
   @@index([loan_id])
   @@index([client_id])
   @@index([branch_id])
+  @@index([tenant_id], map: "idx_transactions_tenant_id")
+  @@index([tenant_id, loan_id], map: "idx_transactions_tenant_loan")
   @@index([tx_type, occurred_at], map: "idx_transactions_tx_type_occurred_at")
   @@map("transactions")
 }
 
 model approval_requests {
   id                   Int       @id @default(autoincrement())
+  tenant_id            String    @default("default")
   request_type         String
   target_type          String    @default("loan")
   target_id            Int
@@ -659,8 +763,48 @@ model approval_requests {
   @@index([branch_id])
   @@index([requested_by_user_id])
   @@index([checker_user_id])
+  @@index([tenant_id], map: "idx_approval_requests_tenant_id")
+  @@index([tenant_id, status], map: "idx_approval_requests_tenant_status")
   @@index([expires_at])
   @@map("approval_requests")
+}
+
+model capital_transactions {
+  id                         Int       @id @default(autoincrement())
+  tenant_id                  String    @default("default")
+  transaction_type           String
+  status                     String    @default("pending")
+  amount                     Decimal
+  currency                   String    @default("KES")
+  submitted_by_user_id       Int
+  submitted_by_role          String
+  branch_id                  Int?
+  approved_by_user_id        Int?
+  approved_at                DateTime?
+  rejected_by_user_id        Int?
+  rejected_at                DateTime?
+  rejection_reason           String?
+  cashflow_net_at_submission Decimal?
+  cashflow_override_note     String?
+  gl_journal_id              Int?
+  reference                  String?
+  note                       String?
+  created_at                 DateTime
+  updated_at                 DateTime
+
+  submitted_by_user users       @relation("CapitalTransactionSubmittedByUser", fields: [submitted_by_user_id], references: [id], onDelete: Restrict)
+  approved_by_user  users?      @relation("CapitalTransactionApprovedByUser", fields: [approved_by_user_id], references: [id], onDelete: SetNull)
+  rejected_by_user  users?      @relation("CapitalTransactionRejectedByUser", fields: [rejected_by_user_id], references: [id], onDelete: SetNull)
+  branch            branches?   @relation("CapitalTransactionBranch", fields: [branch_id], references: [id], onDelete: SetNull)
+  gl_journal        gl_journals? @relation("CapitalTransactionJournal", fields: [gl_journal_id], references: [id], onDelete: SetNull)
+
+  @@index([tenant_id], map: "capital_tx_tenant_id_idx")
+  @@index([submitted_by_user_id], map: "capital_tx_submitted_by_idx")
+  @@index([branch_id], map: "capital_tx_branch_id_idx")
+  @@index([status], map: "capital_tx_status_idx")
+  @@index([transaction_type], map: "capital_tx_type_idx")
+  @@index([created_at], map: "capital_tx_created_at_idx")
+  @@map("capital_transactions")
 }
 
 model gl_accounts {
@@ -703,6 +847,7 @@ model gl_journals {
   branch         branches?    @relation("GlJournalBranch", fields: [branch_id], references: [id], onDelete: SetNull)
   posted_by_user users?       @relation("GlJournalPostedByUser", fields: [posted_by_user_id], references: [id], onDelete: SetNull)
   entries        gl_entries[]
+  capital_transactions capital_transactions[] @relation("CapitalTransactionJournal")
 
   @@unique([reference_type, reference_id])
   @@index([loan_id])
@@ -711,11 +856,14 @@ model gl_journals {
   @@index([posted_by_user_id])
   @@index([external_reference_id])
   @@index([tenant_id])
+  @@index([tenant_id, loan_id], map: "idx_gl_journals_tenant_loan")
+  @@index([tenant_id, branch_id, posted_at], map: "idx_gl_journals_tenant_branch_posted_at")
   @@map("gl_journals")
 }
 
 model gl_entries {
   id                   Int      @id @default(autoincrement())
+  tenant_id   String   @default("default")
   journal_id           Int
   account_id           Int
   side                 String
@@ -735,6 +883,7 @@ model gl_entries {
   @@index([account_id])
   @@index([account_id, created_at], map: "idx_gl_entries_account_created_at")
   @@map("gl_entries")
+  @@index([tenant_id])
 }
 
 model gl_fx_rates {
@@ -789,6 +938,23 @@ model gl_batch_runs {
   @@map("gl_batch_runs")
 }
 
+model gl_accounting_batches {
+  id                   Int       @id @default(autoincrement())
+  batch_type           String
+  effective_date       DateTime
+  status               String    @default("pending")
+  triggered_by_user_id Int?
+  note                 String?
+  created_at           DateTime
+  updated_at           DateTime
+
+  @@unique([batch_type, effective_date], map: "uniq_gl_accounting_batches_type_effective_date")
+  @@index([batch_type, effective_date], map: "idx_gl_accounting_batches_type_date")
+  @@index([status], map: "idx_gl_accounting_batches_status")
+  @@index([triggered_by_user_id], map: "idx_gl_accounting_batches_triggered_by")
+  @@map("gl_accounting_batches")
+}
+
 model gl_balance_snapshots {
   id            Int      @id @default(autoincrement())
   batch_run_id  Int?
@@ -829,6 +995,7 @@ model gl_trial_balance_snapshots {
 
 model gl_coa_versions {
   id                   Int       @id @default(autoincrement())
+  tenant_id   String   @default("default")
   version_code         String    @unique
   name                 String
   status               String    @default("draft")
@@ -846,10 +1013,12 @@ model gl_coa_versions {
   @@index([parent_version_id])
   @@index([created_by_user_id])
   @@map("gl_coa_versions")
+  @@index([tenant_id])
 }
 
 model gl_coa_accounts {
   id                 Int      @id @default(autoincrement())
+  tenant_id   String   @default("default")
   coa_version_id     Int
   base_account_id    Int?
   code               String
@@ -865,6 +1034,7 @@ model gl_coa_accounts {
   @@index([coa_version_id])
   @@index([base_account_id])
   @@map("gl_coa_accounts")
+  @@index([tenant_id])
 }
 
 model gl_suspense_cases {
@@ -876,6 +1046,7 @@ model gl_suspense_cases {
   branch_id                    Int?
   client_id                    Int?
   loan_id                      Int?
+  tenant_id                    String    @default("default")
   transaction_currency         String    @default("KES")
   transaction_amount           Decimal
   transaction_amount_remaining Decimal
@@ -897,11 +1068,13 @@ model gl_suspense_cases {
   @@index([loan_id])
   @@index([external_reference])
   @@map("gl_suspense_cases")
+  @@index([tenant_id])
 }
 
 model gl_suspense_allocations {
   id                           Int      @id @default(autoincrement())
   suspense_case_id             Int
+  tenant_id   String   @default("default")
   journal_id                   Int
   target_account_code          String
   allocated_transaction_amount Decimal
@@ -924,6 +1097,7 @@ model gl_suspense_allocations {
 
 model password_resets {
   id         Int       @id @default(autoincrement())
+  tenant_id   String   @default("default")
   user_id    Int
   token_hash String    @unique
   expires_at DateTime
@@ -934,10 +1108,12 @@ model password_resets {
 
   @@index([user_id])
   @@map("password_resets")
+  @@index([tenant_id])
 }
 
 model audit_logs {
   id          Int      @id @default(autoincrement())
+  tenant_id   String   @default("default")
   user_id     Int?
   action      String
   target_type String?
@@ -949,6 +1125,7 @@ model audit_logs {
   user users? @relation(fields: [user_id], references: [id], onDelete: SetNull)
 
   @@index([user_id])
+  @@index([tenant_id, created_at], map: "idx_audit_logs_tenant_created_at")
   @@map("audit_logs")
 }
 
@@ -962,12 +1139,14 @@ model guarantors {
   employer_name      String?
   monthly_income     Decimal  @default(0)
   guarantee_amount   Decimal  @default(0)
+  id_document_url    String?
   is_active          Int      @default(1)
   client_id          Int?
   branch_id          Int?
   created_by_user_id Int?
   created_at         DateTime
   updated_at         DateTime
+  tenant_id          String   @default("default")
 
   client          clients?          @relation("ClientGuarantors", fields: [client_id], references: [id], onDelete: SetNull)
   branch          branches?         @relation("GuarantorBranch", fields: [branch_id], references: [id], onDelete: SetNull)
@@ -977,6 +1156,7 @@ model guarantors {
   @@index([client_id])
   @@index([branch_id])
   @@index([created_by_user_id])
+  @@index([tenant_id, branch_id], map: "idx_guarantors_tenant_branch")
   @@map("guarantors")
 }
 
@@ -990,6 +1170,7 @@ model loan_guarantors {
   note                   String?
   created_by_user_id     Int?
   created_at             DateTime
+  tenant_id              String   @default("default")
 
   loan            loans      @relation(fields: [loan_id], references: [id], onDelete: Cascade)
   guarantor       guarantors @relation(fields: [guarantor_id], references: [id], onDelete: Cascade)
@@ -999,6 +1180,8 @@ model loan_guarantors {
   @@index([loan_id])
   @@index([guarantor_id])
   @@index([created_by_user_id])
+  @@index([tenant_id, loan_id], map: "idx_loan_guarantors_tenant_loan")
+  @@index([tenant_id, guarantor_id], map: "idx_loan_guarantors_tenant_guarantor")
   @@map("loan_guarantors")
 }
 
@@ -1015,12 +1198,15 @@ model collateral_assets {
   title_number        String?
   location_details    String?
   valuation_date      DateTime?
+  document_url        String?
+  image_urls_json     String?
   status              String    @default("active")
   client_id           Int?
   branch_id           Int?
   created_by_user_id  Int?
   created_at          DateTime
   updated_at          DateTime
+  tenant_id           String    @default("default")
 
   client           clients?           @relation("ClientCollateralAssets", fields: [client_id], references: [id], onDelete: SetNull)
   branch           branches?          @relation("CollateralAssetBranch", fields: [branch_id], references: [id], onDelete: SetNull)
@@ -1030,6 +1216,8 @@ model collateral_assets {
   @@index([client_id])
   @@index([branch_id])
   @@index([created_by_user_id])
+  @@index([tenant_id, branch_id], map: "idx_collateral_assets_tenant_branch")
+  @@index([tenant_id, status], map: "idx_collateral_assets_tenant_status")
   @@map("collateral_assets")
 }
 
@@ -1042,6 +1230,7 @@ model loan_collaterals {
   note                String?
   created_by_user_id  Int?
   created_at          DateTime
+  tenant_id           String    @default("default")
 
   loan             loans             @relation(fields: [loan_id], references: [id], onDelete: Cascade)
   collateral_asset collateral_assets @relation(fields: [collateral_asset_id], references: [id], onDelete: Cascade)
@@ -1051,7 +1240,118 @@ model loan_collaterals {
   @@index([loan_id])
   @@index([collateral_asset_id])
   @@index([created_by_user_id])
+  @@index([tenant_id, loan_id], map: "idx_loan_collaterals_tenant_loan")
+  @@index([tenant_id, collateral_asset_id], map: "idx_loan_collaterals_tenant_asset")
   @@map("loan_collaterals")
+}
+
+model client_profile_versions {
+  id                 Int      @id @default(autoincrement())
+  tenant_id          String   @default("default")
+  client_id          Int
+  version_number     Int
+  based_on_refresh_id Int?
+  snapshot_json      String
+  note               String?
+  created_by_user_id Int?
+  approved_by_user_id Int?
+  effective_from     DateTime
+  created_at         DateTime
+
+  client           clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  created_by_user  users?  @relation("ClientProfileVersionCreatedByUser", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+  approved_by_user users?  @relation("ClientProfileVersionApprovedByUser", fields: [approved_by_user_id], references: [id], onDelete: SetNull)
+
+  @@unique([client_id, version_number])
+  @@index([tenant_id, client_id], map: "idx_client_profile_versions_tenant_client")
+  @@index([client_id, effective_from], map: "idx_client_profile_versions_client_effective")
+  @@map("client_profile_versions")
+}
+
+model client_profile_refreshes {
+  id                     Int      @id @default(autoincrement())
+  tenant_id              String   @default("default")
+  client_id              Int
+  based_on_version_id    Int?
+  based_on_version_number Int?
+  approved_version_id    Int?
+  status                 String   @default("draft")
+  priority_status        String   @default("normal")
+  requested_by_user_id   Int?
+  assigned_to_user_id    Int?
+  submitted_by_user_id   Int?
+  reviewed_by_user_id    Int?
+  requested_note         String?
+  submission_note        String?
+  review_note            String?
+  locked_fields_json     String?
+  editable_fields_json   String?
+  active_snapshot_json   String
+  draft_snapshot_json    String
+  requested_at           DateTime
+  submitted_at           DateTime?
+  reviewed_at            DateTime?
+  approved_at            DateTime?
+  created_at             DateTime
+  updated_at             DateTime
+  pushback_count         Int      @default(0)
+
+  client            clients                        @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  requested_by_user users?                         @relation("ClientProfileRefreshRequestedByUser", fields: [requested_by_user_id], references: [id], onDelete: SetNull)
+  assigned_to_user  users?                         @relation("ClientProfileRefreshAssignedToUser", fields: [assigned_to_user_id], references: [id], onDelete: SetNull)
+  submitted_by_user users?                         @relation("ClientProfileRefreshSubmittedByUser", fields: [submitted_by_user_id], references: [id], onDelete: SetNull)
+  reviewed_by_user  users?                         @relation("ClientProfileRefreshReviewedByUser", fields: [reviewed_by_user_id], references: [id], onDelete: SetNull)
+  events            client_profile_refresh_events[]
+  feedback          client_profile_refresh_feedback[]
+
+  @@index([tenant_id, status, priority_status], map: "idx_client_profile_refreshes_tenant_status")
+  @@index([assigned_to_user_id, status], map: "idx_client_profile_refreshes_assigned_status")
+  @@map("client_profile_refreshes")
+}
+
+model client_profile_refresh_events {
+  id                   Int      @id @default(autoincrement())
+  tenant_id            String   @default("default")
+  refresh_id           Int
+  event_type           String
+  field_path           String?
+  actor_user_id        Int?
+  previous_value_json  String?
+  next_value_json      String?
+  reason               String?
+  gps_latitude         Float?
+  gps_longitude        Float?
+  gps_accuracy_meters  Float?
+  device_captured_at   DateTime?
+  metadata_json        String?
+  created_at           DateTime
+
+  refresh    client_profile_refreshes @relation(fields: [refresh_id], references: [id], onDelete: Cascade)
+  actor_user users?                   @relation("ClientProfileRefreshEventActorUser", fields: [actor_user_id], references: [id], onDelete: SetNull)
+
+  @@index([refresh_id, created_at], map: "idx_client_profile_refresh_events_refresh_created")
+  @@map("client_profile_refresh_events")
+}
+
+model client_profile_refresh_feedback {
+  id                  Int      @id @default(autoincrement())
+  tenant_id           String   @default("default")
+  refresh_id          Int
+  field_path          String
+  reason_code         String?
+  comment             String?
+  flagged_by_user_id  Int?
+  resolved_by_user_id Int?
+  flagged_at          DateTime
+  resolved_at         DateTime?
+  status              String   @default("open")
+
+  refresh          client_profile_refreshes @relation(fields: [refresh_id], references: [id], onDelete: Cascade)
+  flagged_by_user  users?                   @relation("ClientProfileRefreshFeedbackFlaggedByUser", fields: [flagged_by_user_id], references: [id], onDelete: SetNull)
+  resolved_by_user users?                   @relation("ClientProfileRefreshFeedbackResolvedByUser", fields: [resolved_by_user_id], references: [id], onDelete: SetNull)
+
+  @@index([refresh_id, status, field_path], map: "idx_client_profile_refresh_feedback_refresh_status")
+  @@map("client_profile_refresh_feedback")
 }
 
 // ---------------------------------------------------------------------------
@@ -1062,6 +1362,7 @@ model loan_collaterals {
 // ---------------------------------------------------------------------------
 model repayment_idempotency_keys {
   id                    Int      @id @default(autoincrement())
+  tenant_id             String   @default("default")
   loan_id               Int
   client_idempotency_key String
   repayment_id          Int?
@@ -1075,6 +1376,7 @@ model repayment_idempotency_keys {
   @@unique([loan_id, client_idempotency_key])
   @@index([loan_id])
   @@index([repayment_id])
+  @@index([tenant_id], map: "idx_repayment_idempotency_tenant_id")
   @@map("repayment_idempotency_keys")
 }
 
@@ -1085,6 +1387,7 @@ model repayment_idempotency_keys {
 // ---------------------------------------------------------------------------
 model loan_overpayment_credits {
   id           Int      @id @default(autoincrement())
+  tenant_id    String   @default("default")
   loan_id      Int
   client_id    Int?
   branch_id    Int?
@@ -1103,5 +1406,7 @@ model loan_overpayment_credits {
   @@index([repayment_id])
   @@index([client_id])
   @@index([status], map: "idx_overpayment_credits_status")
+  @@index([tenant_id], map: "idx_loan_overpayment_credits_tenant_id")
+  @@unique([repayment_id], map: "idx_loan_overpayment_credit_repayment_id")
   @@map("loan_overpayment_credits")
 }

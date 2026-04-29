@@ -17,7 +17,7 @@ FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 COPY tsconfig.json tsconfig.strict.json ./
 COPY src ./src
@@ -55,7 +55,11 @@ FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+# Runtime startup runs `prisma migrate deploy`, so the Prisma CLI must
+# remain available even though most devDependencies are omitted.
+RUN npm ci --omit=dev --ignore-scripts \
+  && npm rebuild better-sqlite3 \
+  && npm install --no-save --ignore-scripts prisma@6.19.2
 
 # ── Stage 4: minimal production runtime ───────────────────────────────────────
 FROM node:22-bookworm-slim AS production
@@ -64,6 +68,10 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3000
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist

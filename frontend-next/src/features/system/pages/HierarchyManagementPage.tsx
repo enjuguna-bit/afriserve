@@ -4,28 +4,9 @@ import { AsyncState } from '../../../components/common/AsyncState'
 import { getHierarchyTree } from '../../../services/branchService'
 import { queryPolicies } from '../../../services/queryPolicies'
 import { listHierarchyEvents } from '../../../services/systemService'
+import { formatDisplayDateTime } from '../../../utils/dateFormatting'
+import { formatDisplayDetails, formatDisplayText, resolveDisplayText } from '../../../utils/displayFormatting'
 import styles from '../../shared/styles/EntityPage.module.css'
-
-function safeDetailText(value: unknown) {
-  if (value == null || value === '') {
-    return '-'
-  }
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value, null, 2)
-    } catch {
-      return String(value)
-    }
-  }
-  if (typeof value !== 'string') {
-    return String(value)
-  }
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2)
-  } catch {
-    return value
-  }
-}
 
 export function HierarchyManagementPage() {
   const [eventType, setEventType] = useState('')
@@ -76,15 +57,15 @@ export function HierarchyManagementPage() {
           <div className={styles.gridThree}>
             <div className={styles.card}>
               <div className={styles.label}>Name</div>
-              <div className={styles.value}>{String(hierarchyTreeQuery.data.headquarters.name || '-')}</div>
+              <div className={styles.value}>{formatDisplayText(hierarchyTreeQuery.data.headquarters.name)}</div>
             </div>
             <div className={styles.card}>
               <div className={styles.label}>Code</div>
-              <div className={styles.value}>{String(hierarchyTreeQuery.data.headquarters.code || '-')}</div>
+              <div className={styles.value}>{formatDisplayText(hierarchyTreeQuery.data.headquarters.code)}</div>
             </div>
             <div className={styles.card}>
               <div className={styles.label}>Location</div>
-              <div className={styles.value}>{String(hierarchyTreeQuery.data.headquarters.location || '-')}</div>
+              <div className={styles.value}>{formatDisplayText(hierarchyTreeQuery.data.headquarters.location)}</div>
             </div>
           </div>
         </section>
@@ -105,10 +86,10 @@ export function HierarchyManagementPage() {
                 </tr>
               </thead>
               <tbody>
-                {hierarchyTreeQuery.data.regions.map((region) => (
+                {(hierarchyTreeQuery.data?.regions ?? []).map((region) => (
                   <tr key={region.id}>
-                    <td>{region.name}</td>
-                    <td className={styles.mono}>{region.code || '-'}</td>
+                    <td>{formatDisplayText(region.name)}</td>
+                    <td className={styles.mono}>{formatDisplayText(region.code)}</td>
                     <td>
                       <span className={Number(region.is_active) === 1 ? styles.badgeActive : styles.badgeMuted}>
                         {Number(region.is_active) === 1 ? 'active' : 'inactive'}
@@ -165,16 +146,16 @@ export function HierarchyManagementPage() {
                 </tr>
               </thead>
               <tbody>
-                {hierarchyEventsQuery.data.data.map((event) => (
+                {(hierarchyEventsQuery.data?.data ?? []).map((event) => (
                   <tr key={event.id}>
-                    <td>{new Date(event.created_at).toLocaleString()}</td>
-                    <td className={styles.mono}>{event.event_type}</td>
-                    <td>{event.scope_level}</td>
-                    <td>{event.region_name || event.region_id || '-'}</td>
-                    <td>{event.branch_name || event.branch_id || '-'}</td>
-                    <td>{event.actor_user_name || event.actor_user_id || '-'}</td>
+                    <td>{formatDisplayDateTime(event.created_at)}</td>
+                    <td className={styles.mono}>{formatDisplayText(event.event_type)}</td>
+                    <td>{formatDisplayText(event.scope_level)}</td>
+                    <td>{resolveDisplayText([event.region_name, event.region_id])}</td>
+                    <td>{resolveDisplayText([event.branch_name, event.branch_id])}</td>
+                    <td>{resolveDisplayText([event.actor_user_name, event.actor_user_id])}</td>
                     <td>
-                      <pre className={styles.pre}>{safeDetailText(event.details)}</pre>
+                      <pre className={styles.pre}>{formatDisplayDetails(event.details)}</pre>
                     </td>
                   </tr>
                 ))}

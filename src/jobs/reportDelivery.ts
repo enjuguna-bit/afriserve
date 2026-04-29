@@ -57,8 +57,6 @@ function createReportDeliveryJob(options: ReportDeliveryJobOptions) {
 
   /** @type {NodeJS.Timeout | null} */
   let timer: NodeJS.Timeout | null = null;
-  let consecutiveFailures = 0;
-
   /**
    * @returns {Promise<Record<string, any>>}
    */
@@ -185,7 +183,7 @@ function createReportDeliveryJob(options: ReportDeliveryJobOptions) {
     timer = setTimeout(() => {
       runOnce()
         .then((deliveryResult) => {
-          consecutiveFailures = 0;
+          runtimeState.consecutiveFailures = 0;
           if (!deliveryResult.skipped && logger && typeof logger.info === "function") {
             logger.info("reports.delivery.scheduled_completed", {
               deliveredVia: deliveryResult.deliveredVia,
@@ -195,14 +193,14 @@ function createReportDeliveryJob(options: ReportDeliveryJobOptions) {
           schedule(baseIntervalMs);
         })
         .catch((deliveryError) => {
-          consecutiveFailures += 1;
+          runtimeState.consecutiveFailures += 1;
           const retryDelayMs = Math.min(
-            baseIntervalMs * (2 ** Math.min(consecutiveFailures, 5)),
+            baseIntervalMs * (2 ** Math.min(runtimeState.consecutiveFailures, 5)),
             maxBackoffMs,
           );
           if (logger && typeof logger.error === "function") {
             logger.error("reports.delivery.scheduled_failed", {
-              consecutiveFailures,
+              consecutiveFailures: runtimeState.consecutiveFailures,
               nextRetryInMs: retryDelayMs,
               error: deliveryError,
             });
@@ -221,7 +219,7 @@ function createReportDeliveryJob(options: ReportDeliveryJobOptions) {
       return;
     }
     stop();
-    consecutiveFailures = 0;
+    runtimeState.consecutiveFailures = 0;
     schedule(baseIntervalMs);
   }
 

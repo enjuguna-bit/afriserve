@@ -13,6 +13,7 @@ export const clientFormSchema = z.object({
   businessLocation: z.string().trim().optional().or(z.literal('')),
   residentialAddress: z.string().trim().optional().or(z.literal('')),
   isActive: z.boolean().optional(),
+  piiOverrideReason: z.union([z.string().trim().min(5).max(500), z.literal('')]).optional(),
 })
 
 export type ClientFormValues = z.infer<typeof clientFormSchema>

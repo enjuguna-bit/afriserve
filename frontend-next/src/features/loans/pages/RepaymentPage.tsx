@@ -76,8 +76,7 @@ export function RepaymentPage() {
                   pushToast({ type: 'success', message: 'Repayment posted successfully.' })
                   void navigate(`/loans/${loanId}`)
                 },
-                onError: (error: any) => {
-                  console.error('BACKEND REPAYMENT ERROR:', error?.response?.data || error.message)
+                onError: () => {
                   pushToast({ type: 'error', message: 'Failed to post repayment.' })
                 },
               },

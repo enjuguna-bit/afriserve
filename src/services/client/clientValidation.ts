@@ -1,5 +1,7 @@
-import { PhoneNumber } from "../../domain/client/value-objects/PhoneNumber.js";
-import { NationalId } from "../../domain/client/value-objects/NationalId.js";
+import { getCurrentTenantId } from "../../utils/tenantStore.js";
+
+export const MIN_REQUIRED_GUARANTORS = 1;
+export const MIN_REQUIRED_COLLATERALS = 2;
 
 export function normalizeName(value: unknown) {
   return String(value || "")
@@ -52,14 +54,22 @@ export function scorePotentialDuplicate(
   }
 
   if (queryPhone && clientPhone) {
+    const samePhoneSuffix = queryPhone.length >= 7
+      && clientPhone.length >= 7
+      && clientPhone.slice(-7) === queryPhone.slice(-7);
+
     if (clientPhone === queryPhone) {
       score += 80;
       signals.push("exact_phone");
     } else if (clientPhone.includes(queryPhone) || queryPhone.includes(clientPhone)) {
       score += 45;
       signals.push("partial_phone");
-    } else if (queryPhone.length >= 7 && clientPhone.length >= 7 && clientPhone.slice(-7) === queryPhone.slice(-7)) {
+    } else if (samePhoneSuffix) {
       score += 50;
+      signals.push("same_phone_suffix");
+    }
+
+    if (samePhoneSuffix && !signals.includes("same_phone_suffix")) {
       signals.push("same_phone_suffix");
     }
   }
@@ -106,28 +116,43 @@ export async function hasDuplicateNationalId(
   }
   const normalized = normalizeNationalId(nationalId);
   if (!normalized) return false;
+  const tenantId = getCurrentTenantId();
   const existing = await get(
     `
       SELECT id
       FROM clients
-      WHERE national_id IS NOT NULL
+      WHERE tenant_id = ?
+        AND national_id IS NOT NULL
         AND LOWER(REPLACE(REPLACE(TRIM(national_id), ' ', ''), '-', '')) = ?
         ${excludeClientId ? "AND id != ?" : ""}
     `,
-    excludeClientId ? [normalized, excludeClientId] : [normalized],
+    excludeClientId ? [tenantId, normalized, excludeClientId] : [tenantId, normalized],
   );
   return Boolean(existing?.id);
 }
 
 export function deriveOnboardingStatus(payload: {
+  hasProfilePhoto: boolean;
+  hasPinnedLocation: boolean;
   kycStatus: string;
   hasGuarantor: boolean;
+  guarantorDocumentsComplete: boolean;
   hasCollateral: boolean;
+  collateralDocumentsComplete: boolean;
   feesPaid: boolean;
 }) {
   const normalizedKycStatus = String(payload.kycStatus || "pending").trim().toLowerCase();
 
-  if (normalizedKycStatus === "verified" && payload.hasGuarantor && payload.hasCollateral && payload.feesPaid) {
+  if (
+    normalizedKycStatus === "verified"
+    && payload.hasProfilePhoto
+    && payload.hasPinnedLocation
+    && payload.hasGuarantor
+    && payload.guarantorDocumentsComplete
+    && payload.hasCollateral
+    && payload.collateralDocumentsComplete
+    && payload.feesPaid
+  ) {
     return "complete";
   }
   if (normalizedKycStatus === "verified") {
@@ -140,14 +165,24 @@ export function deriveOnboardingStatus(payload: {
 }
 
 export function deriveOnboardingNextStep(payload: {
+  hasProfilePhoto: boolean;
+  hasPinnedLocation: boolean;
   kycStatus: string;
   hasGuarantor: boolean;
+  guarantorDocumentsComplete: boolean;
   hasCollateral: boolean;
+  collateralDocumentsComplete: boolean;
   feesPaid: boolean;
 }) {
   const normalizedKycStatus = String(payload.kycStatus || "pending").trim().toLowerCase();
 
+  if (!payload.hasPinnedLocation) {
+    return "capture_location";
+  }
   if (normalizedKycStatus !== "verified") {
+    if (!payload.hasProfilePhoto) {
+      return "start_kyc";
+    }
     if (normalizedKycStatus === "in_review") {
       return "complete_kyc_review";
     }
@@ -159,11 +194,20 @@ export function deriveOnboardingNextStep(payload: {
     }
     return "start_kyc";
   }
+  if (!payload.hasProfilePhoto) {
+    return "capture_profile_photo";
+  }
   if (!payload.hasGuarantor) {
     return "add_guarantor";
   }
+  if (!payload.guarantorDocumentsComplete) {
+    return "complete_guarantor_documents";
+  }
   if (!payload.hasCollateral) {
     return "add_collateral";
+  }
+  if (!payload.collateralDocumentsComplete) {
+    return "complete_collateral_documents";
   }
   if (!payload.feesPaid) {
     return "record_fee_payment";

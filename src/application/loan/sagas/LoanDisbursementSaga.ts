@@ -25,7 +25,7 @@
  *
  * INVOCATION MODES:
  *   a. Event-driven: register() wires it to "loan.approved" on the event bus.
- *      Fires automatically whenever a loan is approved via the CQRS handlers.
+ *      Fires automatically only when autoDisburseOnApproval=true.
  *   b. On-demand: execute(loanId, ...) can be called directly from the route
  *      handler for manual/immediate disbursement (the existing disburse route
  *      continues to work without change).
@@ -39,6 +39,7 @@
  */
 import type { IEventBus } from "../../../infrastructure/events/IEventBus.js";
 import type { DomainEvent } from "../../../domain/shared/events/DomainEvent.js";
+import type { LoanApproved } from "../../../domain/loan/events/LoanApproved.js";
 
 // ─── Minimal type contracts ────────────────────────────────────────────────
 
@@ -77,6 +78,8 @@ export interface LoanDisbursementSagaOptions {
   publishDomainEvent: PublishDomainEventFn;
   /** System user id used for saga-initiated disbursements */
   systemUserId?: number;
+  /** If true, approval events auto-trigger disbursement step 1 */
+  autoDisburseOnApproval?: boolean;
   /** If true, saga auto-initiates mobile money B2C on approval */
   autoMobileMoney?: boolean;
 }
@@ -88,6 +91,7 @@ export class LoanDisbursementSaga {
   private readonly _mobileMoneyService: MobileMoneyServiceLike | null;
   private readonly _publishDomainEvent: PublishDomainEventFn;
   private readonly _systemUserId: number;
+  private readonly _autoDisburseOnApproval: boolean;
   private readonly _autoMobileMoney: boolean;
 
   constructor(options: LoanDisbursementSagaOptions) {
@@ -95,6 +99,7 @@ export class LoanDisbursementSaga {
     this._mobileMoneyService   = options.mobileMoneyService ?? null;
     this._publishDomainEvent   = options.publishDomainEvent;
     this._systemUserId         = options.systemUserId ?? 0;
+    this._autoDisburseOnApproval = options.autoDisburseOnApproval ?? false;
     this._autoMobileMoney      = options.autoMobileMoney ?? false;
   }
 
@@ -105,8 +110,12 @@ export class LoanDisbursementSaga {
    * is approved. Call once during bootstrap (e.g. in serviceRegistry.ts).
    */
   register(eventBus: IEventBus): void {
-    eventBus.subscribe<DomainEvent>("loan.approved", async (event) => {
-      const loanId = (event as any).aggregateId ?? (event as any).payload?.loanId;
+    eventBus.subscribe<LoanApproved | DomainEvent>("loan.approved", async (event) => {
+      if (!this._autoDisburseOnApproval) {
+        return;
+      }
+
+      const loanId = event.aggregateId ?? ("loanId" in event ? event.loanId : null);
       if (!loanId) return;
 
       // Fire-and-forget: saga errors are compensated internally

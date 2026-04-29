@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { getMonthlyPerformanceReport, downloadReport } from '../../../services/reportService'
+import { downloadReport } from '../../../services/reportService'
+import type { MonthlyPerformanceProductTier } from '../../../types/report'
+import { useMonthlyPerformanceReport } from '../../reports/hooks/useReports'
 import { downloadBlob } from '../../../utils/fileDownload'
 import { useToastStore } from '../../../store/toastStore'
 import { feedback } from '../../../utils/feedback'
-import { queryPolicies } from '../../../services/queryPolicies'
 import styles from '../styles/StakeholderPage.module.css'
 import {
   DonutChartWrapper,
@@ -16,25 +16,9 @@ import {
   CHART_COLORS,
 } from '../../../components/charts'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-type ProductTier = {
-  label: string
-  accountCode: string
-  amount: number
-  loanCount: number
-}
-
-type MonthlyPerformance = {
-  month?: string
-  interest_income?: number
-  fee_income?: number
-  penalty_income?: number
-  total_income?: number
-  interest_by_product?: Record<string, ProductTier>
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function fmt(value: number | undefined) {
   return Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -54,28 +38,24 @@ const TIER_LABELS: Record<string, string> = {
   'other': 'Other / unlinked',
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// â”€â”€ Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function StakeholderIncomePage() {
   const pushToast = useToastStore((s) => s.pushToast)
   const [exporting, setExporting] = useState<string | null>(null)
 
-  const query = useQuery({
-    queryKey: ['stakeholder', 'monthly-performance'],
-    queryFn: () => getMonthlyPerformanceReport(),
-    ...queryPolicies.report,
-  })
+  const query = useMonthlyPerformanceReport({})
 
-  const data = (query.data || {}) as MonthlyPerformance
-  const total     = Number(data.total_income    || 0)
-  const interest  = Number(data.interest_income || 0)
-  const fees      = Number(data.fee_income      || 0)
-  const penalties = Number(data.penalty_income  || 0)
+  const data = query.data
+  const total = Number(data?.total_income || 0)
+  const interest = Number(data?.interest_income || 0)
+  const fees = Number(data?.fee_income || 0)
+  const penalties = Number(data?.penalty_income || 0)
 
-  const productBreakdown = data.interest_by_product ?? {}
+  const productBreakdown: Record<string, MonthlyPerformanceProductTier> = data?.interest_by_product ?? {}
   const hasProductBreakdown = Object.values(productBreakdown).some(t => t.amount > 0)
 
-  // ── Chart data ────────────────────────────────────────────────────────────
+  // â”€â”€ Chart data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const incomeDonutData = [
     { name: 'Interest', value: interest,  color: INCOME_COLORS.interest },
     { name: 'Fees',     value: fees,      color: INCOME_COLORS.fees     },
@@ -112,14 +92,14 @@ export function StakeholderIncomePage() {
   return (
     <div className={styles.page}>
 
-      {/* ── Page header ─────────────────────────────────────────────────── */}
+      {/* â”€â”€ Page header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className={styles.pageHeader}>
         <div>
-          <p className={styles.eyebrow}>Stakeholders · Income</p>
+          <p className={styles.eyebrow}>Stakeholders - Income</p>
           <h1 className={styles.pageTitle}>Monthly income</h1>
           <p className={styles.pageSubtitle}>
-            Accruals and collections for{' '}
-            {data.month ? `the period ending ${data.month}` : 'the current calendar month'}.
+            Collections and collected fees for{' '}
+            {data?.month ? `the period ending ${data.month}` : 'the current calendar month'}.
             Resets at midnight UTC on the 1st of each month.
           </p>
         </div>
@@ -133,7 +113,7 @@ export function StakeholderIncomePage() {
             disabled={exporting !== null || query.isLoading}
             onClick={() => void handleExport('csv')}
           >
-            {exporting === 'income-csv' ? 'Exporting…' : 'Export CSV'}
+            {exporting === 'income-csv' ? 'Exporting...' : 'Export CSV'}
           </button>
           <button
             type="button"
@@ -141,7 +121,7 @@ export function StakeholderIncomePage() {
             disabled={exporting !== null || query.isLoading}
             onClick={() => void handleExport('xlsx')}
           >
-            {exporting === 'income-xlsx' ? 'Exporting…' : 'Export XLSX'}
+            {exporting === 'income-xlsx' ? 'Exporting...' : 'Export XLSX'}
           </button>
         </div>
       </div>
@@ -149,7 +129,7 @@ export function StakeholderIncomePage() {
       {query.isLoading && (
         <div className={styles.loadingState}>
           <div className={styles.spinner} />
-          <span>Loading income data…</span>
+          <span>Loading income data...</span>
         </div>
       )}
 
@@ -162,14 +142,14 @@ export function StakeholderIncomePage() {
 
       {!query.isLoading && !query.isError && (
         <>
-          {/* ── Total headline ──────────────────────────────────────────── */}
+          {/* â”€â”€ Total headline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
           <div className={styles.headlineCard}>
             <div className={styles.headlineLabel}>Total monthly income</div>
             <div className={styles.headlineValue}>Ksh {fmt(total)}</div>
-            <div className={styles.headlineSub}>Cycle: {data.month || 'current month'}</div>
+            <div className={styles.headlineSub}>Cycle: {data?.month || 'current month'}</div>
           </div>
 
-          {/* ── Top-level stream cards ───────────────────────────────────── */}
+          {/* â”€â”€ Top-level stream cards â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
           <div className={styles.breakdownGrid}>
             <div className={styles.incomeCard}>
               <div className={styles.incomeCardTop}>
@@ -208,13 +188,13 @@ export function StakeholderIncomePage() {
             </div>
           </div>
 
-          {/* ── 📊 Income composition charts ────────────────────────────── */}
+          {/* â”€â”€ ðŸ“Š Income composition charts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
           {incomeDonutData.length > 0 && (
             <div className={styles.chartRow}>
-              {/* Donut — visual split of income streams */}
+              {/* Donut â€” visual split of income streams */}
               <ChartContainer
                 title="Income composition"
-                subtitle="Visual split: interest · fees · penalties"
+                subtitle="Visual split: interest Â· fees Â· penalties"
                 height={220}
                 style={{ flex: 1, minWidth: 240 }}
               >
@@ -243,7 +223,7 @@ export function StakeholderIncomePage() {
             </div>
           )}
 
-          {/* ── Interest by product (5W / 7W / 10W) ─────────────────────── */}
+          {/* â”€â”€ Interest by product (5W / 7W / 10W) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
           {hasProductBreakdown && (
             <div className={styles.panel}>
               <h2 className={styles.panelTitle}>Interest income by loan product</h2>
@@ -271,7 +251,7 @@ export function StakeholderIncomePage() {
                         </div>
                         <div className={styles.productMeta}>
                           {tier.loanCount > 0 ? `${tier.loanCount} loan${tier.loanCount !== 1 ? 's' : ''}` : 'No loans in period'}
-                          {' · '}
+                          {' Â· '}
                           <span className={styles.accountCode}>{tier.accountCode}</span>
                         </div>
                       </div>
@@ -280,11 +260,11 @@ export function StakeholderIncomePage() {
                 })}
               </div>
 
-              {/* 📊 Product tier horizontal bar chart */}
+              {/* ðŸ“Š Product tier horizontal bar chart */}
               {productBarData.length > 0 && (
                 <ChartContainer
                   title="Interest amount by product tier"
-                  subtitle="Horizontal comparison — Ksh per loan product"
+                  subtitle="Horizontal comparison â€” Ksh per loan product"
                   height={Math.max(120, productBarData.length * 52)}
                 >
                   <BarChartWrapper
@@ -337,7 +317,7 @@ export function StakeholderIncomePage() {
             </div>
           )}
 
-          {/* ── Full income composition table ────────────────────────────── */}
+          {/* â”€â”€ Full income composition table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
           <div className={styles.panel}>
             <h2 className={styles.panelTitle}>Income composition</h2>
             <table className={styles.table}>
@@ -359,7 +339,7 @@ export function StakeholderIncomePage() {
                   if (!tier || tier.amount === 0) return null
                   return (
                     <tr key={key} className={styles.subRow}>
-                      <td style={{ paddingLeft: '2rem' }}>↳ {TIER_LABELS[key] ?? tier.label}</td>
+                      <td style={{ paddingLeft: '2rem' }}>â†³ {TIER_LABELS[key] ?? tier.label}</td>
                       <td className={styles.tdRight}>{fmt(tier.amount)}</td>
                       <td className={styles.tdRight}>{pct(tier.amount, total)}</td>
                     </tr>
@@ -387,9 +367,9 @@ export function StakeholderIncomePage() {
           </div>
 
           <p className={styles.footerNote}>
-            All figures in Kenyan Shillings (Ksh). Monthly performance figures represent accruals and
-            collections for the current calendar period. Interest by product is derived from
-            GL journal entries joined to loan repayment schedules.
+            All figures in Kenyan Shillings (Ksh). Monthly performance figures represent collected
+            interest, collected penalties, and fees recognized in the current calendar period.
+            Interest by product is derived from repayment allocations joined to loan terms.
           </p>
         </>
       )}

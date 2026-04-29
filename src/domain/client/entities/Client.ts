@@ -31,6 +31,10 @@ export interface ClientProps {
   businessYears: number | null;
   businessLocation: string | null;
   residentialAddress: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  locationAccuracyMeters: number | null;
+  locationCapturedAt: Date | null;
   isActive: boolean;
   deletedAt: Date | null;
   createdAt: Date;
@@ -66,6 +70,10 @@ export class Client {
     businessYears?: number | null;
     businessLocation?: string | null;
     residentialAddress?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    locationAccuracyMeters?: number | null;
+    locationCapturedAt?: Date | null;
     createdAt?: Date;
   }): Client {
     const now = params.createdAt ?? new Date();
@@ -91,6 +99,10 @@ export class Client {
       businessYears: params.businessYears ?? null,
       businessLocation: params.businessLocation ?? null,
       residentialAddress: params.residentialAddress ?? null,
+      latitude: params.latitude ?? null,
+      longitude: params.longitude ?? null,
+      locationAccuracyMeters: params.locationAccuracyMeters ?? null,
+      locationCapturedAt: params.locationCapturedAt ?? null,
       isActive: true,
       deletedAt: null,
       createdAt: now,
@@ -129,6 +141,21 @@ export class Client {
   get onboardingStatus(): OnboardingStatus { return this._props.onboardingStatus; }
   get feePaymentStatus(): FeePaymentStatus { return this._props.feePaymentStatus; }
   get feesPaidAt(): Date | null  { return this._props.feesPaidAt; }
+  get createdByUserId(): number | null { return this._props.createdByUserId; }
+  get kraPin(): string | null { return this._props.kraPin; }
+  get photoUrl(): string | null { return this._props.photoUrl; }
+  get idDocumentUrl(): string | null { return this._props.idDocumentUrl; }
+  get nextOfKinName(): string | null { return this._props.nextOfKinName; }
+  get nextOfKinPhone(): string | null { return this._props.nextOfKinPhone; }
+  get nextOfKinRelation(): string | null { return this._props.nextOfKinRelation; }
+  get businessType(): string | null { return this._props.businessType; }
+  get businessYears(): number | null { return this._props.businessYears; }
+  get businessLocation(): string | null { return this._props.businessLocation; }
+  get residentialAddress(): string | null { return this._props.residentialAddress; }
+  get latitude(): number | null { return this._props.latitude; }
+  get longitude(): number | null { return this._props.longitude; }
+  get locationAccuracyMeters(): number | null { return this._props.locationAccuracyMeters; }
+  get locationCapturedAt(): Date | null { return this._props.locationCapturedAt; }
   get isActive(): boolean       { return this._props.isActive; }
   get deletedAt(): Date | null  { return this._props.deletedAt; }
   get createdAt(): Date         { return this._props.createdAt; }
@@ -245,6 +272,10 @@ export class Client {
     businessYears?: number | null;
     businessLocation?: string | null;
     residentialAddress?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    locationAccuracyMeters?: number | null;
+    locationCapturedAt?: Date | null;
     officerId?: number | null;
   }): void {
     const p = this._props;
@@ -261,6 +292,10 @@ export class Client {
     if (params.businessYears !== undefined)      p.businessYears = params.businessYears;
     if (params.businessLocation !== undefined)   p.businessLocation = params.businessLocation;
     if (params.residentialAddress !== undefined) p.residentialAddress = params.residentialAddress;
+    if (params.latitude !== undefined)           p.latitude = params.latitude;
+    if (params.longitude !== undefined)          p.longitude = params.longitude;
+    if (params.locationAccuracyMeters !== undefined) p.locationAccuracyMeters = params.locationAccuracyMeters;
+    if (params.locationCapturedAt !== undefined) p.locationCapturedAt = params.locationCapturedAt;
     if (params.officerId !== undefined)          p.officerId = params.officerId;
     p.updatedAt = new Date();
   }
@@ -298,6 +333,10 @@ export class Client {
       business_years:       this._props.businessYears,
       business_location:    this._props.businessLocation,
       residential_address:  this._props.residentialAddress,
+      latitude:             this._props.latitude,
+      longitude:            this._props.longitude,
+      location_accuracy_meters: this._props.locationAccuracyMeters,
+      location_captured_at: this._props.locationCapturedAt?.toISOString() ?? null,
       is_active:            this._props.isActive ? 1 : 0,
       deleted_at:           this._props.deletedAt?.toISOString() ?? null,
       created_at:           this._props.createdAt.toISOString(),

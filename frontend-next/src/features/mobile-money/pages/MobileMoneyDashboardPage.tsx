@@ -13,6 +13,8 @@ import { queryPolicies } from '../../../services/queryPolicies'
 import { useToastStore } from '../../../store/toastStore'
 import type { LoanRecord } from '../../../types/loan'
 import type { MobileMoneyC2BEvent } from '../../../types/mobileMoney'
+import { formatDisplayDateTime } from '../../../utils/dateFormatting'
+import { formatDisplayText, resolveDisplayText } from '../../../utils/displayFormatting'
 import styles from '../../shared/styles/EntityPage.module.css'
 
 function formatMoney(value: number) {
@@ -23,7 +25,7 @@ function formatMoney(value: number) {
 }
 
 function formatLoanSuggestion(loan: LoanRecord) {
-  return `#${loan.id} ${loan.client_name || 'Unknown client'} | ${String(loan.status)} | Bal ${formatMoney(Number(loan.balance || 0))}`
+  return `#${loan.id} ${resolveDisplayText([loan.client_name, loan.client_id ? `Client #${loan.client_id}` : null], 'Unknown client')} | ${formatDisplayText(loan.status)} | Bal ${formatMoney(Number(loan.balance || 0))}`
 }
 
 function extractNumericCandidate(reference: string | null) {
@@ -51,7 +53,7 @@ function C2BReconciliationAction({
   onNoteChange,
   onReconcile,
 }: C2BReconciliationActionProps) {
-  const searchTerm = String(row.account_reference || '').trim()
+  const searchTerm = formatDisplayText(row.account_reference, '').trim()
   const numericCandidate = extractNumericCandidate(searchTerm)
   const suggestionsQuery = useQuery({
     queryKey: ['mobile-money', 'c2b-loan-suggestions', row.id, searchTerm, numericCandidate || null],
@@ -91,7 +93,7 @@ function C2BReconciliationAction({
           onChange={(event) => {
             onNoteChange(event.target.value)
           }}
-          placeholder={`Account ref: ${row.account_reference || '-'}`}
+          placeholder={`Account ref: ${formatDisplayText(row.account_reference)}`}
         />
       </label>
       {suggestionsQuery.isSuccess && suggestions.length > 0 ? (
@@ -259,7 +261,7 @@ export function MobileMoneyDashboardPage() {
                   <tr key={row.id}>
                     <td>{row.id}</td>
                     <td>{row.loan_id}</td>
-                    <td>{row.phone_number}</td>
+                    <td>{formatDisplayText(row.phone_number)}</td>
                     <td>{formatMoney(row.amount)}</td>
                     <td>
                       <span
@@ -274,8 +276,8 @@ export function MobileMoneyDashboardPage() {
                         {row.status}
                       </span>
                     </td>
-                    <td className={styles.mono}>{row.provider_request_id || row.request_id || '-'}</td>
-                    <td>{row.failure_reason || '-'}</td>
+                    <td className={styles.mono}>{resolveDisplayText([row.provider_request_id, row.request_id])}</td>
+                    <td>{formatDisplayText(row.failure_reason)}</td>
                     <td>
                       <div className={styles.actions}>
                         <span className={styles.muted}>Attempts: {Number(row.reversal_attempts || 0)}</span>
@@ -328,11 +330,14 @@ export function MobileMoneyDashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {c2bQuery.data.map((row) => (
+                {c2bQuery.data.map((row) => {
+                  const receiptLabel = formatDisplayText(row.external_receipt, `Receipt #${row.id}`)
+
+                  return (
                   <tr key={row.id}>
                     <td>{row.id}</td>
-                    <td className={styles.mono}>{row.external_receipt}</td>
-                    <td>{row.payer_phone || '-'}</td>
+                    <td className={styles.mono}>{receiptLabel}</td>
+                    <td>{formatDisplayText(row.payer_phone)}</td>
                     <td>{formatMoney(row.amount)}</td>
                     <td>
                       <span
@@ -347,9 +352,9 @@ export function MobileMoneyDashboardPage() {
                         {row.status}
                       </span>
                     </td>
-                    <td>{row.loan_id || '-'}</td>
-                    <td>{row.reconciliation_note || '-'}</td>
-                    <td>{row.paid_at ? new Date(row.paid_at).toLocaleString() : '-'}</td>
+                    <td>{formatDisplayText(row.loan_id)}</td>
+                    <td>{formatDisplayText(row.reconciliation_note)}</td>
+                    <td>{formatDisplayDateTime(row.paid_at)}</td>
                     <td>
                       {row.status === 'unmatched' || row.status === 'rejected' || row.status === 'received' ? (
                         <C2BReconciliationAction
@@ -372,10 +377,10 @@ export function MobileMoneyDashboardPage() {
                               },
                               {
                                 onSuccess: () => {
-                                  pushToast({ type: 'success', message: `Receipt ${row.external_receipt} reconciled to loan #${loanId}.` })
+                                  pushToast({ type: 'success', message: `${receiptLabel} reconciled to loan #${loanId}.` })
                                 },
                                 onError: () => {
-                                  pushToast({ type: 'error', message: `Failed to reconcile receipt ${row.external_receipt}.` })
+                                  pushToast({ type: 'error', message: `Failed to reconcile ${receiptLabel}.` })
                                 },
                               },
                             )
@@ -386,7 +391,8 @@ export function MobileMoneyDashboardPage() {
                       )}
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>

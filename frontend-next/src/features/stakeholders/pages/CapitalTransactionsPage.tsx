@@ -13,20 +13,23 @@ import {
 import { useToastStore } from '../../../store/toastStore'
 import { useAuth } from '../../../hooks/useAuth'
 import { queryPolicies } from '../../../services/queryPolicies'
+import { queryKeys } from '../../../services/queryKeys'
+import { formatDisplayDate } from '../../../utils/dateFormatting'
 import styles from '../styles/StakeholderPage.module.css'
 import capitalStyles from '../styles/CapitalTransactions.module.css'
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 function fmt(value: number | undefined | null) {
   return Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 function fmtDate(value: string | null | undefined) {
-  if (!value) return '—'
-  try {
-    return new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-  } catch { return value }
+  return formatDisplayDate(value, '-')
+}
+
+function getApiErrorMessage(error: unknown, fallback: string) {
+  return (error as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback
 }
 
 // Who can approve / reject
@@ -36,7 +39,7 @@ const SUBMITTER_ROLES = new Set(['investor', 'partner', 'owner', 'ceo', 'admin']
 
 type TabKey = 'mine' | 'pending' | 'all'
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Component Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 export function CapitalTransactionsPage() {
   const { user } = useAuth()
@@ -47,11 +50,11 @@ export function CapitalTransactionsPage() {
   const isApprover  = APPROVER_ROLES.has(role)
   const isSubmitter = SUBMITTER_ROLES.has(role)
 
-  // ── Tab state ──────────────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Tab state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const defaultTab: TabKey = isApprover ? 'pending' : 'mine'
   const [activeTab, setActiveTab] = useState<TabKey>(defaultTab)
 
-  // ── Form state ────────────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Form state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const [formType, setFormType] = useState<'deposit' | 'withdrawal'>('deposit')
   const [amount, setAmount] = useState('')
   const [currency, setCurrency] = useState('KES')
@@ -60,46 +63,49 @@ export function CapitalTransactionsPage() {
   const [submitting, setSubmitting] = useState(false)
   const [lastWarning, setLastWarning] = useState<string | null>(null)
 
-  // ── Approval modal state ──────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Approval modal state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const [approvalTarget, setApprovalTarget] = useState<CapitalTransaction | null>(null)
   const [approvalOverrideNote, setApprovalOverrideNote] = useState('')
   const [approving, setApproving] = useState(false)
 
-  // ── Rejection modal state ─────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Rejection modal state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const [rejectionTarget, setRejectionTarget] = useState<CapitalTransaction | null>(null)
   const [rejectionReason, setRejectionReason] = useState('')
   const [rejecting, setRejecting] = useState(false)
 
-  // ── Filter state ──────────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Filter state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const [filterStatus, setFilterStatus] = useState<CapitalTransactionStatus | ''>('')
+  const mineTransactionsParams = { limit: 50, offset: 0 }
+  const pendingTransactionsParams = { status: 'pending' as const, limit: 100, offset: 0 }
+  const filteredTransactionsParams = { status: filterStatus || null, limit: 100, offset: 0 }
 
-  // ── Queries ───────────────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Queries Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const myTxnQuery = useQuery({
-    queryKey: ['capital', 'mine'],
-    queryFn: () => listCapitalTransactions({ limit: 50, offset: 0 }),
+    queryKey: queryKeys.capital.mine(mineTransactionsParams),
+    queryFn: () => listCapitalTransactions(mineTransactionsParams),
     ...queryPolicies.list,
   })
 
   const pendingQuery = useQuery({
-    queryKey: ['capital', 'pending'],
-    queryFn: () => listCapitalTransactions({ status: 'pending', limit: 100, offset: 0 }),
+    queryKey: queryKeys.capital.pending(pendingTransactionsParams),
+    queryFn: () => listCapitalTransactions(pendingTransactionsParams),
     enabled: isApprover,
     ...queryPolicies.list,
   })
 
   const allQuery = useQuery({
-    queryKey: ['capital', 'all', filterStatus],
+    queryKey: queryKeys.capital.filtered(filteredTransactionsParams),
     queryFn: () => listCapitalTransactions({
-      status: filterStatus || undefined,
-      limit: 100,
-      offset: 0,
+      status: filteredTransactionsParams.status || undefined,
+      limit: filteredTransactionsParams.limit,
+      offset: filteredTransactionsParams.offset,
     }),
     enabled: isApprover,
     ...queryPolicies.list,
   })
 
   const cashflowQuery = useQuery({
-    queryKey: ['capital', 'cashflow-position'],
+    queryKey: queryKeys.capital.cashflowPosition({}),
     queryFn: () => getCashflowPosition(),
     ...queryPolicies.report,
   })
@@ -107,13 +113,13 @@ export function CapitalTransactionsPage() {
   const pendingCount = pendingQuery.data?.paging?.total ?? 0
   const cashflow = cashflowQuery.data
 
-  // ── Invalidation helper ───────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Invalidation helper Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   function invalidateCapital() {
-    void queryClient.invalidateQueries({ queryKey: ['capital'] })
-    void queryClient.invalidateQueries({ queryKey: ['stakeholder'] })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.capital.all })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.stakeholders.all })
   }
 
-  // ── Submit deposit or withdrawal ──────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Submit deposit or withdrawal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const handleSubmit = async () => {
     const parsedAmount = Number(amount)
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
@@ -158,15 +164,13 @@ export function CapitalTransactionsPage() {
       setNote('')
       invalidateCapital()
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-        ?? 'Could not submit. Please try again.'
-      pushToast({ type: 'error', message: msg })
+      pushToast({ type: 'error', message: getApiErrorMessage(err, 'Could not submit. Please try again.') })
     } finally {
       setSubmitting(false)
     }
   }
 
-  // ── Approve ───────────────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Approve Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const handleApprove = async () => {
     if (!approvalTarget) return
     setApproving(true)
@@ -183,15 +187,13 @@ export function CapitalTransactionsPage() {
       setApprovalOverrideNote('')
       invalidateCapital()
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-        ?? 'Approval failed. Please try again.'
-      pushToast({ type: 'error', message: msg })
+      pushToast({ type: 'error', message: getApiErrorMessage(err, 'Approval failed. Please try again.') })
     } finally {
       setApproving(false)
     }
   }
 
-  // ── Reject ────────────────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Reject Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const handleReject = async () => {
     if (!rejectionTarget || !rejectionReason.trim()) {
       pushToast({ type: 'error', message: 'A rejection reason is required.' })
@@ -208,21 +210,19 @@ export function CapitalTransactionsPage() {
       setRejectionReason('')
       invalidateCapital()
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-        ?? 'Rejection failed. Please try again.'
-      pushToast({ type: 'error', message: msg })
+      pushToast({ type: 'error', message: getApiErrorMessage(err, 'Rejection failed. Please try again.') })
     } finally {
       setRejecting(false)
     }
   }
 
-  // ── Cashflow health indicator ─────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Cashflow health indicator Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const withdrawalAmount = formType === 'withdrawal' ? Number(amount || 0) : 0
   const cashflowNet   = cashflow?.net ?? 0
   const wouldExceed   = withdrawalAmount > 0 && cashflowNet < withdrawalAmount
   const available     = cashflow?.available_after_pending ?? 0
 
-  // ── Transaction table renderer ────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Transaction table renderer Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   function renderTxnTable(txns: CapitalTransaction[], showActions: boolean) {
     if (txns.length === 0) {
       return <p className={styles.muted}>No transactions to display.</p>
@@ -270,16 +270,16 @@ export function CapitalTransactionsPage() {
                   <td>{tx.branch_name ?? <span className={capitalStyles.muted}>Org-wide</span>}</td>
                   <td className={`${capitalStyles.tdRight} ${capitalStyles.mono}`}>
                     <span className={tx.transaction_type === 'deposit' ? capitalStyles.textGreen : capitalStyles.textAmber}>
-                      {tx.transaction_type === 'deposit' ? '+' : '−'}{tx.currency} {fmt(tx.amount)}
+                      {tx.transaction_type === 'deposit' ? '+' : '-'}{tx.currency} {fmt(tx.amount)}
                     </span>
                   </td>
                   {showActions && (
                     <td className={`${capitalStyles.tdRight} ${risky ? capitalStyles.textRed : capitalStyles.textGreen}`}>
                       Ksh {fmt(cashNet)}
-                      {risky && <span className={capitalStyles.riskIcon} title="Cashflow below withdrawal amount"> ⚠</span>}
+                      {risky && <span className={capitalStyles.riskIcon} title="Cashflow below withdrawal amount">Warning</span>}
                     </td>
                   )}
-                  <td className={capitalStyles.muted}>{tx.reference ?? '—'}</td>
+                  <td className={capitalStyles.muted}>{tx.reference ?? '-'}</td>
                   {showActions && (
                     <td>
                       {tx.status === 'pending' ? (
@@ -320,10 +320,10 @@ export function CapitalTransactionsPage() {
   return (
     <div className={styles.page}>
 
-      {/* ── Page header ─────────────────────────────────────────────────── */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Page header Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       <div className={styles.pageHeader}>
         <div>
-          <p className={styles.eyebrow}>Stakeholders · Capital</p>
+          <p className={styles.eyebrow}>Stakeholders - Capital</p>
           <h1 className={styles.pageTitle}>Capital transactions</h1>
           <p className={styles.pageSubtitle}>
             Investor, partner, and owner deposits and withdrawal requests.
@@ -332,7 +332,7 @@ export function CapitalTransactionsPage() {
         </div>
       </div>
 
-      {/* ── Cashflow health bar ──────────────────────────────────────────── */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Cashflow health bar Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       {cashflow && (
         <div className={`${capitalStyles.cashflowBar} ${cashflow.net < 0 ? capitalStyles.cashflowBarNegative : ''}`}>
           <div className={capitalStyles.cashflowBarItem}>
@@ -354,7 +354,7 @@ export function CapitalTransactionsPage() {
         </div>
       )}
 
-      {/* ── Submit form (submitters only) ────────────────────────────────── */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Submit form (submitters only) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       {isSubmitter && (
         <div className={capitalStyles.submitPanel}>
           <h2 className={capitalStyles.submitTitle}>Submit a transaction</h2>
@@ -372,7 +372,7 @@ export function CapitalTransactionsPage() {
               className={`${capitalStyles.typeBtn} ${formType === 'withdrawal' ? capitalStyles.typeBtnActiveWithdrawal : ''}`}
               onClick={() => { setFormType('withdrawal'); setLastWarning(null) }}
             >
-              − Withdrawal request
+              - Withdrawal request
             </button>
           </div>
 
@@ -381,7 +381,7 @@ export function CapitalTransactionsPage() {
             <div className={capitalStyles.cashflowWarning}>
               <strong>Cashflow notice:</strong> The current net cashflow is Ksh {fmt(cashflowNet)},
               which is below the requested amount of Ksh {fmt(withdrawalAmount)}.
-              You can still submit — finance will review and may approve with an override note.
+              You can still submit - finance will review and may approve with an override note.
             </div>
           )}
 
@@ -436,7 +436,7 @@ export function CapitalTransactionsPage() {
               onClick={() => void handleSubmit()}
             >
               {submitting
-                ? 'Submitting…'
+                ? 'Submitting...'
                 : formType === 'deposit'
                   ? `Submit deposit`
                   : `Submit withdrawal request`}
@@ -448,7 +448,7 @@ export function CapitalTransactionsPage() {
         </div>
       )}
 
-      {/* ── Tab bar ──────────────────────────────────────────────────────── */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Tab bar Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       <div className={capitalStyles.tabBar}>
         {isSubmitter && (
           <button
@@ -480,21 +480,21 @@ export function CapitalTransactionsPage() {
         )}
       </div>
 
-      {/* ── Tab content ──────────────────────────────────────────────────── */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Tab content Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       <div className={capitalStyles.tabContent}>
 
         {/* My transactions */}
         {activeTab === 'mine' && (
           myTxnQuery.isLoading
-            ? <div className={styles.loadingState}><div className={styles.spinner} /><span>Loading…</span></div>
-            : renderTxnTable(myTxnQuery.data?.data ?? [], false)
+            ? <div className={styles.loadingState}><div className={styles.spinner} /><span>Loading...</span></div>
+            : myTxnQuery.isError ? <div className={styles.errorState}><span>Failed to load.</span> <button onClick={() => void myTxnQuery.refetch()} className={styles.retryBtn}>Retry</button></div> : renderTxnTable(myTxnQuery.data?.data ?? [], false)
         )}
 
         {/* Pending approval (finance queue) */}
         {activeTab === 'pending' && isApprover && (
           pendingQuery.isLoading
-            ? <div className={styles.loadingState}><div className={styles.spinner} /><span>Loading…</span></div>
-            : renderTxnTable(pendingQuery.data?.data ?? [], true)
+            ? <div className={styles.loadingState}><div className={styles.spinner} /><span>Loading...</span></div>
+            : pendingQuery.isError ? <div className={styles.errorState}><span>Failed to load.</span> <button onClick={() => void pendingQuery.refetch()} className={styles.retryBtn}>Retry</button></div> : renderTxnTable(pendingQuery.data?.data ?? [], true)
         )}
 
         {/* All transactions */}
@@ -513,13 +513,13 @@ export function CapitalTransactionsPage() {
               </label>
             </div>
             {allQuery.isLoading
-              ? <div className={styles.loadingState}><div className={styles.spinner} /><span>Loading…</span></div>
-              : renderTxnTable(allQuery.data?.data ?? [], true)}
+              ? <div className={styles.loadingState}><div className={styles.spinner} /><span>Loading...</span></div>
+              : allQuery.isError ? <div className={styles.errorState}><span>Failed to load.</span> <button onClick={() => void allQuery.refetch()} className={styles.retryBtn}>Retry</button></div> : renderTxnTable(allQuery.data?.data ?? [], true)}
           </>
         )}
       </div>
 
-      {/* ── Approval modal ───────────────────────────────────────────────── */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Approval modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       {approvalTarget && (
         <div className={capitalStyles.overlay} role="presentation" onClick={() => setApprovalTarget(null)}>
           <div
@@ -584,14 +584,14 @@ export function CapitalTransactionsPage() {
                 disabled={approving}
                 onClick={() => void handleApprove()}
               >
-                {approving ? 'Approving…' : 'Confirm approval'}
+                {approving ? 'Approving...' : 'Confirm approval'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ── Rejection modal ──────────────────────────────────────────────── */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Rejection modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       {rejectionTarget && (
         <div className={capitalStyles.overlay} role="presentation" onClick={() => setRejectionTarget(null)}>
           <div
@@ -633,7 +633,7 @@ export function CapitalTransactionsPage() {
                 disabled={rejecting || !rejectionReason.trim()}
                 onClick={() => void handleReject()}
               >
-                {rejecting ? 'Rejecting…' : 'Confirm rejection'}
+                {rejecting ? 'Rejecting...' : 'Confirm rejection'}
               </button>
             </div>
           </div>

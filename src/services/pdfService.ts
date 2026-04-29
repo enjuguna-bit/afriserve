@@ -35,7 +35,7 @@ interface CreateSimplePdfDocumentOptions {
 
 function createSimplePdfDocument({ title, headers, rows, generatedAtIso }: CreateSimplePdfDocumentOptions): Buffer {
   const generatedAt = String(generatedAtIso || new Date().toISOString());
-  const limitedRows = rows.slice(0, 250);
+  const limitedRows = rows.slice(0, 500);
   const lines = [
     truncate(title, 120),
     `Generated: ${generatedAt}`,
@@ -45,12 +45,17 @@ function createSimplePdfDocument({ title, headers, rows, generatedAtIso }: Creat
   if (headers.length === 0) {
     lines.push("No tabular data columns were provided.");
   } else {
-    const headerLine = headers.map((column) => truncate(String(column), 30)).join(" | ");
+    // Adaptive column width: fewer columns get more space, many columns get less
+    const colWidth = headers.length <= 4 ? 60
+      : headers.length <= 8 ? 40
+      : headers.length <= 14 ? 28
+      : 20;
+    const headerLine = headers.map((column) => truncate(String(column), colWidth)).join(" | ");
     lines.push(headerLine);
-    lines.push("-".repeat(Math.min(headerLine.length, 140)));
+    lines.push("-".repeat(Math.min(headerLine.length, 200)));
     for (const row of limitedRows) {
       const line = headers
-        .map((column) => truncate(normalizeCell(row[column]), 30))
+        .map((column) => truncate(normalizeCell(row[column]), colWidth))
         .join(" | ");
       lines.push(line);
     }
@@ -61,11 +66,11 @@ function createSimplePdfDocument({ title, headers, rows, generatedAtIso }: Creat
     lines.push(`... ${rows.length - limitedRows.length} additional rows omitted`);
   }
 
-  const usableLines = lines.slice(0, 58);
-  const commands = ["BT", "/F1 9 Tf", "42 802 Td"];
+  const usableLines = lines.slice(0, 80);
+  const commands = ["BT", "/F1 9 Tf", "36 818 Td"];
   usableLines.forEach((line, index) => {
     if (index > 0) {
-      commands.push("0 -13 Td");
+      commands.push("0 -11 Td");
     }
     commands.push(`(${escapePdfText(line)}) Tj`);
   });

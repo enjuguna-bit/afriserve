@@ -12,8 +12,8 @@ const LEGACY_REPORT_TIME_ZONE = "Africa/Nairobi";
 
 const legacyReportTemplates: Record<LegacyReportKind, LegacyReportTemplate> = {
   disbursements: {
-    filenameBase: "disbursment-report",
-    title: "Disbursment Report",
+    filenameBase: "disbursement-report",
+    title: "Disbursement Report",
     headers: [
       "FullNames",
       "AccountNo",

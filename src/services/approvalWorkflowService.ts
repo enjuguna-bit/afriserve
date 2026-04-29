@@ -4,6 +4,7 @@ import {
   ForbiddenActionError,
 } from "../domain/errors.js";
 import { Prisma, prisma, type PrismaTransactionClient } from "../db/prismaClient.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 
 type ApprovalRequestStatus = "pending" | "approved" | "rejected" | "cancelled" | "expired";
 
@@ -164,6 +165,7 @@ function createApprovalWorkflowService(deps: ApprovalWorkflowServiceDeps) {
 
     const createdAt = nowIso();
     const expiresAt = addDaysIso(createdAt, normalizedPendingRequestTtlDays);
+    const tenantId = getCurrentTenantId();
 
     try {
       const created = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
@@ -175,6 +177,7 @@ function createApprovalWorkflowService(deps: ApprovalWorkflowServiceDeps) {
             target_type: targetType,
             target_id: targetId,
             status: "pending",
+            tenant_id: tenantId,
           },
           select: { id: true },
         });
@@ -185,6 +188,7 @@ function createApprovalWorkflowService(deps: ApprovalWorkflowServiceDeps) {
 
         return tx.approval_requests.create({
           data: {
+            tenant_id: tenantId,
             request_type: requestType,
             target_type: targetType,
             target_id: targetId,

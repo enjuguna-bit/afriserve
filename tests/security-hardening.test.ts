@@ -202,12 +202,13 @@ test("refresh endpoint issues a token for active sessions and rejects revoked se
       },
     });
     assert.equal(login.status, 200);
-    const activeToken = login.data.token;
+    const accessToken = login.data.token;
+    const refreshToken = login.data.refreshToken;
 
     const refresh = await api(baseUrl, "/api/auth/refresh", {
       method: "POST",
       body: {
-        token: activeToken,
+        token: refreshToken,
       },
     });
     assert.equal(refresh.status, 200);
@@ -220,14 +221,14 @@ test("refresh endpoint issues a token for active sessions and rejects revoked se
 
     const logout = await api(baseUrl, "/api/auth/logout", {
       method: "POST",
-      token: activeToken,
+      token: accessToken,
     });
     assert.equal(logout.status, 200);
 
     const refreshWithRevokedToken = await api(baseUrl, "/api/auth/refresh", {
       method: "POST",
       body: {
-        token: activeToken,
+        token: refreshToken,
       },
     });
     assert.equal(refreshWithRevokedToken.status, 401);
@@ -355,13 +356,20 @@ test("trusted proxy mode records forwarded client IP in audit logs", async () =>
 });
 
 test("general API limiter applies across authenticated routes", async () => {
-  const { baseUrl, stop } = await startServer();
+  // Start with ENFORCE_GENERAL_RATE_LIMIT=true so the limiter fires in test env.
+  // The limiter is configured at max:200 per 60s window; sending 220 sequential
+  // requests from the same IP key guarantees we cross the threshold.
+  const { baseUrl, stop } = await startServer({
+    envOverrides: {
+      ENFORCE_GENERAL_RATE_LIMIT: "true",
+    },
+  });
 
   try {
     const adminToken = await loginAsAdmin(baseUrl);
     let sawRateLimit = false;
 
-    for (let requestIndex = 0; requestIndex < 260; requestIndex += 1) {
+    for (let requestIndex = 0; requestIndex < 220; requestIndex += 1) {
       const response = await api(baseUrl, "/api/auth/me", {
         token: adminToken,
       });

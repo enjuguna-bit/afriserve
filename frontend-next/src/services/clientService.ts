@@ -17,6 +17,7 @@ import type {
   PotentialDuplicateQuery,
   PortfolioReallocationPayload,
   RecordClientFeePayload,
+  ReverseGeocodeResult,
   UpdateClientPayload,
 } from '../types/client'
 
@@ -139,7 +140,11 @@ export async function reallocatePortfolio(payload: PortfolioReallocationPayload)
   return data
 }
 
-export async function uploadClientDocument(clientId: number, file: File, documentType: 'photo' | 'id_document' = 'id_document') {
+export async function uploadClientDocument(
+  clientId: number,
+  file: File,
+  documentType: 'photo' | 'id_document' | 'guarantor_id_document' | 'collateral_document' = 'id_document',
+) {
   const form = new FormData()
   form.append('clientId', String(clientId))
   form.append('documentType', documentType)
@@ -151,6 +156,13 @@ export async function uploadClientDocument(clientId: number, file: File, documen
     },
   })
 
+  return data
+}
+
+export async function reverseGeocodeCoordinates(latitude: number, longitude: number): Promise<ReverseGeocodeResult> {
+  const { data } = await apiClient.get<ReverseGeocodeResult>('/location/reverse-geocode', {
+    params: { latitude, longitude },
+  })
   return data
 }
 

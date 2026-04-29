@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "southafricanorth" },
+    "environmentName": { "value": "dev" },
+    "namePrefix": { "value": "afriserve" },
+    "postgresAdminUsername": { "value": "afriadmin" },
+    "postgresDatabaseName": { "value": "afriserve" },
+    "postgresSkuName": { "value": "Standard_B1ms" },
+    "postgresTier": { "value": "Burstable" },
+    "storageAccountSku": { "value": "Standard_LRS" },
+    "acrSku": { "value": "Basic" },
+    "fileShareQuotaGiB": { "value": 50 },
+    "redisSkuName": { "value": "Basic" },
+    "redisSkuFamily": { "value": "C" },
+    "redisSkuCapacity": { "value": 0 }
+  }
+}

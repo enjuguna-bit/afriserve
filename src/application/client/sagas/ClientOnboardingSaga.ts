@@ -1,9 +1,9 @@
-/**
+﻿/**
  * ClientOnboardingSaga
  *
  * WHY THIS EXISTS (Gap 9 from the system audit):
  *   `syncClientOnboardingStatus()` is called manually 9 times scattered
- *   across clientRouteService.ts — after every KYC update, fee payment,
+ *   across clientRouteService.ts â€” after every KYC update, fee payment,
  *   guarantor add/update, and collateral add/update. This means:
  *     a. Any new domain event that should trigger an onboarding re-sync
  *        requires a code change in the route service.
@@ -15,18 +15,18 @@
  *   and automatically re-syncs the client's onboarding_status row.
  *
  *   Events handled:
- *     client.kyc_updated        — KYC transition may unblock or block approval
- *     client.fees_paid          — fee payment is an onboarding blocker
- *     client.profile_updated    — profile changes can affect completeness
- *     client.guarantor_added    — guarantor count affects readiness
- *     client.guarantor_updated  — guarantee amount affects readiness
- *     client.collateral_added   — collateral count affects readiness
- *     client.collateral_updated — collateral status affects readiness
+ *     client.kyc_updated        â€” KYC transition may unblock or block approval
+ *     client.fees_paid          â€” fee payment is an onboarding blocker
+ *     client.profile_updated    â€” profile changes can affect completeness
+ *     client.guarantor_added    â€” guarantor count affects readiness
+ *     client.guarantor_updated  â€” guarantee amount affects readiness
+ *     client.collateral_added   â€” collateral count affects readiness
+ *     client.collateral_updated â€” collateral status affects readiness
  *
  * INVOCATION:
  *   Call register(eventBus) once at bootstrap.
  *   The existing manual sync calls in clientRouteService.ts continue to
- *   work — they are idempotent and will be removed incrementally as
+ *   work â€” they are idempotent and will be removed incrementally as
  *   routes are migrated to CQRS handlers.
  *
  * SYNC IMPLEMENTATION:
@@ -35,13 +35,22 @@
  *   so the saga has no dependency on the route service.
  */
 import type { IEventBus } from "../../../infrastructure/events/IEventBus.js";
+import type { DbGet, DbRun } from "../../../types/serviceContracts.js";
+import {
+  MIN_REQUIRED_COLLATERALS,
+  MIN_REQUIRED_GUARANTORS,
+} from "../../../services/client/clientValidation.js";
 
-type DbGet = (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
-type DbRun = (sql: string, params?: unknown[]) => Promise<any>;
+type ClientOnboardingEvent = {
+  aggregateId?: number | string | null;
+  clientId?: number | string | null;
+  payload?: {
+    clientId?: number | string | null;
+  } | null;
+};
 
-// The onboarding step sequence — mirrors deriveOnboardingStatus in clientRouteService
-const ONBOARDING_STEPS = ["registered", "kyc_pending", "kyc_verified", "fees_paid", "complete"] as const;
-type OnboardingStep = typeof ONBOARDING_STEPS[number];
+// The onboarding step sequence â€” mirrors deriveOnboardingStatus in clientRouteService
+type OnboardingStep = "registered" | "kyc_pending" | "kyc_verified" | "fees_paid" | "complete";
 
 export class ClientOnboardingSaga {
   constructor(
@@ -50,11 +59,11 @@ export class ClientOnboardingSaga {
   ) {}
 
   register(eventBus: IEventBus): void {
-    const handle = async (event: any) => {
+    const handle = async (event: ClientOnboardingEvent) => {
       const clientId = this._extractClientId(event);
       if (!clientId) return;
       await this._syncOnboardingStatus(clientId).catch(() => {
-        // Best-effort — must not disrupt the main operation
+        // Best-effort â€” must not disrupt the main operation
       });
     };
 
@@ -73,7 +82,7 @@ export class ClientOnboardingSaga {
     }
   }
 
-  // ── Core sync logic ────────────────────────────────────────────────────
+  // â”€â”€ Core sync logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   async syncForClient(clientId: number): Promise<string> {
     return this._syncOnboardingStatus(clientId);
@@ -128,7 +137,7 @@ export class ClientOnboardingSaga {
     let nextStatus: OnboardingStep = "registered";
     if (kycStatus === "verified") {
       if (feePaymentStatus === "paid") {
-        if (guarantorCount > 0 && collateralCount > 0) {
+        if (guarantorCount >= MIN_REQUIRED_GUARANTORS && collateralCount >= MIN_REQUIRED_COLLATERALS) {
           nextStatus = "complete";
         } else {
           nextStatus = "fees_paid";
@@ -151,7 +160,7 @@ export class ClientOnboardingSaga {
     };
   }
 
-  private _extractClientId(event: any): number | null {
+  private _extractClientId(event: ClientOnboardingEvent): number | null {
     // Try several common payload shapes
     const id = event?.aggregateId
       ?? event?.payload?.clientId
@@ -160,3 +169,5 @@ export class ClientOnboardingSaga {
     return Number.isInteger(n) && n > 0 ? n : null;
   }
 }
+
+

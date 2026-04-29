@@ -1,4 +1,6 @@
 import type { DbRunResult } from "../types/dataLayer.js";
+import type { HierarchyServiceLike } from "../types/serviceContracts.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 import { prisma, type PrismaTransactionClient } from "../db/prismaClient.js";
 import { Decimal } from "decimal.js";
 import {
@@ -15,7 +17,7 @@ interface RepaymentServiceDeps {
     get: (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
     all: (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
   }) => Promise<any>) => Promise<any>;
-  hierarchyService: any;
+  hierarchyService: HierarchyServiceLike;
   writeAuditLog: (payload: {
     userId?: number | null;
     action: string;
@@ -52,7 +54,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
     generalLedgerService,
   } = deps;
 
-  const collectibleLoanStatuses = ["active", "restructured"];
+  const collectibleLoanStatuses = ["active", "restructured", "overdue"];
 
   function toMoneyDecimal(value: Decimal.Value): Decimal {
     return new Decimal(value || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
@@ -337,6 +339,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
       }
       const repaymentAmountNumber = repaymentAmount.toNumber();
       const clientIdempotencyKey = normalizeClientIdempotencyKey(payload.clientIdempotencyKey);
+      const tenantId = getCurrentTenantId();
 
       if (clientIdempotencyKey) {
         const existingIdempotencyRows = await tx.$queryRaw<Array<{
@@ -347,6 +350,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
           FROM repayment_idempotency_keys
           WHERE loan_id = ${loanId}
             AND client_idempotency_key = ${clientIdempotencyKey}
+            AND tenant_id = ${tenantId}
           LIMIT 1
         `;
         const existingIdempotencyRow = existingIdempotencyRows[0] || null;
@@ -384,6 +388,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
         try {
           await tx.$executeRaw`
             INSERT INTO repayment_idempotency_keys (
+              tenant_id,
               loan_id,
               client_idempotency_key,
               request_amount,
@@ -391,6 +396,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
               updated_at
             )
             VALUES (
+              ${tenantId},
               ${loanId},
               ${clientIdempotencyKey},
               ${repaymentAmountNumber},
@@ -411,6 +417,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
             FROM repayment_idempotency_keys
             WHERE loan_id = ${loanId}
               AND client_idempotency_key = ${clientIdempotencyKey}
+              AND tenant_id = ${tenantId}
             LIMIT 1
           `;
           const replayRow = replayRows[0] || null;
@@ -449,7 +456,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
       }
 
       if (!isCollectibleLoanStatus(loan.status)) {
-        throw new InvalidLoanStatusError("Loan is not active or restructured", { currentStatus: loan.status, action: "repayment" });
+        throw new InvalidLoanStatusError("Loan is not active, overdue, or restructured", { currentStatus: loan.status, action: "repayment" });
       }
 
       const currentLoanBalance = toMoneyDecimal(loan.balance || 0);
@@ -472,8 +479,9 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
             ELSE 'active'
           END
         WHERE id = ${loanId}
-          AND status IN ('active', 'restructured')
+          AND status IN ('active', 'restructured', 'overdue')
           AND ROUND(balance, 2) >= ${appliedRepaymentAmountNumber}
+          AND tenant_id = ${tenantId}
       `;
 
       if (Number(updatedLoanCount || 0) !== 1) {
@@ -482,7 +490,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
           throw new LoanNotFoundError();
         }
         if (!isCollectibleLoanStatus(latestLoan.status)) {
-          throw new InvalidLoanStatusError("Loan is not active or restructured", {
+          throw new InvalidLoanStatusError("Loan is not active, overdue, or restructured", {
             currentStatus: latestLoan.status,
             action: "repayment",
           });
@@ -538,6 +546,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
       if (overpaymentAmount.greaterThan(0)) {
         await tx.$executeRaw`
           INSERT INTO loan_overpayment_credits (
+            tenant_id,
             loan_id,
             client_id,
             branch_id,
@@ -549,6 +558,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
             updated_at
           )
           VALUES (
+            ${tenantId},
             ${loanId},
             ${Number(updatedLoan.client_id || 0) || null},
             ${Number(updatedLoan.branch_id || 0) || null},
@@ -564,6 +574,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
           SELECT id
           FROM loan_overpayment_credits
           WHERE repayment_id = ${Number(repaymentInsert.id || 0)}
+            AND tenant_id = ${tenantId}
           LIMIT 1
         `;
         overpaymentCreditId = Number(overpaymentRows[0]?.id || 0) || null;
@@ -576,6 +587,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
               updated_at = ${new Date().toISOString()}
           WHERE loan_id = ${loanId}
             AND client_idempotency_key = ${clientIdempotencyKey}
+            AND tenant_id = ${tenantId}
         `;
       }
 
@@ -664,7 +676,7 @@ function createRepaymentService(deps: RepaymentServiceDeps) {
 
     const repaymentResult = transactionClient
       ? await runRepaymentTx(transactionClient)
-      : await prisma.$transaction(async (tx: any) => runRepaymentTx(tx));
+    : await prisma.$transaction(async (tx: PrismaTransactionClient) => runRepaymentTx(tx));
 
     try {
       await writeAuditLog({

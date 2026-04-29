@@ -20,12 +20,14 @@
  *   SQL UPDATE of the loans table (legacy behaviour, no domain event emitted).
  */
 import type { LoggerLike, MetricsLike } from "../types/runtime.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 import type { DbRunResult } from "../types/dataLayer.js";
 import type { ILoanRepository } from "../domain/loan/repositories/ILoanRepository.js";
 import type { IEventBus } from "../infrastructure/events/IEventBus.js";
 import { LoanId } from "../domain/loan/value-objects/LoanId.js";
 import { createPenaltyEngine } from "../services/penaltyEngine.js";
 import { createInterestAccrualEngine } from "../services/interestAccrualEngine.js";
+import { getConfiguredDbClient } from "../utils/env.js";
 
 type OverdueSyncJobOptions = {
   run: (sql: string, params?: unknown[]) => Promise<DbRunResult>;
@@ -102,25 +104,73 @@ function createOverdueSyncJob(options: OverdueSyncJobOptions) {
   let warnedMissingCoreSchema = false;
   let warnedMissingPenaltySchema = false;
   let warnedMissingInterestAccrualSchema = false;
+  const dbClient = getConfiguredDbClient();
+  const verifiedExistingTables = new Set<string>();
+  const verifiedColumnSets = new Map<string, Set<string>>();
 
   function isSqliteMissingSchemaError(error: unknown) {
     const message = String(error instanceof Error ? error.message : error || "").toLowerCase();
     return message.includes("no such table") || message.includes("no such column");
   }
 
-  async function sqliteTableExists(tableName: string): Promise<boolean> {
-    const row = await get(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
-      [tableName],
-    );
-    return Boolean(row?.name);
+  async function tableExists(tableName: string): Promise<boolean> {
+    if (verifiedExistingTables.has(tableName)) {
+      return true;
+    }
+
+    let exists = false;
+    if (dbClient === "postgres") {
+      const row = await get(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1 LIMIT 1",
+        [tableName],
+      );
+      exists = Boolean(row?.table_name);
+    } else {
+      const row = await get(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        [tableName],
+      );
+      exists = Boolean(row?.name);
+    }
+
+    if (exists) {
+      verifiedExistingTables.add(tableName);
+    }
+
+    return exists;
   }
 
-  async function sqliteHasColumns(tableName: string, columnNames: string[]): Promise<boolean> {
-    const columns = await all(`PRAGMA table_info(${tableName})`);
-    const available = new Set(columns.map((column) => String(column.name || "").toLowerCase()));
-    return columnNames.every((columnName) => available.has(columnName.toLowerCase()));
+  async function hasColumns(tableName: string, columnNames: string[]): Promise<boolean> {
+    const normalizedColumnNames = columnNames.map((columnName) => columnName.toLowerCase());
+    const verifiedColumns = verifiedColumnSets.get(tableName);
+    if (verifiedColumns && normalizedColumnNames.every((columnName) => verifiedColumns.has(columnName))) {
+      return true;
+    }
+
+    let available: Set<string>;
+    if (dbClient === "postgres") {
+      const columns = await all(
+        "SELECT column_name AS name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1",
+        [tableName],
+      );
+      available = new Set(columns.map((column) => String(column.name || "").toLowerCase()));
+    } else {
+      const columns = await all(`PRAGMA table_info(${tableName})`);
+      available = new Set(columns.map((column) => String(column.name || "").toLowerCase()));
+    }
+
+    const hasAllColumns = normalizedColumnNames.every((columnName) => available.has(columnName));
+    if (hasAllColumns) {
+      const cache = verifiedColumns ?? new Set<string>();
+      normalizedColumnNames.forEach((columnName) => cache.add(columnName));
+      verifiedColumnSets.set(tableName, cache);
+    }
+
+    return hasAllColumns;
   }
+
+  const sqliteTableExists = tableExists;
+  const sqliteHasColumns = hasColumns;
 
   async function hasCoreSyncSchema(): Promise<boolean> {
     const requiredTables = ["loan_installments", "loans"];
@@ -224,11 +274,11 @@ function createOverdueSyncJob(options: OverdueSyncJobOptions) {
           WHERE status = 'pending'
             AND date(due_date) < date(?)
             AND loan_id IN (
-              SELECT id FROM loans
-              WHERE status IN ('active', 'restructured')
+              SELECT id FROM loans WHERE tenant_id = ?
+              AND status IN ('active', 'restructured', 'overdue')
             )
         `,
-        [today],
+        [today, getCurrentTenantId()],
       );
     });
 

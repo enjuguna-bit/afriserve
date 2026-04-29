@@ -1,6 +1,7 @@
 import type { LoggerLike } from "./runtime.js";
 import type { RouteRegistrarApp, ScopeCondition } from "./systemRoutes.js";
 import type { ReportCacheLike } from "./cache.js";
+import type { HierarchyServiceLike as ServiceHierarchyServiceLike } from "./serviceContracts.js";
 
 export interface DatabaseRunResult {
   lastID?: number;
@@ -19,32 +20,22 @@ export interface ParseSchemaLike<T = any> {
 }
 
 export interface CommonHierarchyServiceLike {
-  resolveHierarchyScope: (user: any) => Promise<any>;
-  buildScopeCondition: (scope: any, column: string) => ScopeCondition;
+  resolveHierarchyScope: ServiceHierarchyServiceLike["resolveHierarchyScope"];
+  buildScopeCondition: (scope: unknown, column: string) => ScopeCondition;
 }
 
 export interface AuthHierarchyServiceLike extends CommonHierarchyServiceLike {
-  getAreaManagerBranchIds: (userId: number) => Promise<number[]>;
-  invalidateHierarchyCaches: (params: { userId: number }) => void;
+  getAreaManagerBranchIds: ServiceHierarchyServiceLike["getAreaManagerBranchIds"];
+  invalidateHierarchyCaches: ServiceHierarchyServiceLike["invalidateHierarchyCaches"];
 }
 
-export interface ClientHierarchyServiceLike extends CommonHierarchyServiceLike {
-  getBranches: (options?: { includeInactive?: boolean; regionId?: number | null }) => Promise<Array<{ id: number; [key: string]: any }>>;
-  getBranchById: (branchId: number, options?: { requireActive?: boolean }) => Promise<Record<string, any> | null>;
-  isBranchInScope: (scope: any, branchId: number | null | undefined) => boolean;
-}
+export type ClientHierarchyServiceLike = ServiceHierarchyServiceLike;
 
-export interface BranchHierarchyServiceLike extends ClientHierarchyServiceLike {
-  getRegions: (options?: { includeInactive?: boolean }) => Promise<Array<Record<string, any>>>;
-  getBranchesByIds: (branchIds: number[], options?: { requireActive?: boolean }) => Promise<Array<Record<string, any>>>;
-  getRegionById: (regionId: number) => Promise<Record<string, any> | null>;
-  invalidateHierarchyCaches: (params?: { userId?: number }) => void;
-}
+export type BranchHierarchyServiceLike = ClientHierarchyServiceLike;
 
 export interface UserHierarchyServiceLike extends BranchHierarchyServiceLike {
-  getAreaManagerBranchIds: (userId: number) => Promise<number[]>;
-  replaceAreaManagerAssignments: (userId: number, branchIds: unknown[]) => Promise<number[]>;
-  normalizeIds: (values: unknown[]) => number[];
+  replaceAreaManagerAssignments: ServiceHierarchyServiceLike["replaceAreaManagerAssignments"];
+  normalizeIds: ServiceHierarchyServiceLike["normalizeIds"];
 }
 
 export interface HierarchyEventServiceLike {
@@ -60,8 +51,14 @@ export interface AuthRouteDeps {
   authenticate: (...args: any[]) => any;
   createToken: (user: Record<string, any>) => string;
   verifyToken: (token: string) => Record<string, any>;
-  issueRefreshToken: (userId: number, tokenVersion: number) => Promise<string>;
-  rotateRefreshToken: (refreshToken: string) => Promise<{ userId: number; tokenVersion: number; refreshToken: string }>;
+  issueRefreshToken: (
+    userId: number,
+    tokenVersion: number,
+    options?: { tenantId?: string | null },
+  ) => Promise<string>;
+  rotateRefreshToken: (
+    refreshToken: string,
+  ) => Promise<{ userId: number; tokenVersion: number; refreshToken: string; tenantId: string }>;
   revokeRefreshToken: (refreshToken: string) => Promise<void>;
   blacklistToken: (token: string) => Promise<void>;
   authLimiter: any;
@@ -103,6 +100,10 @@ export interface ClientRouteDeps {
   createClientSchema: ParseSchemaLike;
   updateClientSchema: ParseSchemaLike;
   updateClientKycSchema: ParseSchemaLike;
+  createClientProfileRefreshSchema: ParseSchemaLike;
+  updateClientProfileRefreshDraftSchema: ParseSchemaLike;
+  listClientProfileRefreshesQuerySchema: ParseSchemaLike;
+  reviewClientProfileRefreshSchema: ParseSchemaLike;
   createClientGuarantorSchema: ParseSchemaLike;
   updateClientGuarantorSchema: ParseSchemaLike;
   createClientCollateralSchema: ParseSchemaLike;
@@ -112,6 +113,7 @@ export interface ClientRouteDeps {
   portfolioReallocationSchema: ParseSchemaLike;
   hierarchyService: ClientHierarchyServiceLike;
   reportCache?: ReportCacheLike | null;
+  serviceRegistry?: AppServiceRegistryLike | null;
 }
 
 export interface UploadRouteDeps {
@@ -125,7 +127,7 @@ export interface UploadRouteDeps {
     maxFileSizeBytes: number;
     storeClientDocument: (payload: {
       clientId: number;
-      documentType: "photo" | "id_document";
+      documentType: "photo" | "id_document" | "guarantor_id_document" | "collateral_document";
       fileBuffer: Buffer;
       mimeType: string;
       originalName: string;
@@ -206,6 +208,43 @@ export interface LoanProductCatalogServiceLike {
   resolveLoanProduct: (payload: { productId?: number }) => Promise<Record<string, any>>;
 }
 
+interface RepaymentRouteServiceLike {
+  recordRepayment: (options: {
+    loanId: number;
+    payload: Record<string, any>;
+    user?: Record<string, any>;
+    ipAddress: string | null | undefined;
+  }) => Promise<Record<string, any>>;
+}
+
+interface LoanLifecycleRouteServiceLike {
+  writeOffLoan: (options: Record<string, any>) => Promise<Record<string, any>>;
+  restructureLoan: (options: Record<string, any>) => Promise<Record<string, any>>;
+  topUpLoan: (options: Record<string, any>) => Promise<Record<string, any>>;
+  refinanceLoan: (options: Record<string, any>) => Promise<Record<string, any>>;
+  extendLoanTerm: (options: Record<string, any>) => Promise<Record<string, any>>;
+  approveLoan: (options: Record<string, any>) => Promise<Record<string, any>>;
+  rejectLoan: (options: Record<string, any>) => Promise<Record<string, any>>;
+  disburseLoan: (options: Record<string, any>) => Promise<Record<string, any>>;
+  getDisbursementTranches: (options: Record<string, any>) => Promise<Record<string, any>>;
+  getLoanContractVersions: (options: Record<string, any>) => Promise<Record<string, any>>;
+  reviewHighRiskApprovalRequest: (options: Record<string, any>) => Promise<Record<string, any>>;
+}
+
+interface MobileMoneyRouteServiceLike {
+  handleC2BWebhook: (options: Record<string, any>) => Promise<Record<string, any>>;
+  handleB2CCallback: (options: Record<string, any>) => Promise<Record<string, any>>;
+  initiateSTKPush: (options: Record<string, any>) => Promise<Record<string, any>>;
+  handleSTKCallback: (options: Record<string, any>) => Promise<Record<string, any>>;
+  disburseLoanToWallet: (options: Record<string, any>) => Promise<Record<string, any>>;
+  listC2BEvents: (options: Record<string, any>) => Promise<Record<string, any>>;
+  reconcileC2BEventManually: (options: Record<string, any>) => Promise<Record<string, any>>;
+  listB2CDisbursements: (options: Record<string, any>) => Promise<Record<string, any>>;
+  getB2CDisbursementSummary: (options: Record<string, any>) => Promise<Record<string, any>>;
+  retryB2CReversal: (options: Record<string, any>) => Promise<Record<string, any>>;
+  retryB2CCoreDisbursement: (options: Record<string, any>) => Promise<Record<string, any>>;
+}
+
 export interface AppServiceRegistryLike {
   loan: {
     loanProductCatalogService: LoanProductCatalogServiceLike;
@@ -215,9 +254,35 @@ export interface AppServiceRegistryLike {
       getLoanAssessment: (loanId: number) => Promise<Record<string, unknown> | null | undefined>;
     };
     loanService: Record<string, any>;
-    repaymentService: Record<string, any>;
-    loanLifecycleService: Record<string, any>;
-    mobileMoneyService: Record<string, any> | null;
+    repaymentService: RepaymentRouteServiceLike;
+    loanLifecycleService: LoanLifecycleRouteServiceLike;
+    mobileMoneyService: MobileMoneyRouteServiceLike | null;
+    /**
+     * CQRS command handlers — preferred entry points for loan mutations.
+     * Routes should call through these rather than invoking loanService directly.
+     */
+    commands: {
+      createLoanApplication: {
+        handle: (command: {
+          clientId: number;
+          principal: number;
+          termWeeks: number;
+          productId?: number | null;
+          interestRate?: number | null;
+          registrationFee?: number | null;
+          processingFee?: number | null;
+          branchId?: number | null;
+          officerId?: number | null;
+          purpose?: string | null;
+          createdByUserId: number;
+          createdByRole?: string | null;
+          createdByRoles?: string[];
+          createdByPermissions?: string[];
+          createdByBranchId?: number | null;
+          ipAddress?: string | null;
+        }) => Promise<{ loanId: number }>;
+      };
+    };
   };
   report: {
     resolveCachedReport: <T = any>(options: {
@@ -233,6 +298,12 @@ export interface AppServiceRegistryLike {
     coaVersioningService: Record<string, any>;
     accountingBatchService: Record<string, any>;
     incomeTrackingService: Record<string, any>;
+  };
+  client: {
+    clientRepository: {
+      findById: (id: unknown) => Promise<any>;
+      save: (client: unknown) => Promise<void>;
+    };
   };
 }
 
@@ -252,6 +323,8 @@ export interface LoanRouteDeps {
   createRepaymentSchema: ParseSchemaLike;
   createGuarantorSchema: ParseSchemaLike;
   createCollateralAssetSchema: ParseSchemaLike;
+  /** Schema for PATCH /api/collateral-assets/:id — all fields optional, status includes "liquidated". */
+  updateCollateralAssetSchema: ParseSchemaLike;
   linkLoanGuarantorSchema: ParseSchemaLike;
   linkLoanCollateralSchema: ParseSchemaLike;
   loanLifecycleActionSchema: ParseSchemaLike;

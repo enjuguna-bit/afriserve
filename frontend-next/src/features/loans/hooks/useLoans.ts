@@ -39,7 +39,6 @@ import type {
   LoanLifecycleEventResponse,
   LoanPagedResponse,
   LoanRefinancePayload,
-  LoanRecord,
   LoanRepaymentPayload,
   LoanStatement,
   LoanTermExtensionPayload,
@@ -481,14 +480,4 @@ export function useRejectLoanAction() {
   })
 }
 
-export function useLoanDetailFromList(loanId: number) {
-  return useQuery({
-    queryKey: queryKeys.loans.detail(loanId),
-    queryFn: async () => {
-      const response = await getLoanById(loanId)
-      return response as LoanRecord & Record<string, unknown>
-    },
-    enabled: Number.isInteger(loanId) && loanId > 0,
-    ...queryPolicies.detail,
-  })
-}
+// useLoanDetailFromList removed — use useLoan() directly (identical implementation)

@@ -1,4 +1,5 @@
-import { Decimal } from "decimal.js";
+﻿import { Decimal } from "decimal.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 import { createFxRateService } from "./fxRateService.js";
 import type { DbRunResult, DbTransactionContext } from "../types/dataLayer.js";
 import type { LoggerLike } from "../types/runtime.js";
@@ -140,6 +141,7 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
     const insertedJournal = await tx.run(
       `
         INSERT INTO gl_journals (
+          tenant_id,
           reference_type,
           reference_id,
           loan_id,
@@ -157,9 +159,9 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
           total_credit,
           posted_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
-      [
+      [getCurrentTenantId(), 
         String(payload.referenceType || "").trim().toLowerCase(),
         payload.referenceId ?? null,
         Number(payload.loanId || 0) || null,
@@ -194,6 +196,7 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
       await tx.run(
         `
           INSERT INTO gl_entries (
+          tenant_id,
             journal_id,
             account_id,
             side,
@@ -206,9 +209,9 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
             memo,
             created_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)
         `,
-        [
+        [getCurrentTenantId(), 
           journalId,
           accountIdByCode[String(line.accountCode || "").trim().toUpperCase()],
           line.side,
@@ -231,14 +234,15 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
     limit?: number;
     offset?: number;
   } = {}) {
+    const tenantId = getCurrentTenantId();
     const normalizedStatus = String(params.status || "").trim().toLowerCase();
     const hasStatus = ["open", "partially_allocated", "resolved"].includes(normalizedStatus);
     const branchId = Number(params.branchId || 0) || null;
     const limit = Math.max(1, Math.min(200, Math.floor(Number(params.limit || 50))));
     const offset = Math.max(0, Math.floor(Number(params.offset || 0)));
 
-    const filters: string[] = [];
-    const queryParams: unknown[] = [];
+    const filters: string[] = ["sc.tenant_id = ?"];
+    const queryParams: unknown[] = [tenantId];
     if (hasStatus) {
       filters.push("LOWER(TRIM(COALESCE(sc.status, ''))) = ?");
       queryParams.push(normalizedStatus);
@@ -279,7 +283,9 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
           ROUND(COALESCE(SUM(sa.carrying_book_amount), 0), 2) AS allocated_book_amount,
           ROUND(COALESCE(SUM(sa.fx_difference_amount), 0), 2) AS allocated_fx_difference
         FROM gl_suspense_cases sc
-        LEFT JOIN gl_suspense_allocations sa ON sa.suspense_case_id = sc.id
+        LEFT JOIN gl_suspense_allocations sa
+          ON sa.suspense_case_id = sc.id
+         AND sa.tenant_id = sc.tenant_id
         ${whereSql}
         GROUP BY sc.id
         ORDER BY datetime(sc.created_at) DESC, sc.id DESC
@@ -339,6 +345,7 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
       const insertedCase = await tx.run(
         `
           INSERT INTO gl_suspense_cases (
+          tenant_id,
             external_reference,
             source_channel,
             status,
@@ -361,9 +368,9 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
             created_at,
             updated_at
           )
-          VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+          VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
         `,
-        [
+        [getCurrentTenantId(), 
           externalReference,
           sourceChannel,
           description,
@@ -428,7 +435,10 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
       };
     });
 
-    const caseRow = await get("SELECT * FROM gl_suspense_cases WHERE id = ? LIMIT 1", [Number((result as any).caseId || 0)]);
+    const caseRow = await get(
+      "SELECT * FROM gl_suspense_cases WHERE id = ? AND tenant_id = ? LIMIT 1",
+      [Number((result as any).caseId || 0), getCurrentTenantId()],
+    );
     return {
       suspense_case: caseRow,
       opening_journal_id: Number((result as any).journalId || 0),
@@ -464,9 +474,10 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
           SELECT *
           FROM gl_suspense_cases
           WHERE id = ?
+            AND tenant_id = ?
           LIMIT 1
         `,
-        [caseId],
+        [caseId, getCurrentTenantId()],
       );
       if (!suspenseCase) {
         throw new Error("Suspense case not found");
@@ -575,6 +586,7 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
       await tx.run(
         `
           INSERT INTO gl_suspense_allocations (
+          tenant_id,
             suspense_case_id,
             journal_id,
             target_account_code,
@@ -590,9 +602,9 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
             allocated_at,
             created_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
-        [
+        [getCurrentTenantId(), 
           caseId,
           journalId,
           targetAccountCode,
@@ -629,6 +641,7 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
             resolved_at = CASE WHEN ? = 'resolved' THEN ? ELSE resolved_at END,
             updated_at = ?
           WHERE id = ?
+            AND tenant_id = ?
         `,
         [
           Math.max(0, remainingTransaction.toNumber()),
@@ -640,10 +653,14 @@ function createSuspenseAccountingService(options: SuspenseAccountingServiceOptio
           nextStatus === "resolved" ? nowIso : null,
           nowIso,
           caseId,
+          getCurrentTenantId(),
         ],
       );
 
-      const updatedCase = await tx.get("SELECT * FROM gl_suspense_cases WHERE id = ? LIMIT 1", [caseId]);
+      const updatedCase = await tx.get(
+        "SELECT * FROM gl_suspense_cases WHERE id = ? AND tenant_id = ? LIMIT 1",
+        [caseId, getCurrentTenantId()],
+      );
       return {
         updatedCase,
         journalId,

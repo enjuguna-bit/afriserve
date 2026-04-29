@@ -8,6 +8,7 @@ import { useClients } from '../hooks/useClients'
 import { downloadClientsCsv } from '../../../services/clientService'
 import { useToastStore } from '../../../store/toastStore'
 import { downloadBlob } from '../../../utils/fileDownload'
+import { formatDisplayText, resolveDisplayText } from '../../../utils/displayFormatting'
 import type { ClientRecord } from '../../../types/client'
 import styles from './ClientsPage.module.css'
 
@@ -16,7 +17,7 @@ function formatBorrowerRef(client: ClientRecord) {
 }
 
 function borrowerMeta(client: ClientRecord) {
-  return client.phone || client.national_id || 'No phone or national ID'
+  return resolveDisplayText([client.phone, client.national_id], 'No phone or national ID')
 }
 
 function toNumber(value: unknown) {
@@ -142,18 +143,18 @@ export function DormantClientsPage() {
                 </tr>
               </thead>
               <tbody>
-                {clientsQuery.data.data.map((client) => (
+                {(clientsQuery.data?.data ?? []).map((client) => (
                   <tr key={client.id} className={styles.rowLink} onClick={() => navigate(`/clients/${client.id}`)}>
                     <td className={styles.nameCell}>
-                      <strong>{client.full_name}</strong>
+                      <strong>{formatDisplayText(client.full_name, `Client #${client.id}`)}</strong>
                       <span>{borrowerMeta(client)}</span>
                     </td>
                     <td className={styles.refCell}>{formatBorrowerRef(client)}</td>
-                    <td>{client.phone || '-'}</td>
+                    <td>{formatDisplayText(client.phone)}</td>
                     <td>{toNumber(client.closed_loan_count || client.loan_count)}</td>
                     <td>{toNumber(client.open_loan_count)}</td>
-                    <td>{client.assigned_officer_name || '-'}</td>
-                    <td>{client.branch_name || '-'}</td>
+                    <td>{formatDisplayText(client.assigned_officer_name)}</td>
+                    <td>{formatDisplayText(client.branch_name)}</td>
                     <td className={styles.actions}>
                       <Link to={`/clients/${client.id}`} onClick={(event) => event.stopPropagation()}>View 360</Link>
                       {canManageClients ? <Link to={`/loans/new?clientId=${client.id}`} onClick={(event) => event.stopPropagation()}>Start next cycle</Link> : null}

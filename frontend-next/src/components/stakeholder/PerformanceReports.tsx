@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import * as reportService from '../../services/reportService';
+import type { ReportFormat } from '../../services/reportService';
 import styles from './PerformanceReports.module.css';
 import { 
   DonutChartWrapper, 
@@ -22,6 +23,8 @@ export interface CashFlowReport {
   net_cash_flow: number;
 }
 
+type DownloadFormat = Exclude<ReportFormat, 'json'>;
+
 const PerformanceDashboard = () => {
   const [performance, setPerformance] = useState<MonthlyPerformance | null>(null);
   const [cashFlow, setCashFlow] = useState<CashFlowReport | null>(null);
@@ -40,9 +43,8 @@ const PerformanceDashboard = () => {
         ]);
         setPerformance(perfData as MonthlyPerformance);
         setCashFlow(flowData as CashFlowReport);
-      } catch (err) {
-        console.error('Failed to fetch stakeholder reports:', err);
-        setError('Failed to load performance metrics. Please verify connectivity.');
+      } catch {
+                setError('Failed to load performance metrics. Please verify connectivity.');
       } finally {
         setLoading(false);
       }
@@ -70,15 +72,14 @@ const PerformanceDashboard = () => {
     { name: 'Reserve', value: (cashFlow?.total_inflow || 5000000) * 0.1, color: CHART_COLORS.gold },
   ];
 
-  const handleExport = async (endpoint: string, format: string, reportType: string) => {
+  const handleExport = async (endpoint: string, format: DownloadFormat, reportType: string) => {
     const key = `${reportType}-${format}`;
     setExporting(key);
     try {
       // reportService.downloadReport expects (path, params, format)
-      await reportService.downloadReport(endpoint, {}, format as any);
-    } catch (err) {
-      console.error('Export failed:', err);
-      alert(`Failed to export ${reportType}. Please try again later.`);
+      await reportService.downloadReport(endpoint, {}, format);
+    } catch {
+            alert(`Failed to export ${reportType}. Please try again later.`);
     } finally {
       setExporting(null);
     }
@@ -152,7 +153,7 @@ const PerformanceDashboard = () => {
 
           <div className={styles.statsList}>
             <div className={styles.statItem}>
-              <span className={styles.statLabel}>Interest Accrued</span>
+              <span className={styles.statLabel}>Interest Collected</span>
               <span className={styles.statValue}>Ksh {(performance?.interest_income || 0).toLocaleString()}</span>
             </div>
             <div className={styles.statItem}>
@@ -294,7 +295,7 @@ const PerformanceDashboard = () => {
       </section>
       
       <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '40px', textAlign: 'center', maxWidth: '800px', margin: '40px auto 0' }}>
-        Monthly performance figures represent accruals and collections for the current calendar period and reset at UTC+0 midnight on the 1st of each month. 
+        Monthly performance figures represent collected interest, collected penalties, and fees recognized in the current calendar period, and reset at UTC+0 midnight on the 1st of each month.
         Cash flow metrics are cumulative and reflect total fund movements synchronized with the general ledger. All figures are in Kenyan Shillings (Ksh).
       </p>
     </div>

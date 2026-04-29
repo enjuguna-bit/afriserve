@@ -1,10 +1,11 @@
 import { prisma } from "../../../db/prismaClient.js";
 import {
+  ForbiddenActionError,
   ForbiddenScopeError,
   InvalidLoanStatusError,
   LoanNotFoundError,
 } from "../../../domain/errors.js";
-import { nowIso } from "../shared/helpers.js";
+import { normalizeRole, nowIso } from "../shared/helpers.js";
 import type { LoanLifecycleDeps } from "../shared/types.js";
 
 export async function rejectLoan(
@@ -28,6 +29,16 @@ export async function rejectLoan(
     throw new InvalidLoanStatusError("Loan is not pending approval", {
       currentStatus: loan.status, action: "reject",
     });
+  }
+
+  const isAdminRejector = normalizeRole((args.user as { role?: string }).role) === "admin";
+  if (!isAdminRejector) {
+    if (Number(loan.created_by_user_id || 0) === Number(user.sub || 0)) {
+      throw new ForbiddenActionError("Maker-Checker violation: You cannot reject a loan you created");
+    }
+    if (Number(loan.officer_id || 0) > 0 && Number(loan.officer_id || 0) === Number(user.sub || 0)) {
+      throw new ForbiddenActionError("Maker-Checker violation: You cannot reject a loan you are assigned to as officer");
+    }
   }
 
   await prisma.loans.update({

@@ -60,11 +60,60 @@ export const queryKeys = {
     actions: (params: QueryParams) => [...queryKeys.collections.all, 'actions', params] as const,
     actionLists: () => [...queryKeys.collections.all, 'actions'] as const,
   },
+  stakeholders: {
+    all: [...appScope, 'stakeholders'] as const,
+    monthlyPerformance: (params: QueryParams = {}) => [...queryKeys.stakeholders.all, 'monthly-performance', params] as const,
+    cashFlowStatus: (params: QueryParams = {}) => [...queryKeys.stakeholders.all, 'cashflow-status', params] as const,
+    glCashFlow: (params: QueryParams = {}) => [...queryKeys.stakeholders.all, 'gl-cashflow', params] as const,
+    recentCapitalTransactions: (params: QueryParams = {}) => [...queryKeys.stakeholders.all, 'capital-transactions-recent', params] as const,
+    pendingCapitalWithdrawals: (params: QueryParams = {}) => [...queryKeys.stakeholders.all, 'capital-pending-withdrawals', params] as const,
+  },
+  capital: {
+    all: [...appScope, 'capital'] as const,
+    transactions: () => [...queryKeys.capital.all, 'transactions'] as const,
+    mine: (params: QueryParams = {}) => [...queryKeys.capital.transactions(), 'mine', params] as const,
+    pending: (params: QueryParams = {}) => [...queryKeys.capital.transactions(), 'pending', params] as const,
+    filtered: (params: QueryParams = {}) => [...queryKeys.capital.transactions(), 'filtered', params] as const,
+    cashflowPosition: (params: QueryParams = {}) => [...queryKeys.capital.all, 'cashflow-position', params] as const,
+  },
   reports: {
     all: [...appScope, 'reports'] as const,
+    filterOptions: (params: QueryParams = {}) => [...queryKeys.reports.all, 'filter-options', params] as const,
+    // Static named report keys (used by dedicated hooks)
     portfolio: (params: QueryParams) => [...queryKeys.reports.all, 'portfolio', params] as const,
     dailyCollections: (params: QueryParams) => [...queryKeys.reports.all, 'daily-collections', params] as const,
     boardSummary: (params: QueryParams) => [...queryKeys.reports.all, 'board-summary', params] as const,
+    // Dynamic generated-report key (used by ReportsPage for any ad-hoc report path)
+    generated: (reportId: string | null, params: QueryParams) =>
+      [...queryKeys.reports.all, 'generated-report', reportId, JSON.stringify(params)] as const,
+    // Per-endpoint invalidation helpers
+    arrears: (params: QueryParams) => [...queryKeys.reports.all, 'arrears', params] as const,
+    disbursements: (params: QueryParams) => [...queryKeys.reports.all, 'disbursements', params] as const,
+    dues: (params: QueryParams) => [...queryKeys.reports.all, 'dues', params] as const,
+    clients: (params: QueryParams) => [...queryKeys.reports.all, 'clients', params] as const,
+    aging: (params: QueryParams) => [...queryKeys.reports.all, 'aging', params] as const,
+    guarantors: (params: QueryParams) => [...queryKeys.reports.all, 'guarantors', params] as const,
+    collections: (params: QueryParams) => [...queryKeys.reports.all, 'collections', params] as const,
+    officerPerformance: (params: QueryParams) => [...queryKeys.reports.all, 'officer-performance', params] as const,
+    incomeStatement: (params: QueryParams) => [...queryKeys.reports.all, 'income-statement', params] as const,
+    writeOffs: (params: QueryParams) => [...queryKeys.reports.all, 'write-offs', params] as const,
+    balanceSheet: (params: QueryParams) => [...queryKeys.reports.all, 'balance-sheet', params] as const,
+    cashFlow: (params: QueryParams) => [...queryKeys.reports.all, 'cash-flow', params] as const,
+    // Gap 8 advanced reports
+    arrearsAging: (params: QueryParams) => [...queryKeys.reports.all, 'arrears-aging', params] as const,
+    officerPerformanceV2: (params: QueryParams) => [...queryKeys.reports.all, 'officer-performance-v2', params] as const,
+    branchPnl: (params: QueryParams) => [...queryKeys.reports.all, 'branch-pnl', params] as const,
+    writeOffsPortfolio: (params: QueryParams) => [...queryKeys.reports.all, 'write-offs-portfolio', params] as const,
+    capitalAdequacy: (params: QueryParams) => [...queryKeys.reports.all, 'capital-adequacy', params] as const,
+    clientRetention: (params: QueryParams) => [...queryKeys.reports.all, 'client-retention', params] as const,
+    // Performance / stakeholder reports
+    performanceMonthly: (params: QueryParams) => [...queryKeys.reports.all, 'performance', 'monthly', params] as const,
+    performanceCashflow: (params: QueryParams) => [...queryKeys.reports.all, 'performance', 'cashflow', params] as const,
+    // GL sub-reports
+    glAccounts: (params: QueryParams) => [...queryKeys.reports.all, 'gl', 'accounts', params] as const,
+    glTrialBalance: (params: QueryParams) => [...queryKeys.reports.all, 'gl', 'trial-balance', params] as const,
+    glIncomeStatement: (params: QueryParams) => [...queryKeys.reports.all, 'gl', 'income-statement', params] as const,
+    glCashFlow: (params: QueryParams) => [...queryKeys.reports.all, 'gl', 'cash-flow', params] as const,
   },
   admin: {
     all: [...appScope, 'admin'] as const,

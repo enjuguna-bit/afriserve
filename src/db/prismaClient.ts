@@ -1,6 +1,14 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import type {
+  Prisma as PostgresPrismaNamespace,
+  PrismaClient as PostgresPrismaClient,
+} from "../../generated/prisma/postgres-client/index.js";
+import type {
+  Prisma as SqlitePrismaNamespace,
+  PrismaClient as SqlitePrismaClient,
+} from "../../generated/prisma/sqlite-client/index.js";
 import { resolveDefaultSqliteDbPath, resolveRepoRoot } from "../utils/projectPaths.js";
 import { getConfiguredDbClient } from "../utils/env.js";
 import { getCurrentTenantId } from "../utils/tenantStore.js";
@@ -197,8 +205,8 @@ function normalizePrismaResult(value: unknown): unknown {
 }
 
 const globalForPrisma = globalThis as unknown as {
-  sqlitePrisma?: InstanceType<typeof sqliteClientModule.PrismaClient>;
-  postgresPrisma?: InstanceType<typeof postgresClientModule.PrismaClient>;
+  sqlitePrisma?: SqlitePrismaClient;
+  postgresPrisma?: PostgresPrismaClient;
 };
 
 const globalClientKey = configuredDbClient === "postgres" ? "postgresPrisma" : "sqlitePrisma";
@@ -237,7 +245,7 @@ const basePrisma = globalForPrisma[globalClientKey] || new PrismaClientCtor(
 //   transaction mode, change false → true here AND ensure every write path is
 //   wrapped in prisma.$transaction().
 // ---------------------------------------------------------------------------
-if (configuredDbClient === "postgres") {
+if (configuredDbClient === "postgres" && typeof (basePrisma as any).$use === "function") {
   (basePrisma as any).$use(async (params: any, next: (params: any) => Promise<any>) => {
     const tenantId = getCurrentTenantId();
     try {
@@ -259,6 +267,10 @@ if (configuredDbClient === "postgres") {
     }
     return next(params);
   });
+} else if (configuredDbClient === "postgres") {
+  console.warn(
+    "[prismaClient] Prisma middleware API ($use) is unavailable; skipping session-level app.tenant_id propagation.",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -390,7 +402,9 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 type PrismaClientLike = typeof prisma;
-type PrismaTransactionClient = any;
+type PrismaTransactionClient =
+  SqlitePrismaNamespace.TransactionClient
+  & PostgresPrismaNamespace.TransactionClient;
 
 export type {
   PrismaClientLike,

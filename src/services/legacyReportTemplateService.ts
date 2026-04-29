@@ -1,3 +1,5 @@
+import { normalizeKenyanPhone } from "../utils/helpers.js";
+
 type LegacyReportKind = "disbursements" | "arrears" | "dues";
 
 type LegacyReportRow = Record<string, string>;
@@ -12,7 +14,7 @@ const LEGACY_REPORT_TIME_ZONE = "Africa/Nairobi";
 
 const legacyReportTemplates: Record<LegacyReportKind, LegacyReportTemplate> = {
   disbursements: {
-    filenameBase: "disbursment-report",
+    filenameBase: "disbursement-report",
     title: "Disbursment Report",
     headers: [
       "FullNames",
@@ -191,7 +193,8 @@ function formatLegacyDateAtMidnight(value: unknown): string {
 function mapLegacyDisbursementRows(rows: Array<Record<string, unknown>>): LegacyReportRow[] {
   return rows.map((row) => ({
     FullNames: toText(row.fullnames),
-    AccountNo: toText(row.accountno || row.phonenumber),
+    // AccountNo may be a phone number – normalize if it looks like one
+    AccountNo: normalizeKenyanPhone(row.accountno || row.phonenumber) || toText(row.accountno || row.phonenumber),
     LoanId: toIntegerString(row.loanid),
     AmountDisbursed: formatCurrencyAmount(row.amountdisbursed),
     MpesaRef: toText(row.mpesaref),
@@ -212,7 +215,7 @@ function mapLegacyArrearsRows(rows: Array<Record<string, unknown>>): LegacyRepor
     LoanId: toIntegerString(row.loan_id),
     BorowerId: toIntegerString(row.borrowerid),
     FullNames: toText(row.fullnames),
-    PhoneNumber: toText(row.phonenumber),
+    PhoneNumber: normalizeKenyanPhone(row.phonenumber),
     LoanAmount: formatPlainAmount(row.loanamount),
     AmountDisbursed: formatPlainAmount(row.amountdisbursed),
     Interest: formatPlainAmount(row.interest),
@@ -227,7 +230,7 @@ function mapLegacyArrearsRows(rows: Array<Record<string, unknown>>): LegacyRepor
     BusinessLocation: toText(row.businesslocation),
     DaysToNpl: toIntegerString(row.daystonpl),
     GurantorNames: toText(row.guarantornames),
-    GurantorPhone: toText(row.guarantorphone),
+    GurantorPhone: normalizeKenyanPhone(row.guarantorphone),
     ProductName1: toText(row.productname),
     SalesRep: toText(row.salesrep),
   }));
@@ -237,7 +240,7 @@ function mapLegacyDuesRows(rows: Array<Record<string, unknown>>): LegacyReportRo
   return rows.map((row) => ({
     LoanId: toIntegerString(row.loanid),
     FullNames: toText(row.fullnames),
-    PhoneNumber: toText(row.phonenumber),
+    PhoneNumber: normalizeKenyanPhone(row.phonenumber),
     InstallmentNo: toIntegerString(row.installmentno),
     "AMOUNT DISBURSED": formatPlainAmount(row.amountdisbursed),
     "Amount Due": formatPlainAmount(row.amountdue),

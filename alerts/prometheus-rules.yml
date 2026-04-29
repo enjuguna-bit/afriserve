@@ -1,0 +1,42 @@
+groups:
+  - name: afriserve-api
+    rules:
+      - alert: AfriserveB2CCoreFailures
+        expr: increase(microfinance_payment_failure_total{reason="b2c.core_failed"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: afriserve-api
+        annotations:
+          summary: B2C core disbursement failures detected
+          description: One or more B2C core disbursements failed in the last 5 minutes.
+
+      - alert: AfriservePrimaryDbPoolExhausted
+        expr: max_over_time(microfinance_db_pool_exhausted{pool="primary"}[5m]) >= 1
+        for: 2m
+        labels:
+          severity: critical
+          service: afriserve-api
+        annotations:
+          summary: Primary database pool exhausted
+          description: The primary database pool has been saturated for at least 2 minutes.
+
+      - alert: AfriserveDbAcquireWaitHigh
+        expr: max_over_time(microfinance_db_pool_high_acquire_wait{pool="primary"}[10m]) >= 1
+        for: 5m
+        labels:
+          severity: warning
+          service: afriserve-api
+        annotations:
+          summary: Database acquire wait is elevated
+          description: The primary database pool has had elevated acquire wait for at least 5 minutes.
+
+      - alert: AfriserveBackgroundTaskDegraded
+        expr: max_over_time(microfinance_background_task_consecutive_failures[15m]) >= 3
+        for: 5m
+        labels:
+          severity: warning
+          service: afriserve-api
+        annotations:
+          summary: Background task is repeatedly failing
+          description: A background task has failed at least 3 times in a row within the last 15 minutes.

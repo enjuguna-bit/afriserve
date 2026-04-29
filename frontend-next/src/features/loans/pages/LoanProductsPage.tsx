@@ -11,6 +11,7 @@ import {
 } from '../../../services/riskService'
 import { useToastStore } from '../../../store/toastStore'
 import type { CreateLoanProductPayload, LoanProductRecord } from '../../../types/risk'
+import { formatDisplayDateTime } from '../../../utils/dateFormatting'
 import styles from '../../shared/styles/EntityPage.module.css'
 
 type LoanProductFormState = {
@@ -367,7 +368,7 @@ export function LoanProductsPage() {
                         {Number(product.is_active) === 1 ? 'active' : 'inactive'}
                       </span>
                     </td>
-                    <td>{new Date(product.updated_at).toLocaleString()}</td>
+                    <td>{formatDisplayDateTime(product.updated_at)}</td>
                     <td>
                       <div className={styles.actions}>
                         {isEditing ? (

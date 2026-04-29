@@ -163,6 +163,21 @@ export class AccountingGlSubscriber {
     const branchId         = Number(loan.branch_id ?? 0) || null;
     const clientId         = Number(loan.client_id ?? 0) || null;
     const postedByUserId   = Number(event?.disbursedByUserId ?? loan.disbursed_by_user_id ?? 0) || null;
+    const disbursementTransaction = await this.get(
+      `SELECT id
+       FROM transactions
+       WHERE loan_id = ?
+         AND tx_type = 'disbursement'
+       ORDER BY datetime(occurred_at) DESC, id DESC
+       LIMIT 1`,
+      [loanId],
+    );
+    const disbursementReferenceId = Number(
+      event?.transactionId
+      ?? event?.payload?.transactionId
+      ?? disbursementTransaction?.id
+      ?? 0,
+    ) || loanId;
 
     if (principal <= 0) {
       this._log("warn", "gl.subscriber.loan_disbursed.invalid_principal", { loanId, principal });
@@ -186,8 +201,8 @@ export class AccountingGlSubscriber {
     }
 
     await this._handleJournal({
-      referenceType:  "disbursement",
-      referenceId:    loanId,
+      referenceType:  "loan_disbursement",
+      referenceId:    disbursementReferenceId,
       loanId,
       clientId,
       branchId,
@@ -215,13 +230,14 @@ export class AccountingGlSubscriber {
        FROM repayments r
        JOIN loans l ON l.id = r.loan_id
        WHERE r.loan_id = ?
-         AND ABS(CAST(r.amount AS REAL) - ?) < 0.005
-         AND NOT EXISTS (
-           SELECT 1 FROM gl_journals
-           WHERE reference_type = 'repayment' AND reference_id = r.id
-         )
-       ORDER BY r.id DESC
-       LIMIT 1`,
+          AND ABS(CAST(r.amount AS REAL) - ?) < 0.005
+          AND NOT EXISTS (
+            SELECT 1 FROM gl_journals
+            WHERE reference_type IN ('loan_repayment', 'repayment')
+              AND reference_id = r.id
+          )
+        ORDER BY r.id DESC
+        LIMIT 1`,
       [loanId, amount],
     );
 
@@ -262,7 +278,7 @@ export class AccountingGlSubscriber {
     }
 
     await this._handleJournal({
-      referenceType:  "repayment",
+      referenceType:  "loan_repayment",
       referenceId:    repaymentId,
       loanId,
       clientId,
@@ -311,7 +327,7 @@ export class AccountingGlSubscriber {
     ];
 
     await this._handleJournal({
-      referenceType:  "write_off",
+      referenceType:  "loan_write_off",
       referenceId:    loanId,
       loanId,
       clientId,
@@ -421,14 +437,24 @@ export class AccountingGlSubscriber {
     referenceId:   number,
     loanId:        number,
   ): Promise<void> {
-    const existing = await this.get(
-      "SELECT id, total_debit FROM gl_journals WHERE reference_type = ? AND reference_id = ? LIMIT 1",
-      [referenceType, referenceId],
-    );
+    let existing: Record<string, any> | null | undefined = null;
+    let matchedReferenceType = referenceType;
+
+    for (const candidateReferenceType of [referenceType, ...this._getLegacyReferenceTypes(referenceType)]) {
+      existing = await this.get(
+        "SELECT id, total_debit FROM gl_journals WHERE reference_type = ? AND reference_id = ? LIMIT 1",
+        [candidateReferenceType, referenceId],
+      );
+      if (existing) {
+        matchedReferenceType = candidateReferenceType;
+        break;
+      }
+    }
 
     if (existing) {
       this._log("info", "gl.subscriber.reconcile.match", {
         referenceType,
+        matchedReferenceType,
         referenceId,
         loanId,
         glJournalId:  Number(existing.id),
@@ -439,8 +465,22 @@ export class AccountingGlSubscriber {
         referenceType,
         referenceId,
         loanId,
+        checkedReferenceTypes: [referenceType, ...this._getLegacyReferenceTypes(referenceType)],
         hint: "In-process GL posting did not create this journal. Consider switching to active mode.",
       });
+    }
+  }
+
+  private _getLegacyReferenceTypes(referenceType: string): string[] {
+    switch (referenceType) {
+      case "loan_disbursement":
+        return ["disbursement"];
+      case "loan_repayment":
+        return ["repayment"];
+      case "loan_write_off":
+        return ["write_off"];
+      default:
+        return [];
     }
   }
 

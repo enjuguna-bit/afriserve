@@ -1,8 +1,9 @@
-import { createSqlWhereBuilder } from "../utils/sqlBuilder.js";
+﻿import { createSqlWhereBuilder } from "../utils/sqlBuilder.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 import { createGeneralLedgerService } from "./generalLedgerService.js";
-type GeneralLedgerService = ReturnType<typeof createGeneralLedgerService>;
+import type { DbTransactionOptions } from "../types/dataLayer.js";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export type CapitalTransactionType = "deposit" | "withdrawal";
 export type CapitalTransactionStatus = "pending" | "approved" | "rejected" | "cancelled";
@@ -40,21 +41,22 @@ export type ListTransactionsQuery = {
   offset?: number;
 };
 
-// ─── RBAC sets ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ RBAC sets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const CAPITAL_SUBMITTER_ROLES = new Set(["investor", "partner", "owner", "ceo", "admin"]);
 const CAPITAL_APPROVER_ROLES  = new Set(["finance", "admin"]);
 
-// ─── GL account codes used for capital double-entry ───────────────────────────
+// â”€â”€â”€ GL account codes used for capital double-entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const GL = Object.freeze({
   CASH:               "CASH",
   CAPITAL_DEPOSIT:    "CAPITAL_DEPOSIT",
   CAPITAL_WITHDRAWAL: "CAPITAL_WITHDRAWAL",
 });
+const CASHFLOW_REFERENCE_FILTER_SQL = "COALESCE(j.reference_type, '') <> 'loan_disbursement_finalize'";
 
-// ─── Deps interface ───────────────────────────────────────────────────────────
-// NOTE: generalLedgerService is NOT injected — it has no deps and is
+// â”€â”€â”€ Deps interface â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// NOTE: generalLedgerService is NOT injected â€” it has no deps and is
 // instantiated directly inside the factory, exactly like all other services
 // in this codebase that call postJournal.
 
@@ -68,7 +70,7 @@ interface CapitalTransactionServiceDeps {
   get:  (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
   all:  (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
   run:  (sql: string, params?: unknown[]) => Promise<{ lastID?: number; changes?: number }>;
-  executeTransaction: (callback: (tx: TxContext) => Promise<any>) => Promise<any>;
+  executeTransaction: (callback: (tx: TxContext) => Promise<any>, options?: DbTransactionOptions) => Promise<any>;
   hierarchyService: {
     buildScopeCondition: (scope: any, ref: string) => { sql: string; params: unknown[] };
     isBranchInScope:     (scope: any, branchId: number | null | undefined) => boolean;
@@ -82,16 +84,16 @@ interface CapitalTransactionServiceDeps {
   }) => Promise<void> | void;
 }
 
-// ─── Factory ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Factory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function createCapitalTransactionService(deps: CapitalTransactionServiceDeps) {
   const { get, all, run, executeTransaction, hierarchyService, writeAuditLog } = deps;
 
-  // Instantiate the GL service the same way every other service does it —
+  // Instantiate the GL service the same way every other service does it â€”
   // directly, with no injected deps (the factory takes none).
   const glService = createGeneralLedgerService();
 
-  // ── Internal helpers ────────────────────────────────────────────────────────
+  // â”€â”€ Internal helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   function now(): string {
     return new Date().toISOString();
@@ -101,7 +103,15 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
     return Object.assign(new Error(message), { status });
   }
 
+  async function getTransactionById(transactionId: number): Promise<Record<string, any> | null | undefined> {
+    return get(
+      "SELECT * FROM capital_transactions WHERE id = ? AND tenant_id = ?",
+      [transactionId, getCurrentTenantId()],
+    );
+  }
+
   async function getCashflowNet(branchId: number | null): Promise<number> {
+    const tenantId = getCurrentTenantId();
     const row = branchId
       ? await get(
           `SELECT
@@ -110,8 +120,8 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
            FROM gl_entries e
            INNER JOIN gl_accounts a ON a.id = e.account_id
            INNER JOIN gl_journals j ON j.id = e.journal_id
-           WHERE a.code = 'CASH' AND j.branch_id = ?`,
-          [branchId],
+           WHERE a.code = 'CASH' AND j.tenant_id = ? AND j.branch_id = ? AND ${CASHFLOW_REFERENCE_FILTER_SQL}`,
+          [tenantId, branchId],
         )
       : await get(
           `SELECT
@@ -119,12 +129,14 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
              ROUND(COALESCE(SUM(CASE WHEN e.side='credit' THEN e.amount ELSE 0 END),0),2) AS total_outflow
            FROM gl_entries e
            INNER JOIN gl_accounts a ON a.id = e.account_id
-           WHERE a.code = 'CASH'`,
+           INNER JOIN gl_journals j ON j.id = e.journal_id
+           WHERE a.code = 'CASH' AND j.tenant_id = ? AND ${CASHFLOW_REFERENCE_FILTER_SQL}`,
+          [tenantId],
         );
     return Number((Number(row?.total_inflow || 0) - Number(row?.total_outflow || 0)).toFixed(2));
   }
 
-  // ── Public API ──────────────────────────────────────────────────────────────
+  // â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   async function createDeposit(payload: CreateDepositPayload): Promise<Record<string, any>> {
     const { amount, currency = "KES", branchId, submittedByUserId, submittedByRole, reference, note } = payload;
@@ -141,10 +153,10 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
 
     const result = await run(
       `INSERT INTO capital_transactions
-         (transaction_type, status, amount, currency, submitted_by_user_id, submitted_by_role,
+         (tenant_id, transaction_type, status, amount, currency, submitted_by_user_id, submitted_by_role,
           branch_id, cashflow_net_at_submission, reference, note, created_at, updated_at)
-       VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ["deposit", amount, currency.toUpperCase(), submittedByUserId, submittedByRole,
+       VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [getCurrentTenantId(), "deposit", amount, currency.toUpperCase(), submittedByUserId, submittedByRole,
        branchId, cashflowNet, reference || null, note || null, ts, ts],
     );
 
@@ -157,7 +169,7 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
       details: `Amount: ${currency} ${amount}, branch: ${branchId ?? "org-wide"}`,
     });
 
-    return (await get("SELECT * FROM capital_transactions WHERE id = ?", [id])) as Record<string, any>;
+    return (await getTransactionById(Number(id))) as Record<string, any>;
   }
 
   async function createWithdrawal(payload: CreateWithdrawalPayload): Promise<Record<string, any>> {
@@ -175,10 +187,10 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
 
     const result = await run(
       `INSERT INTO capital_transactions
-         (transaction_type, status, amount, currency, submitted_by_user_id, submitted_by_role,
+         (tenant_id, transaction_type, status, amount, currency, submitted_by_user_id, submitted_by_role,
           branch_id, cashflow_net_at_submission, reference, note, created_at, updated_at)
-       VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ["withdrawal", amount, currency.toUpperCase(), submittedByUserId, submittedByRole,
+       VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [getCurrentTenantId(), "withdrawal", amount, currency.toUpperCase(), submittedByUserId, submittedByRole,
        branchId, cashflowNet, reference || null, note || null, ts, ts],
     );
 
@@ -191,29 +203,29 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
       details: `Amount: ${currency} ${amount}, branch: ${branchId ?? "org-wide"}, cashflow at submission: ${cashflowNet}`,
     });
 
-    return (await get("SELECT * FROM capital_transactions WHERE id = ?", [id])) as Record<string, any>;
+    return (await getTransactionById(Number(id))) as Record<string, any>;
   }
 
   /**
    * Finance approves a pending capital transaction and posts the GL journal.
    *
    * Cashflow rule:
-   *   • Withdrawals where net cashflow < amount are blocked UNLESS
+   *   â€¢ Withdrawals where net cashflow < amount are blocked UNLESS
    *     cashflowOverrideNote is supplied (finance override).
-   *   • Deposits are always approvable.
+   *   â€¢ Deposits are always approvable.
    *
    * GL double-entry:
-   *   • Deposit:    DR CASH  /  CR CAPITAL_DEPOSIT
-   *   • Withdrawal: DR CAPITAL_WITHDRAWAL  /  CR CASH
+   *   â€¢ Deposit:    DR CASH  /  CR CAPITAL_DEPOSIT
+   *   â€¢ Withdrawal: DR CAPITAL_WITHDRAWAL  /  CR CASH
    *
    * FIX: glService is a local instance (no injection needed).
-   * FIX: postJournal returns Promise<number> — the journal ID directly.
+   * FIX: postJournal returns Promise<number> â€” the journal ID directly.
    * FIX: pass run/get from the executeTransaction callback, NOT tx as a Prisma client.
    */
   async function approveTransaction(payload: ApproveTransactionPayload): Promise<Record<string, any>> {
     const { transactionId, approvedByUserId, cashflowOverrideNote } = payload;
 
-    const tx = await get("SELECT * FROM capital_transactions WHERE id = ?", [transactionId]);
+    const tx = await getTransactionById(transactionId);
     if (!tx) throw createHttpError(404, "Capital transaction not found.");
     if (tx.status !== "pending") {
       throw createHttpError(409, `Transaction is already ${tx.status} and cannot be approved.`);
@@ -222,7 +234,7 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
     const amount   = Number(tx.amount);
     const branchId = tx.branch_id ? Number(tx.branch_id) : null;
 
-    // ── Cashflow guard (withdrawals only) ─────────────────────────────────────
+    // â”€â”€ Cashflow guard (withdrawals only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (tx.transaction_type === "withdrawal") {
       const currentNet = await getCashflowNet(branchId);
       if (currentNet < amount && !cashflowOverrideNote?.trim()) {
@@ -237,8 +249,8 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
     const ts = now();
     let glJournalId: number | null = null;
 
-    // ── Post GL journal inside a DB transaction ────────────────────────────────
-    // executeTransaction callback receives { run, get, all } — raw SQLite helpers.
+    // â”€â”€ Post GL journal inside a DB transaction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // executeTransaction callback receives { run, get, all } â€” raw SQLite helpers.
     // postJournal accepts run+get directly (no Prisma tx needed here).
     // postJournal returns the new journal ID as a plain number.
     await executeTransaction(async (dbTx: TxContext) => {
@@ -253,7 +265,7 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
               { accountCode: GL.CASH,               side: "credit" as const, amount, memo: `Capital withdrawal #${transactionId}` },
             ];
 
-      // postJournal returns Promise<number> — the new journal's id
+      // postJournal returns Promise<number> â€” the new journal's id
       const journalId = await glService.postJournal({
         run:           dbTx.run,
         get:           dbTx.get,
@@ -262,7 +274,7 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
         loanId:        null,
         clientId:      null,
         branchId,
-        description:   `Capital ${tx.transaction_type} — ${tx.currency} ${amount}`,
+        description:   `Capital ${tx.transaction_type} â€” ${tx.currency} ${amount}`,
         note:          (tx.note as string | null) || cashflowOverrideNote || null,
         postedByUserId: approvedByUserId,
         postedAt:      ts,
@@ -270,15 +282,15 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
       });
 
       glJournalId = journalId;   // plain number, not an object
-    });
+    }, { isolationLevel: "serializable" });
 
-    // ── Update the capital_transactions row ───────────────────────────────────
+    // â”€â”€ Update the capital_transactions row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     await run(
       `UPDATE capital_transactions
        SET status = 'approved', approved_by_user_id = ?, approved_at = ?,
            cashflow_override_note = ?, gl_journal_id = ?, updated_at = ?
-       WHERE id = ?`,
-      [approvedByUserId, ts, cashflowOverrideNote?.trim() || null, glJournalId, ts, transactionId],
+       WHERE id = ? AND tenant_id = ?`,
+      [approvedByUserId, ts, cashflowOverrideNote?.trim() || null, glJournalId, ts, transactionId, getCurrentTenantId()],
     );
 
     await writeAuditLog({
@@ -289,7 +301,7 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
       details: `Amount: ${tx.currency} ${amount}, GL journal: ${glJournalId}, override: ${!!cashflowOverrideNote}`,
     });
 
-    return (await get("SELECT * FROM capital_transactions WHERE id = ?", [transactionId])) as Record<string, any>;
+    return (await getTransactionById(transactionId)) as Record<string, any>;
   }
 
   async function rejectTransaction(payload: RejectTransactionPayload): Promise<Record<string, any>> {
@@ -297,7 +309,7 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
 
     if (!reason?.trim()) throw createHttpError(400, "A rejection reason is required.");
 
-    const tx = await get("SELECT * FROM capital_transactions WHERE id = ?", [transactionId]);
+    const tx = await getTransactionById(transactionId);
     if (!tx) throw createHttpError(404, "Capital transaction not found.");
     if (tx.status !== "pending") {
       throw createHttpError(409, `Transaction is already ${tx.status} and cannot be rejected.`);
@@ -308,8 +320,8 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
       `UPDATE capital_transactions
        SET status = 'rejected', rejected_by_user_id = ?, rejected_at = ?,
            rejection_reason = ?, updated_at = ?
-       WHERE id = ?`,
-      [rejectedByUserId, ts, reason.trim(), ts, transactionId],
+       WHERE id = ? AND tenant_id = ?`,
+      [rejectedByUserId, ts, reason.trim(), ts, transactionId, getCurrentTenantId()],
     );
 
     await writeAuditLog({
@@ -320,7 +332,7 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
       details: `Reason: ${reason}`,
     });
 
-    return (await get("SELECT * FROM capital_transactions WHERE id = ?", [transactionId])) as Record<string, any>;
+    return (await getTransactionById(transactionId)) as Record<string, any>;
   }
 
   async function listTransactions(
@@ -330,6 +342,7 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
     const { branchId, submittedByUserId, type, status, limit = 50, offset = 0 } = filters;
 
     const wb = createSqlWhereBuilder();
+    wb.addEquals("ct.tenant_id", getCurrentTenantId());
     wb.addCondition(hierarchyService.buildScopeCondition(scope, "ct.branch_id"));
     if (branchId)           wb.addEquals("ct.branch_id",            branchId);
     if (submittedByUserId)  wb.addEquals("ct.submitted_by_user_id", submittedByUserId);
@@ -369,19 +382,21 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
     pending_withdrawals: number;
     available_after_pending: number;
   }> {
+    const tenantId = getCurrentTenantId();
     const net = await getCashflowNet(branchId);
 
     const pendingRow = branchId
       ? await get(
           `SELECT ROUND(COALESCE(SUM(amount),0),2) AS pending
            FROM capital_transactions
-           WHERE transaction_type='withdrawal' AND status='pending' AND branch_id=?`,
-          [branchId],
+           WHERE tenant_id = ? AND transaction_type='withdrawal' AND status='pending' AND branch_id=?`,
+          [tenantId, branchId],
         )
       : await get(
           `SELECT ROUND(COALESCE(SUM(amount),0),2) AS pending
            FROM capital_transactions
-           WHERE transaction_type='withdrawal' AND status='pending'`,
+           WHERE tenant_id = ? AND transaction_type='withdrawal' AND status='pending'`,
+          [tenantId],
         );
     const pendingWithdrawals = Number(pendingRow?.pending || 0);
 
@@ -393,8 +408,8 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
            FROM gl_entries e
            INNER JOIN gl_accounts a ON a.id = e.account_id
            INNER JOIN gl_journals j ON j.id = e.journal_id
-           WHERE a.code = 'CASH' AND j.branch_id = ?`,
-          [branchId],
+           WHERE a.code = 'CASH' AND j.tenant_id = ? AND j.branch_id = ? AND ${CASHFLOW_REFERENCE_FILTER_SQL}`,
+          [tenantId, branchId],
         )
       : await get(
           `SELECT
@@ -402,7 +417,9 @@ export function createCapitalTransactionService(deps: CapitalTransactionServiceD
              ROUND(COALESCE(SUM(CASE WHEN e.side='credit' THEN e.amount ELSE 0 END),0),2) AS total_outflow
            FROM gl_entries e
            INNER JOIN gl_accounts a ON a.id = e.account_id
-           WHERE a.code = 'CASH'`,
+           INNER JOIN gl_journals j ON j.id = e.journal_id
+           WHERE a.code = 'CASH' AND j.tenant_id = ? AND ${CASHFLOW_REFERENCE_FILTER_SQL}`,
+          [tenantId],
         );
 
     return {

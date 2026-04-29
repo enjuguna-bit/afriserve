@@ -45,8 +45,8 @@ export interface FeatureFlags {
 
   /**
    * Enable the LoanDisbursementSaga auto-fire on loan.approved events.
-   * When false (default) the saga is registered but autoMobileMoney stays
-   * false and the direct disburse route is the only disbursement path.
+   * When false (default), approval events do not auto-disburse and the direct
+   * disburse route remains the only disbursement path.
    * Env: FEATURE_SAGA_AUTO_DISBURSE=true
    */
   sagaAutoDisburse: boolean;

@@ -1,5 +1,6 @@
 import { apiClient } from './apiClient'
 import type {
+  AdminResetUserPasswordRequest,
   BranchesPagedResponse,
   CreateTenantRequest,
   CreateUserRequest,
@@ -81,8 +82,13 @@ export async function deactivateUser(userId: number) {
   return data
 }
 
-export async function resetUserPassword(userId: number) {
-  const { data } = await apiClient.post(`/users/${userId}/reset-token`)
+export async function activateUser(userId: number) {
+  const { data } = await apiClient.post(`/users/${userId}/activate`)
+  return data
+}
+
+export async function resetUserPassword(userId: number, payload: AdminResetUserPasswordRequest) {
+  const { data } = await apiClient.post(`/users/${userId}/reset-password`, payload)
   return data
 }
 
@@ -128,4 +134,3 @@ export async function updateTenant(
   )
   return data
 }
-

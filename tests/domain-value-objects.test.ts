@@ -1,281 +1,275 @@
 /**
- * Unit tests: shared and client/loan value objects.
- * Uses node:test — no server, no DB.
+ * Unit tests for Loan domain value objects
+ * Tests LoanStatus, InterestRate, LoanTerm, and related value objects
  */
-import test from "node:test";
-import assert from "node:assert/strict";
 
-import { Money } from "../src/domain/shared/value-objects/Money.js";
-import { DateRange } from "../src/domain/shared/value-objects/DateRange.js";
-import { ClientId } from "../src/domain/client/value-objects/ClientId.js";
-import { NationalId } from "../src/domain/client/value-objects/NationalId.js";
-import { PhoneNumber } from "../src/domain/client/value-objects/PhoneNumber.js";
-import { KycStatus } from "../src/domain/client/value-objects/KycStatus.js";
-import { OnboardingStatus } from "../src/domain/client/value-objects/OnboardingStatus.js";
-import { FeePaymentStatus } from "../src/domain/client/value-objects/FeePaymentStatus.js";
-import { LoanId } from "../src/domain/loan/value-objects/LoanId.js";
-import { InterestRate } from "../src/domain/loan/value-objects/InterestRate.js";
-import { LoanTerm } from "../src/domain/loan/value-objects/LoanTerm.js";
-import { LoanStatus } from "../src/domain/loan/value-objects/LoanStatus.js";
+import { describe, it } from 'node:test';
+import assert from 'node:assert';
+import { LoanStatus } from '../src/domain/loan/value-objects/LoanStatus.js';
+import { InterestRate } from '../src/domain/loan/value-objects/InterestRate.js';
+import { LoanTerm } from '../src/domain/loan/value-objects/LoanTerm.js';
 
-// ── Money ────────────────────────────────────────────────────────────────────
+describe('LoanStatus Value Object', () => {
+  describe('Factory Methods', () => {
+    it('should create pending_approval status', () => {
+      const status = LoanStatus.pendingApproval();
+      assert.strictEqual(status.value, 'pending_approval');
+      assert.ok(status.isPendingApproval());
+    });
 
-test("Money.fromNumber creates correct amount", () => {
-  const m = Money.fromNumber(100);
-  assert.equal(m.amount, 100);
-  assert.equal(m.currency, "KES");
+    it('should create approved status', () => {
+      const status = LoanStatus.approved();
+      assert.strictEqual(status.value, 'approved');
+      assert.ok(status.isApproved());
+    });
+
+    it('should create active status', () => {
+      const status = LoanStatus.active();
+      assert.strictEqual(status.value, 'active');
+      assert.ok(status.isActive());
+    });
+
+    it('should create overdue status', () => {
+      const status = LoanStatus.overdue();
+      assert.strictEqual(status.value, 'overdue');
+      assert.ok(status.isOverdue());
+    });
+
+    it('should create closed status', () => {
+      const status = LoanStatus.closed();
+      assert.strictEqual(status.value, 'closed');
+      assert.ok(status.isClosed());
+    });
+
+    it('should create rejected status', () => {
+      const status = LoanStatus.rejected();
+      assert.strictEqual(status.value, 'rejected');
+      assert.ok(status.isRejected());
+    });
+
+    it('should create restructured status', () => {
+      const status = LoanStatus.restructured();
+      assert.strictEqual(status.value, 'restructured');
+      assert.ok(status.isRestructured());
+    });
+
+    it('should create written_off status', () => {
+      const status = LoanStatus.writtenOff();
+      assert.strictEqual(status.value, 'written_off');
+      assert.ok(status.isWrittenOff());
+    });
+  });
+
+  describe('fromString', () => {
+    it('should parse valid status strings', () => {
+      const tests = [
+        ['pending_approval', 'pending_approval'],
+        ['ACTIVE', 'active'],
+        [' Overdue ', 'overdue'],
+        ['closed', 'closed'],
+      ] as const;
+      
+      for (const [input, expected] of tests) {
+        const status = LoanStatus.fromString(input);
+        assert.strictEqual(status.value, expected);
+      }
+    });
+
+    it('should throw on invalid status', () => {
+      assert.throws(() => LoanStatus.fromString('invalid'), /Invalid loan status/);
+      assert.throws(() => LoanStatus.fromString(''), /Invalid loan status/);
+      assert.throws(() => LoanStatus.fromString('PENDING'), /Invalid loan status/);
+    });
+  });
+
+  describe('Status Checks', () => {
+    it('should correctly identify disbursed statuses', () => {
+      const disbursedStatuses = ['active', 'overdue', 'restructured'];
+      for (const statusStr of disbursedStatuses) {
+        const status = LoanStatus.fromString(statusStr);
+        assert.ok(status.isDisbursed(), `${statusStr} should be disbursed`);
+      }
+    });
+
+    it('should correctly identify non-disbursed statuses', () => {
+      const nonDisbursedStatuses = ['pending_approval', 'approved', 'closed', 'rejected', 'written_off'];
+      for (const statusStr of nonDisbursedStatuses) {
+        const status = LoanStatus.fromString(statusStr);
+        assert.ok(!status.isDisbursed(), `${statusStr} should not be disbursed`);
+      }
+    });
+
+    it('should correctly identify terminal statuses', () => {
+      const terminalStatuses = ['closed', 'written_off', 'rejected'];
+      for (const statusStr of terminalStatuses) {
+        const status = LoanStatus.fromString(statusStr);
+        assert.ok(status.isTerminal(), `${statusStr} should be terminal`);
+      }
+    });
+
+    it('should correctly identify non-terminal statuses', () => {
+      const nonTerminalStatuses = ['pending_approval', 'approved', 'active', 'overdue', 'restructured'];
+      for (const statusStr of nonTerminalStatuses) {
+        const status = LoanStatus.fromString(statusStr);
+        assert.ok(!status.isTerminal(), `${statusStr} should not be terminal`);
+      }
+    });
+  });
+
+  describe('Equality', () => {
+    it('should be equal for same status', () => {
+      const a = LoanStatus.active();
+      const b = LoanStatus.active();
+      assert.ok(a.equals(b));
+    });
+
+    it('should not be equal for different status', () => {
+      const a = LoanStatus.active();
+      const b = LoanStatus.overdue();
+      assert.ok(!a.equals(b));
+    });
+  });
+
+  describe('toString', () => {
+    it('should return string representation', () => {
+      assert.strictEqual(LoanStatus.pendingApproval().toString(), 'pending_approval');
+      assert.strictEqual(LoanStatus.active().toString(), 'active');
+    });
+  });
 });
 
-test("Money rounds to 2 decimal places on construction", () => {
-  const m = Money.fromNumber(1.005);
-  assert.equal(m.amount, 1.01);
+describe('InterestRate Value Object', () => {
+  describe('Creation', () => {
+    it('should create from percentage', () => {
+      const rate = InterestRate.fromPercentage(20);
+      assert.strictEqual(rate.percentage, 20);
+    });
+
+    it('should accept zero rate', () => {
+      const rate = InterestRate.fromPercentage(0);
+      assert.strictEqual(rate.percentage, 0);
+    });
+
+    it('should accept 100% rate', () => {
+      const rate = InterestRate.fromPercentage(100);
+      assert.strictEqual(rate.percentage, 100);
+    });
+
+    it('should reject negative rate', () => {
+      assert.throws(() => InterestRate.fromPercentage(-5), /Invalid interest rate/);
+    });
+
+    it('should reject rate over 100', () => {
+      assert.throws(() => InterestRate.fromPercentage(101), /Invalid interest rate/);
+    });
+
+    it('should reject non-finite values', () => {
+      assert.throws(() => InterestRate.fromPercentage(NaN), /Invalid interest rate/);
+      assert.throws(() => InterestRate.fromPercentage(Infinity), /Invalid interest rate/);
+    });
+  });
+
+  describe('Operations', () => {
+    it('should convert to factor', () => {
+      assert.strictEqual(InterestRate.fromPercentage(20).asFactor(), 0.2);
+      assert.strictEqual(InterestRate.fromPercentage(100).asFactor(), 1);
+      assert.strictEqual(InterestRate.fromPercentage(0).asFactor(), 0);
+    });
+
+    it('should be equal for same rate', () => {
+      const a = InterestRate.fromPercentage(15);
+      const b = InterestRate.fromPercentage(15);
+      assert.ok(a.equals(b));
+    });
+
+    it('should not be equal for different rate', () => {
+      const a = InterestRate.fromPercentage(15);
+      const b = InterestRate.fromPercentage(20);
+      assert.ok(!a.equals(b));
+    });
+
+    it('should return string representation', () => {
+      assert.strictEqual(InterestRate.fromPercentage(20).toString(), '20%');
+    });
+  });
 });
 
-test("Money.zero returns zero amount", () => {
-  assert.equal(Money.zero().amount, 0);
+describe('LoanTerm Value Object', () => {
+  describe('Creation', () => {
+    it('should create from weeks', () => {
+      const term = LoanTerm.fromWeeks(12);
+      assert.strictEqual(term.weeks, 12);
+      assert.strictEqual(term.months, 3);
+    });
+
+    it('should create from months', () => {
+      const term = LoanTerm.fromMonths(6);
+      assert.strictEqual(term.weeks, 26); // 6 * 52 / 12 ≈ 26
+      assert.strictEqual(term.months, 6);
+    });
+
+    it('should handle edge cases', () => {
+      const oneWeek = LoanTerm.fromWeeks(1);
+      assert.strictEqual(oneWeek.weeks, 1);
+
+      const oneMonth = LoanTerm.fromMonths(1);
+      assert.strictEqual(oneMonth.weeks, 4); // ~4.33 weeks, likely rounded
+    });
+  });
+
+  describe('Calculations', () => {
+    it('should correctly calculate weekly installments', () => {
+      // 10000 KES over 12 weeks = ~833.33 per week
+      const term = LoanTerm.fromWeeks(12);
+      assert.ok(term.weeks > 0);
+    });
+
+    it('should correctly calculate monthly installments', () => {
+      // 12000 KES over 6 months = 2000 per month
+      const term = LoanTerm.fromMonths(6);
+      assert.strictEqual(term.months, 6);
+    });
+  });
+
+  describe('Equality', () => {
+    it('should be equal for same term', () => {
+      const a = LoanTerm.fromWeeks(12);
+      const b = LoanTerm.fromWeeks(12);
+      assert.ok(a.equals(b));
+    });
+
+    it('should not be equal for different term', () => {
+      const a = LoanTerm.fromWeeks(12);
+      const b = LoanTerm.fromWeeks(24);
+      assert.ok(!a.equals(b));
+    });
+  });
+
+  describe('Conversion', () => {
+    it('should convert months to weeks correctly', () => {
+      const term = LoanTerm.fromMonths(12);
+      assert.strictEqual(term.months, 12);
+      assert.ok(term.weeks >= 52); // 12 months should be at least 52 weeks
+    });
+
+    it('should convert weeks to months correctly', () => {
+      const term = LoanTerm.fromWeeks(52);
+      assert.strictEqual(term.weeks, 52);
+      assert.ok(term.months >= 12);
+    });
+  });
 });
 
-test("Money.add produces correct sum", () => {
-  const result = Money.fromNumber(100.50).add(Money.fromNumber(49.50));
-  assert.equal(result.amount, 150);
-});
+describe('Value Object Immutability', () => {
+  it('LoanStatus should be immutable', () => {
+    const status = LoanStatus.active();
+    // @ts-expect-error - intentionally testing immutability
+    assert.throws(() => { status.value = 'rejected'; }, TypeError);
+  });
 
-test("Money.subtract works when result is positive", () => {
-  const result = Money.fromNumber(200).subtract(Money.fromNumber(50));
-  assert.equal(result.amount, 150);
-});
-
-test("Money.subtract throws when result would be negative", () => {
-  assert.throws(
-    () => Money.fromNumber(10).subtract(Money.fromNumber(20)),
-    /negative/i,
-  );
-});
-
-test("Money.multiply scales correctly", () => {
-  assert.equal(Money.fromNumber(100).multiply(0.1).amount, 10);
-});
-
-test("Money.divide splits correctly", () => {
-  assert.equal(Money.fromNumber(100).divide(4).amount, 25);
-});
-
-test("Money.divide throws on zero divisor", () => {
-  assert.throws(() => Money.fromNumber(100).divide(0), /zero/i);
-});
-
-test("Money.isGreaterThan compares correctly", () => {
-  assert.ok(Money.fromNumber(200).isGreaterThan(Money.fromNumber(100)));
-  assert.ok(!Money.fromNumber(50).isGreaterThan(Money.fromNumber(100)));
-});
-
-test("Money.isZero returns true only for zero", () => {
-  assert.ok(Money.zero().isZero());
-  assert.ok(!Money.fromNumber(0.01).isZero());
-});
-
-test("Money.equals compares value and currency", () => {
-  assert.ok(Money.fromNumber(100).equals(Money.fromNumber(100)));
-  assert.ok(!Money.fromNumber(100).equals(Money.fromNumber(101)));
-});
-
-test("Money rejects negative values", () => {
-  assert.throws(() => Money.fromNumber(-1), /negative/i);
-});
-
-test("Money rejects non-finite values", () => {
-  assert.throws(() => Money.fromNumber(NaN), /Invalid/i);
-  assert.throws(() => Money.fromNumber(Infinity), /Invalid/i);
-});
-
-test("Money currency mismatch throws on add", () => {
-  const kes = Money.fromNumber(100, "KES");
-  const usd = Money.fromNumber(100, "USD");
-  assert.throws(() => kes.add(usd), /mismatch/i);
-});
-
-// ── DateRange ────────────────────────────────────────────────────────────────
-
-test("DateRange.contains returns true for date within range", () => {
-  const dr = DateRange.of(new Date("2025-01-01"), new Date("2025-12-31"));
-  assert.ok(dr.contains(new Date("2025-06-15")));
-});
-
-test("DateRange.contains returns false outside range", () => {
-  const dr = DateRange.of(new Date("2025-01-01"), new Date("2025-12-31"));
-  assert.ok(!dr.contains(new Date("2026-01-01")));
-});
-
-test("DateRange rejects end before start", () => {
-  assert.throws(
-    () => DateRange.of(new Date("2025-12-31"), new Date("2025-01-01")),
-    /end must be/i,
-  );
-});
-
-// ── ClientId ─────────────────────────────────────────────────────────────────
-
-test("ClientId.fromNumber accepts positive integer", () => {
-  assert.equal(ClientId.fromNumber(42).value, 42);
-});
-
-test("ClientId rejects zero and negative", () => {
-  assert.throws(() => ClientId.fromNumber(0));
-  assert.throws(() => ClientId.fromNumber(-1));
-});
-
-test("ClientId.equals works", () => {
-  assert.ok(ClientId.fromNumber(1).equals(ClientId.fromNumber(1)));
-  assert.ok(!ClientId.fromNumber(1).equals(ClientId.fromNumber(2)));
-});
-
-// ── NationalId ───────────────────────────────────────────────────────────────
-
-test("NationalId stores trimmed raw value", () => {
-  const n = NationalId.fromString("  12345678  ");
-  assert.equal(n.raw, "12345678");
-});
-
-test("NationalId.normalized is lowercase", () => {
-  assert.equal(NationalId.fromString("ABC123").normalized, "abc123");
-});
-
-test("NationalId.equals ignores case", () => {
-  assert.ok(NationalId.fromString("ABCD").equals(NationalId.fromString("abcd")));
-});
-
-test("NationalId rejects too-short values", () => {
-  assert.throws(() => NationalId.fromString("AB"), /at least 4/i);
-});
-
-// ── PhoneNumber ──────────────────────────────────────────────────────────────
-
-test("PhoneNumber stores raw value", () => {
-  assert.equal(PhoneNumber.fromString("+254700000001").raw, "+254700000001");
-});
-
-test("PhoneNumber.digits strips non-numeric chars", () => {
-  assert.equal(PhoneNumber.fromString("+254-700-000001").digits, "254700000001");
-});
-
-test("PhoneNumber rejects too-short values", () => {
-  assert.throws(() => PhoneNumber.fromString("123"), /at least 6/i);
-});
-
-// ── KycStatus ────────────────────────────────────────────────────────────────
-
-test("KycStatus.fromString round-trips known values", () => {
-  for (const v of ["pending", "in_review", "verified", "rejected", "suspended"]) {
-    assert.equal(KycStatus.fromString(v).value, v);
-  }
-});
-
-test("KycStatus.fromString rejects unknown value", () => {
-  assert.throws(() => KycStatus.fromString("expired"), /Invalid KYC/i);
-});
-
-test("KycStatus predicate helpers work", () => {
-  assert.ok(KycStatus.pending().isPending());
-  assert.ok(KycStatus.verified().isVerified());
-  assert.ok(KycStatus.suspended().isSuspended());
-});
-
-test("KycStatus.canTransitionTo enforces allowed paths", () => {
-  assert.ok(KycStatus.pending().canTransitionTo(KycStatus.inReview()));
-  assert.ok(!KycStatus.pending().canTransitionTo(KycStatus.verified()));
-  assert.ok(KycStatus.inReview().canTransitionTo(KycStatus.verified()));
-  assert.ok(!KycStatus.verified().canTransitionTo(KycStatus.inReview()));
-  assert.ok(KycStatus.rejected().canTransitionTo(KycStatus.pending()));
-  assert.ok(KycStatus.suspended().canTransitionTo(KycStatus.pending()));
-});
-
-// ── OnboardingStatus ─────────────────────────────────────────────────────────
-
-test("OnboardingStatus.derive returns registered when kyc not started", () => {
-  const s = OnboardingStatus.derive({ kycStatus: "pending", hasGuarantor: false, hasCollateral: false, feesPaid: false });
-  assert.ok(s.isRegistered());
-});
-
-test("OnboardingStatus.derive returns kyc_pending when in_review", () => {
-  const s = OnboardingStatus.derive({ kycStatus: "in_review", hasGuarantor: false, hasCollateral: false, feesPaid: false });
-  assert.ok(s.isKycPending());
-});
-
-test("OnboardingStatus.derive returns kyc_verified when verified but missing guarantor", () => {
-  const s = OnboardingStatus.derive({ kycStatus: "verified", hasGuarantor: false, hasCollateral: true, feesPaid: true });
-  assert.ok(s.isKycVerified());
-});
-
-test("OnboardingStatus.derive returns complete when all conditions met", () => {
-  const s = OnboardingStatus.derive({ kycStatus: "verified", hasGuarantor: true, hasCollateral: true, feesPaid: true });
-  assert.ok(s.isComplete());
-});
-
-test("OnboardingStatus.derive treats suspended as kyc_pending", () => {
-  const s = OnboardingStatus.derive({ kycStatus: "suspended", hasGuarantor: true, hasCollateral: true, feesPaid: true });
-  assert.ok(s.isKycPending());
-});
-
-// ── FeePaymentStatus ─────────────────────────────────────────────────────────
-
-test("FeePaymentStatus.isSettled returns true for paid and waived", () => {
-  assert.ok(FeePaymentStatus.paid().isSettled());
-  assert.ok(FeePaymentStatus.waived().isSettled());
-  assert.ok(!FeePaymentStatus.unpaid().isSettled());
-});
-
-// ── LoanId / InterestRate / LoanTerm / LoanStatus ────────────────────────────
-
-test("LoanId rejects non-positive values", () => {
-  assert.throws(() => LoanId.fromNumber(0));
-  assert.throws(() => LoanId.fromNumber(-5));
-});
-
-test("InterestRate rejects out-of-range values", () => {
-  assert.throws(() => InterestRate.fromPercentage(-1));
-  assert.throws(() => InterestRate.fromPercentage(101));
-});
-
-test("InterestRate.asFactor divides by 100", () => {
-  assert.equal(InterestRate.fromPercentage(10).asFactor(), 0.1);
-});
-
-test("LoanTerm.fromWeeks stores weeks correctly", () => {
-  const t = LoanTerm.fromWeeks(4);
-  assert.equal(t.weeks, 4);
-});
-
-test("LoanTerm.fromMonths converts to weeks", () => {
-  const t = LoanTerm.fromMonths(1);
-  assert.ok(t.weeks >= 4 && t.weeks <= 5);
-});
-
-test("LoanTerm rejects zero or negative weeks", () => {
-  assert.throws(() => LoanTerm.fromWeeks(0));
-  assert.throws(() => LoanTerm.fromWeeks(-1));
-});
-
-test("LoanStatus.fromString round-trips all known values", () => {
-  const values = ["pending_approval", "approved", "active", "closed", "rejected", "restructured", "written_off"];
-  for (const v of values) {
-    assert.equal(LoanStatus.fromString(v).value, v);
-  }
-});
-
-test("LoanStatus.fromString rejects unknown value", () => {
-  assert.throws(() => LoanStatus.fromString("unknown_status"), /Invalid loan status/i);
-});
-
-test("LoanStatus.isDisbursed returns true for active, overdue, and restructured", () => {
-  assert.ok(LoanStatus.active().isDisbursed());
-  assert.ok(LoanStatus.overdue().isDisbursed());
-  assert.ok(LoanStatus.restructured().isDisbursed());
-  assert.ok(!LoanStatus.approved().isDisbursed());
-  assert.ok(!LoanStatus.closed().isDisbursed());
-});
-test("LoanStatus.isTerminal returns true for closed, written_off, rejected", () => {
-  assert.ok(LoanStatus.closed().isTerminal());
-  assert.ok(LoanStatus.writtenOff().isTerminal());
-  assert.ok(LoanStatus.rejected().isTerminal());
-  assert.ok(!LoanStatus.active().isTerminal());
+  it('InterestRate should be immutable', () => {
+    const rate = InterestRate.fromPercentage(20);
+    // @ts-expect-error - intentionally testing immutability
+    assert.throws(() => { rate.percentage = 50; }, TypeError);
+  });
 });

@@ -119,15 +119,15 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
     {
       id: "operations-loans-due",
       label: "Loans Due Report",
-      description: "Legacy Cemes loans-due export for unpaid installments on loans with scheduled dues inside the selected period.",
+      description: "Loans-due export for unpaid installments on loans with scheduled dues inside the selected period.",
       category: "operations",
       endpoint: "/api/reports/dues",
       allowedRoles: reportRoles,
     },
     {
       id: "operations-disbursement",
-      label: "Disbursment Report",
-      description: "Legacy Cemes disbursment export for loans disbursed in the period with branch, product, officer, and new-versus-repeat borrower classification.",
+      label: "Disbursement Report",
+      description: "Disbursement export for loans disbursed in the period with branch, product, officer, and new-versus-repeat borrower classification.",
       category: "operations",
       endpoint: "/api/reports/disbursements",
       allowedRoles: reportRoles,
@@ -183,7 +183,7 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
     {
       id: "operations-red-flag",
       label: "Arrears Report",
-      description: "Legacy Cemes arrears export for overdue borrowers with maturity, guarantees, and aging indicators for intervention.",
+      description: "Arrears export for overdue borrowers with maturity, guarantees, and aging indicators for intervention.",
       category: "operations",
       endpoint: "/api/reports/arrears",
       allowedRoles: reportRoles,
@@ -199,7 +199,7 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
     {
       id: "risk-arrears",
       label: "Arrears Report",
-      description: "Legacy Cemes arrears export for all overdue loans as of the selected report snapshot date.",
+      description: "Arrears export for all overdue loans as of the selected report snapshot date.",
       category: "risk",
       endpoint: "/api/reports/arrears",
       allowedRoles: reportRoles,
@@ -231,7 +231,7 @@ function registerReportRoutes(app: RouteRegistrar, deps: ReportRouteDeps) {
     {
       id: "collections-dues",
       label: "Loans Due Report",
-      description: "Legacy Cemes loans-due export for installments due in the selected window, including current arrears exposure.",
+      description: "Loans-due export for installments due in the selected window, including current arrears exposure.",
       category: "collections",
       endpoint: "/api/reports/dues",
       allowedRoles: reportRoles,

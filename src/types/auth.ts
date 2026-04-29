@@ -10,6 +10,8 @@ export interface AuthTokenUser {
   token_version?: number | null;
   branch_id?: number | null;
   primary_region_id?: number | null;
+  tenantId?: string | null;
+  tenant_id?: string | null;
 }
 
 export interface AuthSessionUser {
@@ -22,6 +24,7 @@ export interface AuthSessionUser {
   tokenVersion: number;
   branchId: number | null;
   primaryRegionId: number | null;
+  tenantId?: string | null;
   scope?: {
     branchId: number | null;
     primaryRegionId: number | null;
@@ -40,6 +43,7 @@ export interface AuthUserRow {
   token_version: number | null;
   branch_id: number | null;
   primary_region_id: number | null;
+  cached_at_ms?: number | null;
   [key: string]: unknown;
 }
 
@@ -55,6 +59,7 @@ export interface JwtLikePayload {
   fullName?: string;
   branchId?: number | string | null;
   primaryRegionId?: number | string | null;
+  tenantId?: string | null;
   scope?: {
     branchId?: number | string | null;
     primaryRegionId?: number | string | null;
@@ -81,6 +86,8 @@ export interface AuthenticatedRequest extends Request {
   requestId?: string;
   /** IP resolved by proxy-aware middleware */
   clientIp?: string;
+  /** Injected by tenantContext middleware */
+  tenantId?: string | null;
 }
 
 /**

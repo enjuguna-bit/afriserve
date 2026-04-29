@@ -4,8 +4,11 @@ import { deriveRequestCategory, runWithRequestScope } from "../observability/req
 
 function requestContext(req: RequestLike, res: ResponseLike, next: NextFunctionLike) {
   const incoming = req.headers?.["x-request-id"];
-  const requestId = typeof incoming === "string" && incoming.trim()
-    ? incoming.trim()
+  // Validate: must be a non-empty string of ≤128 safe characters.
+  // Rejects oversized or structurally suspicious values to prevent log injection.
+  const incomingStr = typeof incoming === "string" ? incoming.trim() : "";
+  const requestId = (incomingStr.length > 0 && incomingStr.length <= 128 && /^[\w.:-]+$/.test(incomingStr))
+    ? incomingStr
     : crypto.randomUUID();
 
   req.requestId = requestId;

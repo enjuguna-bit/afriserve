@@ -1,19 +1,31 @@
-import type { ErrorHandlerOptions, HttpStatusErrorLike } from "../types/runtime.js";
+import type { NextFunction, Request, Response } from "express";
+import type {
+  ErrorHandlerOptions,
+  HttpStatusErrorLike,
+} from "../types/runtime.js";
 import { getDomainErrorHttpStatus } from "../domain/errors.js";
+import { recordExceptionOnActiveSpan } from "../observability/tracing.js";
+
+type RequestWithContext = Request & {
+  requestId?: string | null;
+  traceId?: string | null;
+  tenantId?: string | null;
+};
 
 function createErrorHandler({ ZodError, logger = null, metrics = null, errorTracker = null }: ErrorHandlerOptions) {
   /**
    * @param {unknown} error
-   * @param {any} _req
-   * @param {any} res
-   * @param {(error?: any) => void} _next
+   * @param {RequestWithContext} _req
+   * @param {Response} res
+   * @param {NextFunction} _next
    */
-  return (error: unknown, _req: any, res: any, _next: (error?: any) => void) => {
+  return (error: unknown, _req: RequestWithContext, res: Response, _next: NextFunction) => {
     const isProduction = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
     const typedError = error as HttpStatusErrorLike;
     const requestId = _req.requestId || null;
     const logContext = {
       requestId,
+      traceId: _req.traceId || null,
       method: _req.method,
       route: _req.path || _req.originalUrl || "unknown",
       ipAddress: _req.ip,
@@ -113,6 +125,12 @@ function createErrorHandler({ ZodError, logger = null, metrics = null, errorTrac
           statusCode,
         });
       }
+      if (statusCode >= 500) {
+        recordExceptionOnActiveSpan(error, {
+          "app.request_id": requestId,
+          "http.response.status_code": statusCode,
+        });
+      }
       res.status(statusCode).json({
         message,
         requestId,
@@ -135,6 +153,10 @@ function createErrorHandler({ ZodError, logger = null, metrics = null, errorTrac
         statusCode: 500,
       });
     }
+    recordExceptionOnActiveSpan(error, {
+      "app.request_id": requestId,
+      "http.response.status_code": 500,
+    });
 
     const rawMessage = error instanceof Error && error.message.trim()
       ? error.message

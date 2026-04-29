@@ -10,6 +10,7 @@ import { useCommandMenuStore } from '../../store/commandMenuStore'
 import { useDashboardStore } from '../../store/dashboardStore'
 import { useUiStore } from '../../store/uiStore'
 import { useToastStore } from '../../store/toastStore'
+import { formatDisplayDateTime } from '../../utils/dateFormatting'
 import { TenantSwitcher } from './TenantSwitcher'
 import styles from './Header.module.css'
 
@@ -168,7 +169,7 @@ export function Header() {
                     {notifications.map((item) => (
                       <li key={item.id} className={styles.notificationItem}>
                         <div className={styles.notificationMessage}>{item.message}</div>
-                        <div className={styles.notificationMeta}>{new Date(item.createdAt).toLocaleString()}</div>
+                        <div className={styles.notificationMeta}>{formatDisplayDateTime(item.createdAt)}</div>
                       </li>
                     ))}
                   </ul>

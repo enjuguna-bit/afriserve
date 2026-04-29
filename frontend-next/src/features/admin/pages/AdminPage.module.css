@@ -202,3 +202,9 @@
 .muted {
   color: var(--text-muted);
 }
+
+.detailText {
+  margin-top: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

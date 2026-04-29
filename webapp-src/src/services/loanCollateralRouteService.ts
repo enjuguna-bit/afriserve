@@ -1,6 +1,14 @@
 import { parsePaginationQuery, createPagedResponse } from "../utils/http.js";
 import type { RouteRegistrar } from "../types/routeDeps.js";
 import { createLoanCollateralReadRepository } from "../repositories/loanCollateralReadRepository.js";
+import { createLoanUnderwritingService } from "./loanUnderwritingService.js";
+import {
+  checkGuarantorNationalIdUnique,
+  checkCollateralAssetUnique,
+  refreshAssessmentsForLoan,
+  refreshAssessmentsForGuarantor,
+  refreshAssessmentsForCollateral,
+} from "./stakeholderService.js";
 
 const collateralAssetTypes = ["chattel", "vehicle", "land", "equipment", "machinery", "inventory", "livestock", "savings"] as const;
 
@@ -10,7 +18,9 @@ type LoanCollateralRouteOptions = {
   authorize: (...roles: string[]) => (...args: any[]) => any;
   parseId: (value: unknown) => number | null;
   createGuarantorSchema: { parse: (value: unknown) => any };
+  updateGuarantorSchema: { parse: (value: unknown) => any };
   createCollateralAssetSchema: { parse: (value: unknown) => any };
+  updateCollateralAssetSchema: { parse: (value: unknown) => any };
   linkLoanGuarantorSchema: { parse: (value: unknown) => any };
   linkLoanCollateralSchema: { parse: (value: unknown) => any };
   resolveRiskRecordBranchId: (user: Record<string, any>, requestedBranchId: number | null | undefined) => Promise<number>;
@@ -31,7 +41,9 @@ function registerLoanCollateralRoutes(options: LoanCollateralRouteOptions) {
     authorize,
     parseId,
     createGuarantorSchema,
+    updateGuarantorSchema,
     createCollateralAssetSchema,
+    updateCollateralAssetSchema,
     linkLoanGuarantorSchema,
     linkLoanCollateralSchema,
     resolveRiskRecordBranchId,
@@ -45,25 +57,34 @@ function registerLoanCollateralRoutes(options: LoanCollateralRouteOptions) {
     collateralViewRoles,
   } = options;
   const loanCollateralReadRepository = createLoanCollateralReadRepository({ all, get });
+  const loanUnderwritingService = createLoanUnderwritingService({ get, run });
 
   app.post("/api/guarantors", authenticate, authorize(...collateralManageRoles), async (req, res, next) => {
     try {
       const payload = createGuarantorSchema.parse(req.body || {});
-      const branchId = await resolveRiskRecordBranchId(req.user, payload.branchId || null);
 
-      if (payload.nationalId) {
-        const existingGuarantor = await get(
-          `
-            SELECT id
-            FROM guarantors
-            WHERE LOWER(TRIM(COALESCE(national_id, ''))) = LOWER(TRIM(?))
-          `,
-          [payload.nationalId],
-        );
-        if (existingGuarantor) {
-          res.status(409).json({ message: "A guarantor with this national ID already exists" });
-          return;
-        }
+      // Critical: guarantors must be owned by a client.
+      const clientId = parseId(payload.clientId);
+      if (!clientId) {
+        res.status(400).json({ message: "clientId is required" });
+        return;
+      }
+      const client = await get("SELECT id, branch_id FROM clients WHERE id = ? AND deleted_at IS NULL", [clientId]);
+      if (!client) {
+        res.status(404).json({ message: "Client not found" });
+        return;
+      }
+      const scope = await hierarchyService.resolveHierarchyScope(req.user);
+      if (!hierarchyService.isBranchInScope(scope, client.branch_id)) {
+        res.status(403).json({ message: "Forbidden: client is outside your scope" });
+        return;
+      }
+
+      const branchId = await resolveRiskRecordBranchId(req.user, payload.branchId || client.branch_id || null);
+
+      if (!(await checkGuarantorNationalIdUnique(get, payload.nationalId || null))) {
+        res.status(409).json({ message: "A guarantor with this national ID already exists" });
+        return;
       }
 
       const insertResult = await run(
@@ -77,11 +98,12 @@ function registerLoanCollateralRoutes(options: LoanCollateralRouteOptions) {
             employer_name,
             monthly_income,
             guarantee_amount,
+            client_id,
             branch_id,
             created_by_user_id,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
         `,
         [
           payload.fullName,
@@ -92,6 +114,7 @@ function registerLoanCollateralRoutes(options: LoanCollateralRouteOptions) {
           payload.employerName || null,
           payload.monthlyIncome || 0,
           payload.guaranteeAmount || 0,
+          clientId,
           branchId,
           req.user.sub,
         ],
@@ -103,10 +126,7 @@ function registerLoanCollateralRoutes(options: LoanCollateralRouteOptions) {
         action: "guarantor.created",
         targetType: "guarantor",
         targetId: Number(insertResult.lastID),
-        details: JSON.stringify({
-          fullName: payload.fullName,
-          branchId,
-        }),
+        details: JSON.stringify({ fullName: payload.fullName, clientId, branchId }),
         ipAddress: req.ip,
       });
 
@@ -114,6 +134,101 @@ function registerLoanCollateralRoutes(options: LoanCollateralRouteOptions) {
     } catch (error) {
       next(error);
     }
+  });
+
+  app.get("/api/guarantors/:id", authenticate, authorize(...collateralViewRoles), async (req, res, next) => {
+    try {
+      const guarantorId = parseId(req.params.id);
+      if (!guarantorId) { res.status(400).json({ message: "Invalid guarantor id" }); return; }
+      const scope = await hierarchyService.resolveHierarchyScope(req.user);
+      const guarantor = await get(
+        `SELECT g.*, b.name AS branch_name FROM guarantors g LEFT JOIN branches b ON b.id = g.branch_id WHERE g.id = ?`,
+        [guarantorId],
+      );
+      if (!guarantor || !hierarchyService.isBranchInScope(scope, guarantor.branch_id)) {
+        res.status(404).json({ message: "Guarantor not found" }); return;
+      }
+      res.status(200).json(guarantor);
+    } catch (error) { next(error); }
+  });
+
+  app.patch("/api/guarantors/:id", authenticate, authorize(...collateralManageRoles), async (req, res, next) => {
+    try {
+      const guarantorId = parseId(req.params.id);
+      if (!guarantorId) { res.status(400).json({ message: "Invalid guarantor id" }); return; }
+      const scope = await hierarchyService.resolveHierarchyScope(req.user);
+      const guarantor = await get("SELECT * FROM guarantors WHERE id = ?", [guarantorId]);
+      if (!guarantor || !hierarchyService.isBranchInScope(scope, guarantor.branch_id)) {
+        res.status(404).json({ message: "Guarantor not found" }); return;
+      }
+      const payload = updateGuarantorSchema.parse(req.body || {});
+      const setClauses: string[] = [];
+      const params: unknown[] = [];
+      const changed: Record<string, unknown> = {};
+      function maybeSet(col: string, key: string, val: unknown) {
+        const cur = (guarantor as any)[col];
+        const next = val == null ? null : val;
+        if (next !== (cur == null ? null : cur)) {
+          setClauses.push(`${col} = ?`); params.push(next ?? null); changed[key] = next;
+        }
+      }
+      if (payload.fullName != null && payload.fullName !== guarantor.full_name) {
+        setClauses.push("full_name = ?"); params.push(payload.fullName); changed.fullName = payload.fullName;
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, "phone")) maybeSet("phone", "phone", payload.phone);
+      if (Object.prototype.hasOwnProperty.call(payload, "physicalAddress")) maybeSet("physical_address", "physicalAddress", payload.physicalAddress);
+      if (Object.prototype.hasOwnProperty.call(payload, "occupation")) maybeSet("occupation", "occupation", payload.occupation);
+      if (Object.prototype.hasOwnProperty.call(payload, "employerName")) maybeSet("employer_name", "employerName", payload.employerName);
+      if (Object.prototype.hasOwnProperty.call(payload, "monthlyIncome")) maybeSet("monthly_income", "monthlyIncome", payload.monthlyIncome);
+      if (Object.prototype.hasOwnProperty.call(payload, "guaranteeAmount")) maybeSet("guarantee_amount", "guaranteeAmount", payload.guaranteeAmount);
+      if (Object.prototype.hasOwnProperty.call(payload, "nationalId")) {
+        const next = payload.nationalId || null;
+        if (next !== (guarantor.national_id || null)) {
+          if (!(await checkGuarantorNationalIdUnique(get, next, guarantorId))) {
+            res.status(409).json({ message: "A guarantor with this national ID already exists" }); return;
+          }
+          setClauses.push("national_id = ?"); params.push(next); changed.nationalId = next;
+        }
+      }
+      if (setClauses.length === 0) { res.status(200).json({ message: "No changes", guarantor }); return; }
+      await run(
+        `UPDATE guarantors SET ${setClauses.join(", ")}, updated_at = datetime('now') WHERE id = ?`,
+        [...params, guarantorId],
+      );
+      const updated = await get("SELECT * FROM guarantors WHERE id = ?", [guarantorId]);
+      await refreshAssessmentsForGuarantor(all, loanUnderwritingService, guarantorId);
+      await writeAuditLog({
+        userId: req.user.sub, action: "guarantor.updated",
+        targetType: "guarantor", targetId: guarantorId,
+        details: JSON.stringify(changed), ipAddress: req.ip,
+      });
+      res.status(200).json({ message: "Guarantor updated", guarantor: updated });
+    } catch (error) { next(error); }
+  });
+
+  app.delete("/api/guarantors/:id", authenticate, authorize(...collateralManageRoles), async (req, res, next) => {
+    try {
+      const guarantorId = parseId(req.params.id);
+      if (!guarantorId) { res.status(400).json({ message: "Invalid guarantor id" }); return; }
+      const scope = await hierarchyService.resolveHierarchyScope(req.user);
+      const guarantor = await get("SELECT * FROM guarantors WHERE id = ?", [guarantorId]);
+      if (!guarantor || !hierarchyService.isBranchInScope(scope, guarantor.branch_id)) {
+        res.status(404).json({ message: "Guarantor not found" }); return;
+      }
+      const linkedLoans = await all(
+        "SELECT loan_id FROM loan_guarantors WHERE guarantor_id = ? LIMIT 1", [guarantorId],
+      );
+      if (linkedLoans.length > 0) {
+        res.status(409).json({ message: "Cannot delete guarantor linked to active loans. Unlink from loans first." }); return;
+      }
+      await run("DELETE FROM guarantors WHERE id = ?", [guarantorId]);
+      await writeAuditLog({
+        userId: req.user.sub, action: "guarantor.deleted",
+        targetType: "guarantor", targetId: guarantorId,
+        details: JSON.stringify({ fullName: guarantor.full_name }), ipAddress: req.ip,
+      });
+      res.status(200).json({ message: "Guarantor deleted" });
+    } catch (error) { next(error); }
   });
 
   app.get("/api/guarantors", authenticate, authorize(...collateralViewRoles), async (req, res, next) => {
@@ -153,49 +268,31 @@ function registerLoanCollateralRoutes(options: LoanCollateralRouteOptions) {
   app.post("/api/collateral-assets", authenticate, authorize(...collateralManageRoles), async (req, res, next) => {
     try {
       const payload = createCollateralAssetSchema.parse(req.body || {});
-      const branchId = await resolveRiskRecordBranchId(req.user, payload.branchId || null);
 
-      if (payload.registrationNumber) {
-        const existingByReg = await get(
-          `
-            SELECT id
-            FROM collateral_assets
-            WHERE LOWER(TRIM(COALESCE(registration_number, ''))) = LOWER(TRIM(?))
-          `,
-          [payload.registrationNumber],
-        );
-        if (existingByReg) {
-          res.status(409).json({ message: "A collateral asset with this registration number already exists" });
-          return;
-        }
+      // Critical: collateral assets must be owned by a client.
+      const clientId = parseId(payload.clientId);
+      if (!clientId) {
+        res.status(400).json({ message: "clientId is required" });
+        return;
       }
-      if (payload.logbookNumber) {
-        const existingByLogbook = await get(
-          `
-            SELECT id
-            FROM collateral_assets
-            WHERE LOWER(TRIM(COALESCE(logbook_number, ''))) = LOWER(TRIM(?))
-          `,
-          [payload.logbookNumber],
-        );
-        if (existingByLogbook) {
-          res.status(409).json({ message: "A collateral asset with this logbook number already exists" });
-          return;
-        }
+      const client = await get("SELECT id, branch_id FROM clients WHERE id = ? AND deleted_at IS NULL", [clientId]);
+      if (!client) {
+        res.status(404).json({ message: "Client not found" }); return;
       }
-      if (payload.titleNumber) {
-        const existingByTitle = await get(
-          `
-            SELECT id
-            FROM collateral_assets
-            WHERE LOWER(TRIM(COALESCE(title_number, ''))) = LOWER(TRIM(?))
-          `,
-          [payload.titleNumber],
-        );
-        if (existingByTitle) {
-          res.status(409).json({ message: "A collateral asset with this title number already exists" });
-          return;
-        }
+      const scopeCA = await hierarchyService.resolveHierarchyScope(req.user);
+      if (!hierarchyService.isBranchInScope(scopeCA, client.branch_id)) {
+        res.status(403).json({ message: "Forbidden: client is outside your scope" }); return;
+      }
+
+      const branchId = await resolveRiskRecordBranchId(req.user, payload.branchId || client.branch_id || null);
+
+      const caConflict = await checkCollateralAssetUnique(get, {
+        registrationNumber: payload.registrationNumber || null,
+        logbookNumber: payload.logbookNumber || null,
+        titleNumber: payload.titleNumber || null,
+      });
+      if (caConflict) {
+        res.status(409).json({ message: caConflict.message }); return;
       }
 
       const insertResult = await run(

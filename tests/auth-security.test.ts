@@ -68,6 +68,227 @@ test("email normalization is enforced and login is case-insensitive", async () =
   }
 });
 
+test("cached privileged sessions refresh authorization state before admin-only actions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "afriserve-auth-refresh-"));
+  const dbPath = path.join(tempRoot, "auth-refresh.db");
+  const { baseUrl, stop } = await startServer({
+    envOverrides: {
+      DB_PATH: dbPath,
+      NODE_ENV: "test",
+    },
+  });
+
+  try {
+    const login = await api(baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: {
+        email: "admin@afriserve.local",
+        password: "Admin@123",
+      },
+    });
+    assert.equal(login.status, 200);
+    const adminToken = login.data.token;
+
+    const meBeforeRoleChange = await api(baseUrl, "/api/auth/me", {
+      token: adminToken,
+    });
+    assert.equal(meBeforeRoleChange.status, 200);
+    assert.equal(Array.isArray(meBeforeRoleChange.data.roles), true);
+    assert.equal(meBeforeRoleChange.data.roles.includes("admin"), true);
+
+    const db = new Database(dbPath);
+    try {
+      const adminRow = db
+        .prepare("SELECT id FROM users WHERE LOWER(email) = ? LIMIT 1")
+        .get("admin@afriserve.local") as { id: number } | undefined;
+      assert.ok(adminRow?.id);
+
+      db.prepare("UPDATE users SET role = ? WHERE id = ?").run("cashier", adminRow.id);
+      db.prepare("DELETE FROM user_roles WHERE user_id = ?").run(adminRow.id);
+    } finally {
+      db.close();
+    }
+
+    const meAfterRoleChange = await api(baseUrl, "/api/auth/me", {
+      token: adminToken,
+    });
+    assert.equal(meAfterRoleChange.status, 200);
+    assert.deepEqual(meAfterRoleChange.data.roles, ["cashier"]);
+
+    const createUserAfterDemotion = await api(baseUrl, "/api/users", {
+      method: "POST",
+      token: adminToken,
+      body: {
+        fullName: "Should Be Rejected",
+        email: "should.be.rejected@example.com",
+        password: "Password@123",
+        role: "cashier",
+      },
+    });
+    assert.equal(createUserAfterDemotion.status, 403);
+  } finally {
+    await stop();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("privileged users can authenticate and refresh across tenant-switched sessions", async () => {
+  const { baseUrl, stop } = await startServer();
+
+  try {
+    const login = await api(baseUrl, "/api/auth/login", {
+      method: "POST",
+      headers: {
+        "X-Tenant-ID": "tenant_b",
+      },
+      body: {
+        email: "admin@afriserve.local",
+        password: "Admin@123",
+      },
+    });
+    assert.equal(login.status, 200);
+    assert.equal(login.data.user.role, "admin");
+
+    const me = await api(baseUrl, "/api/auth/me", {
+      token: login.data.token,
+      headers: {
+        "X-Tenant-ID": "tenant_b",
+      },
+    });
+    assert.equal(me.status, 200);
+    assert.equal(me.data.role, "admin");
+
+    const refresh = await api(baseUrl, "/api/auth/refresh", {
+      method: "POST",
+      headers: {
+        "X-Tenant-ID": "tenant_b",
+      },
+      body: {
+        token: login.data.refreshToken,
+      },
+    });
+    assert.equal(refresh.status, 200);
+    assert.equal(typeof refresh.data.token, "string");
+  } finally {
+    await stop();
+  }
+});
+
+test("non-privileged users cannot authenticate through privileged tenant fallback", async () => {
+  const { baseUrl, stop } = await startServer();
+
+  try {
+    const adminToken = await loginAsAdmin(baseUrl);
+    const createUser = await api(baseUrl, "/api/users", {
+      method: "POST",
+      token: adminToken,
+      body: {
+        fullName: "Tenant Scoped Cashier",
+        email: "tenant.scoped.cashier@example.com",
+        password: "Password@123",
+        role: "cashier",
+      },
+    });
+    assert.equal(createUser.status, 201);
+
+    const crossTenantLogin = await api(baseUrl, "/api/auth/login", {
+      method: "POST",
+      headers: {
+        "X-Tenant-ID": "tenant_b",
+      },
+      body: {
+        email: "tenant.scoped.cashier@example.com",
+        password: "Password@123",
+      },
+    });
+    assert.equal(crossTenantLogin.status, 401);
+  } finally {
+    await stop();
+  }
+});
+
+test("user administration routes do not cross tenant boundaries by raw user id", async () => {
+  const { baseUrl, stop } = await startServer();
+
+  try {
+    const adminToken = await loginAsAdmin(baseUrl);
+    const tenantBCreateUser = await api(baseUrl, "/api/users", {
+      method: "POST",
+      token: adminToken,
+      headers: {
+        "X-Tenant-ID": "tenant_b",
+      },
+      body: {
+        fullName: "Tenant B Executive",
+        email: "tenantb.executive@example.com",
+        password: "Password@123",
+        role: "ceo",
+      },
+    });
+    assert.equal(tenantBCreateUser.status, 201);
+    const tenantBUserId = Number(tenantBCreateUser.data.id);
+    assert.ok(tenantBUserId > 0);
+
+    const crossTenantRead = await api(baseUrl, `/api/users/${tenantBUserId}`, {
+      token: adminToken,
+    });
+    assert.equal(crossTenantRead.status, 404);
+
+    const crossTenantDeactivate = await api(baseUrl, `/api/users/${tenantBUserId}/deactivate`, {
+      method: "POST",
+      token: adminToken,
+    });
+    assert.equal(crossTenantDeactivate.status, 404);
+
+    const tenantBRead = await api(baseUrl, `/api/users/${tenantBUserId}`, {
+      token: adminToken,
+      headers: {
+        "X-Tenant-ID": "tenant_b",
+      },
+    });
+    assert.equal(tenantBRead.status, 200);
+    assert.equal(Number(tenantBRead.data?.is_active || 0), 1);
+  } finally {
+    await stop();
+  }
+});
+
+test("default admin seeding can be disabled for empty databases", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "afriserve-no-default-admin-"));
+  const dbPath = path.join(tempRoot, "no-default-admin.db");
+  const { baseUrl, stop } = await startServer({
+    envOverrides: {
+      DB_PATH: dbPath,
+      NODE_ENV: "test",
+      SEED_DEFAULT_ADMIN_ON_EMPTY_DB: "false",
+    },
+  });
+
+  try {
+    const login = await api(baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: {
+        email: "admin@afriserve.local",
+        password: "Admin@123",
+      },
+    });
+    assert.equal(login.status, 401);
+
+    const db = new Database(dbPath);
+    try {
+      const users = db
+        .prepare("SELECT COUNT(*) AS total FROM users")
+        .get() as { total: number };
+      assert.equal(Number(users.total || 0), 0);
+    } finally {
+      db.close();
+    }
+  } finally {
+    await stop();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("changing password revokes existing token sessions", async () => {
   const { baseUrl, stop } = await startServer();
 
@@ -195,6 +416,135 @@ test("deactivating a user immediately invalidates existing token", async () => {
       token: targetToken,
     });
     assert.equal(meAfterDeactivate.status, 401);
+  } finally {
+    await stop();
+  }
+});
+
+test("admin can reset a user's password directly and invalidate existing sessions", async () => {
+  const { baseUrl, stop } = await startServer();
+
+  try {
+    const adminLogin = await api(baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: {
+        email: "admin@afriserve.local",
+        password: "Admin@123",
+      },
+    });
+    assert.equal(adminLogin.status, 200);
+    const adminToken = adminLogin.data.token;
+
+    const createUser = await api(baseUrl, "/api/users", {
+      method: "POST",
+      token: adminToken,
+      body: {
+        fullName: "Password Reset Target",
+        email: "password.reset.target@example.com",
+        password: "Password@123",
+        role: "cashier",
+      },
+    });
+    assert.equal(createUser.status, 201);
+    const targetUserId = createUser.data.id;
+
+    const targetLogin = await api(baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: {
+        email: "password.reset.target@example.com",
+        password: "Password@123",
+      },
+    });
+    assert.equal(targetLogin.status, 200);
+    const targetToken = targetLogin.data.token;
+
+    const resetPassword = await api(baseUrl, `/api/users/${targetUserId}/reset-password`, {
+      method: "POST",
+      token: adminToken,
+      body: {
+        newPassword: "ResetPass@456",
+      },
+    });
+    assert.equal(resetPassword.status, 200);
+
+    const meWithOldToken = await api(baseUrl, "/api/auth/me", {
+      token: targetToken,
+    });
+    assert.equal(meWithOldToken.status, 401);
+
+    const oldPasswordLogin = await api(baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: {
+        email: "password.reset.target@example.com",
+        password: "Password@123",
+      },
+    });
+    assert.equal(oldPasswordLogin.status, 401);
+
+    const newPasswordLogin = await api(baseUrl, "/api/auth/login", {
+      method: "POST",
+      body: {
+        email: "password.reset.target@example.com",
+        password: "ResetPass@456",
+      },
+    });
+    assert.equal(newPasswordLogin.status, 200);
+  } finally {
+    await stop();
+  }
+});
+
+test("password reset requests store tenant-scoped reset rows for non-default tenants", async () => {
+  const { baseUrl, stop, dbFilePath } = await startServer();
+  const tenantEmail = `tenant.reset.${Date.now()}@example.com`;
+
+  try {
+    const adminToken = await loginAsAdmin(baseUrl);
+
+    const tenantBUser = await api(baseUrl, "/api/users", {
+      method: "POST",
+      token: adminToken,
+      headers: {
+        "X-Tenant-ID": "tenant_b",
+      },
+      body: {
+        fullName: "Tenant B Reset User",
+        email: tenantEmail,
+        password: "Password@123",
+        role: "ceo",
+      },
+    });
+    assert.equal(tenantBUser.status, 201);
+    const tenantBUserId = Number(tenantBUser.data.id);
+    assert.ok(tenantBUserId > 0);
+
+    const resetRequest = await api(baseUrl, "/api/auth/reset-password/request", {
+      method: "POST",
+      headers: {
+        "X-Tenant-ID": "tenant_b",
+      },
+      body: {
+        email: tenantEmail,
+      },
+    });
+    assert.equal(resetRequest.status, 200);
+
+    assert.ok(dbFilePath);
+    const database = new Database(dbFilePath, { readonly: true });
+    try {
+      const latestReset = database.prepare(`
+        SELECT tenant_id, user_id
+        FROM password_resets
+        ORDER BY id DESC
+        LIMIT 1
+      `).get() as { tenant_id: string; user_id: number } | undefined;
+
+      assert.ok(latestReset);
+      assert.equal(String(latestReset?.tenant_id || ""), "tenant_b");
+      assert.equal(Number(latestReset?.user_id || 0), tenantBUserId);
+    } finally {
+      database.close();
+    }
   } finally {
     await stop();
   }
@@ -1017,6 +1367,16 @@ test("client updates enforce role and scope while allowing profile corrections",
     });
     assert.equal(blockedManagerUpdate.status, 403);
 
+    const missingPiiReason = await api(baseUrl, `/api/clients/${clientId}`, {
+      method: "PATCH",
+      token: adminToken,
+      body: {
+        phone: null,
+        nationalId: "ID-CLIENT-002",
+      },
+    });
+    assert.equal(missingPiiReason.status, 400);
+
     const updateClient = await api(baseUrl, `/api/clients/${clientId}`, {
       method: "PATCH",
       token: adminToken,
@@ -1025,6 +1385,7 @@ test("client updates enforce role and scope while allowing profile corrections",
         phone: null,
         nationalId: "ID-CLIENT-002",
         isActive: false,
+        piiOverrideReason: "Customer presented new identity details during audited admin correction",
       },
     });
     assert.equal(updateClient.status, 200);
@@ -1106,6 +1467,7 @@ test("client updates enforce role and scope while allowing profile corrections",
       token: adminToken,
       body: {
         nationalId: "ID-CLIENT-002",
+        piiOverrideReason: "Attempting duplicate override to verify uniqueness guard",
       },
     });
     assert.equal(duplicateNationalIdOnUpdate.status, 409);
@@ -1610,7 +1972,9 @@ test("loan officers can only view and edit their own clients in the same branch"
     assert.ok(Array.isArray(branchesResult.data.data));
     assert.ok(branchesResult.data.data.length > 0);
     const sharedBranchId = Number(branchesResult.data.data[0].id);
+    const sharedBranchName = String(branchesResult.data.data[0].name || "");
     assert.ok(Number.isInteger(sharedBranchId) && sharedBranchId > 0);
+    assert.ok(sharedBranchName.length > 0);
 
     const createOfficerOne = await api(baseUrl, "/api/users", {
       method: "POST",
@@ -1624,6 +1988,8 @@ test("loan officers can only view and edit their own clients in the same branch"
       },
     });
     assert.equal(createOfficerOne.status, 201);
+    const officerOneUserId = Number(createOfficerOne.data?.id || createOfficerOne.data?.user?.id || 0);
+    assert.ok(officerOneUserId > 0);
 
     const createOfficerTwo = await api(baseUrl, "/api/users", {
       method: "POST",
@@ -1668,6 +2034,9 @@ test("loan officers can only view and edit their own clients in the same branch"
     });
     assert.equal(createClientByOfficerOne.status, 201);
     const clientId = Number(createClientByOfficerOne.data.id);
+    assert.equal(Number(createClientByOfficerOne.data.branch_id || 0), sharedBranchId);
+    assert.equal(Number(createClientByOfficerOne.data.officer_id || 0), officerOneUserId);
+    assert.equal(typeof createClientByOfficerOne.data.created_at, "string");
 
     const officerOneClientList = await api(baseUrl, "/api/clients", {
       token: officerOneToken,
@@ -1687,6 +2056,11 @@ test("loan officers can only view and edit their own clients in the same branch"
       token: officerOneToken,
     });
     assert.equal(officerOneClientDetail.status, 200);
+    assert.equal(Number(officerOneClientDetail.data.branch_id || 0), sharedBranchId);
+    assert.equal(String(officerOneClientDetail.data.branch_name || ""), sharedBranchName);
+    assert.equal(Number(officerOneClientDetail.data.assigned_officer_id || 0), officerOneUserId);
+    assert.equal(String(officerOneClientDetail.data.assigned_officer_name || ""), "Branch Officer One");
+    assert.equal(typeof officerOneClientDetail.data.created_at, "string");
 
     const officerTwoClientDetail = await api(baseUrl, `/api/clients/${clientId}`, {
       token: officerTwoToken,
@@ -2524,7 +2898,7 @@ test("portfolio report returns scoped branch and region breakdowns in one call",
   }
 });
 
-test("area manager branchCount supports create, role allocation, and scope updates", async () => {
+test("explicit branch assignment is required for multi-branch roles while branchCount validates scope size", async () => {
   const { baseUrl, stop } = await startServer();
 
   try {
@@ -2559,6 +2933,23 @@ test("area manager branchCount supports create, role allocation, and scope updat
     const targetRegionId = Number(targetRegionEntry[0]);
     const targetRegionBranchIds = targetRegionEntry[1];
 
+    const selectedRegionBranchIds = targetRegionBranchIds.slice(0, 2);
+    assert.equal(selectedRegionBranchIds.length, 2);
+
+    const createAreaManagerWithoutBranchIds = await api(baseUrl, "/api/users", {
+      method: "POST",
+      token: adminToken,
+      body: {
+        fullName: "Branch Count Missing Assignments",
+        email: "branch.count.missing.assignments@example.com",
+        password: "Password@123",
+        role: "area_manager",
+        primaryRegionId: targetRegionId,
+        branchCount: 2,
+      },
+    });
+    assert.equal(createAreaManagerWithoutBranchIds.status, 400);
+
     const createAreaManager = await api(baseUrl, "/api/users", {
       method: "POST",
       token: adminToken,
@@ -2568,13 +2959,14 @@ test("area manager branchCount supports create, role allocation, and scope updat
         password: "Password@123",
         role: "area_manager",
         primaryRegionId: targetRegionId,
+        branchIds: selectedRegionBranchIds,
         branchCount: 2,
       },
     });
     assert.equal(createAreaManager.status, 201);
     assert.equal(createAreaManager.data.assigned_branch_ids.length, 2);
     assert.ok(
-      createAreaManager.data.assigned_branch_ids.every((branchId) => targetRegionBranchIds.includes(Number(branchId))),
+      createAreaManager.data.assigned_branch_ids.every((branchId) => selectedRegionBranchIds.includes(Number(branchId))),
       "Expected created area manager branches to come from selected region",
     );
 
@@ -2612,6 +3004,7 @@ test("area manager branchCount supports create, role allocation, and scope updat
       body: {
         role: "area_manager",
         primaryRegionId: targetRegionId,
+        branchIds: selectedRegionBranchIds,
         branchCount: 2,
       },
     });
@@ -2623,13 +3016,14 @@ test("area manager branchCount supports create, role allocation, and scope updat
       token: adminToken,
       body: {
         primaryRegionId: targetRegionId,
+        branchIds: [selectedRegionBranchIds[0]],
         branchCount: 1,
       },
     });
     assert.equal(scopeToSingleBranch.status, 200);
     assert.equal(scopeToSingleBranch.data.user.assigned_branch_ids.length, 1);
     assert.ok(
-      targetRegionBranchIds.includes(Number(scopeToSingleBranch.data.user.assigned_branch_ids[0])),
+      selectedRegionBranchIds.includes(Number(scopeToSingleBranch.data.user.assigned_branch_ids[0])),
       "Expected profile update branchCount assignment to stay in region",
     );
 
@@ -2696,8 +3090,22 @@ test("investor and partner branch assignments support create and post-create add
         branchCount: 2,
       },
     });
-    assert.equal(createInvestorByBranchCount.status, 201);
-    assert.equal(Number(createInvestorByBranchCount.data.assigned_branch_ids?.length || 0), 2);
+    assert.equal(createInvestorByBranchCount.status, 400);
+
+    const createInvestorByExplicitBranchCount = await api(baseUrl, "/api/users", {
+      method: "POST",
+      token: adminToken,
+      body: {
+        fullName: "Investor Branch Count User",
+        email: "investor.branch.count.explicit@example.com",
+        password: "Password@123",
+        role: "investor",
+        branchIds: [branchA, branchB],
+        branchCount: 2,
+      },
+    });
+    assert.equal(createInvestorByExplicitBranchCount.status, 201);
+    assert.equal(Number(createInvestorByExplicitBranchCount.data.assigned_branch_ids?.length || 0), 2);
 
     const createInvestor = await api(baseUrl, "/api/users", {
       method: "POST",

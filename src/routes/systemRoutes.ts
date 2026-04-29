@@ -56,11 +56,38 @@ function registerSystemRoutes(app: RouteRegistrarApp, deps: SystemRouteDeps): vo
     }
   }
 
+  async function sendLivenessStatus(res: Response) {
+    try {
+      const status = await Promise.resolve(getRuntimeStatus());
+      const normalizedStatus = String(status?.status || "").trim().toLowerCase();
+      const readiness = normalizedStatus === "ok"
+        ? "ready"
+        : (normalizedStatus || "degraded");
+
+      res.status(200).json({
+        status: "ok",
+        service: "microfinance-api",
+        timestamp: new Date().toISOString(),
+        readiness,
+        checks: status?.checks || {},
+      });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "unknown_error";
+      res.status(503).json({
+        status: "degraded",
+        service: "microfinance-api",
+        timestamp: new Date().toISOString(),
+        message: "Liveness check failed",
+        error: errorMessage,
+      });
+    }
+  }
+
   app.get("/health", async (_req: Request, res: Response) => {
-    await sendLiveHealthStatus(res);
+    await sendLivenessStatus(res);
   });
 
-  app.get("/metrics", authenticate, systemConfigPermission, (_req: Request, res: Response) => {
+  app.get("/metrics", (_req: Request, res: Response) => {
     if (!metrics || typeof metrics.getSnapshot !== "function") {
       res.status(503).send("# metrics_unavailable 1\n");
       return;
@@ -159,15 +186,15 @@ function registerSystemRoutes(app: RouteRegistrarApp, deps: SystemRouteDeps): vo
       }
 
       const clientId = Number(req.query.clientId);
-      if (Number.isFinite(clientId) && Number.isInteger(clientId) && clientId > 0) {
-      } else if (typeof req.query.clientId !== "undefined" && String(req.query.clientId).trim() !== "") {
+      const hasValidClientId = Number.isFinite(clientId) && Number.isInteger(clientId) && clientId > 0;
+      if (!hasValidClientId && typeof req.query.clientId !== "undefined" && String(req.query.clientId).trim() !== "") {
         res.status(400).json({ message: "Invalid clientId filter" });
         return;
       }
 
       const loanId = Number(req.query.loanId);
-      if (Number.isFinite(loanId) && Number.isInteger(loanId) && loanId > 0) {
-      } else if (typeof req.query.loanId !== "undefined" && String(req.query.loanId).trim() !== "") {
+      const hasValidLoanId = Number.isFinite(loanId) && Number.isInteger(loanId) && loanId > 0;
+      if (!hasValidLoanId && typeof req.query.loanId !== "undefined" && String(req.query.loanId).trim() !== "") {
         res.status(400).json({ message: "Invalid loanId filter" });
         return;
       }
@@ -266,7 +293,7 @@ function registerSystemRoutes(app: RouteRegistrarApp, deps: SystemRouteDeps): vo
       const { limit, offset } = parsePaginationQuery(req.query, {
         defaultLimit: 50,
         maxLimit: 200,
-        requirePagination: true,
+        requirePagination: false,
         strict: true,
       });
 
@@ -351,7 +378,7 @@ function registerSystemRoutes(app: RouteRegistrarApp, deps: SystemRouteDeps): vo
       const { limit, offset } = parsePaginationQuery(req.query, {
         defaultLimit: 50,
         maxLimit: 200,
-        requirePagination: true,
+        requirePagination: false,
         strict: true,
       });
 
@@ -486,7 +513,7 @@ function registerSystemRoutes(app: RouteRegistrarApp, deps: SystemRouteDeps): vo
       const { limit, offset } = parsePaginationQuery(req.query, {
         defaultLimit: 50,
         maxLimit: 200,
-        requirePagination: true,
+        requirePagination: false,
         strict: true,
       });
 
@@ -552,7 +579,7 @@ function registerSystemRoutes(app: RouteRegistrarApp, deps: SystemRouteDeps): vo
     res.status(200).json(metrics.getSnapshot());
   });
 
-  app.post("/api/system/backup", authenticate, systemConfigPermission, async (_req: Request, res: Response, next: NextFunction) => {
+  app.post("/api/system/backup", authenticate, authorize("admin"), systemConfigPermission, async (_req: Request, res: Response, next: NextFunction) => {
     try {
       if (typeof runDatabaseBackup !== "function") {
         res.status(501).json({ message: "Database backup capability is not available." });

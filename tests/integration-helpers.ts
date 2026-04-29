@@ -6,12 +6,22 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.basename(path.dirname(currentDir)) === "dist"
-  ? path.resolve(currentDir, "..", "..")
-  : path.resolve(currentDir, "..");
+const repoRoot =
+  path.basename(path.dirname(currentDir)) === "dist"
+    ? path.resolve(currentDir, "..", "..")
+    : path.resolve(currentDir, "..");
 
 export function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function sqliteDbFileHasContent(filePath: string): Promise<boolean> {
+  try {
+    const stats = await fs.stat(filePath);
+    return stats.isFile() && stats.size > 0;
+  } catch {
+    return false;
+  }
 }
 
 async function findFreePort(): Promise<number> {
@@ -35,10 +45,16 @@ async function waitForServer(baseUrl: string, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const response = await fetch(`${baseUrl}/health`);
+      const response = await fetch(`${baseUrl}/health`, {
+        headers: {
+          Connection: "close",
+        },
+      });
       if (response.ok) {
+        await response.body?.cancel();
         return;
       }
+      await response.body?.cancel();
     } catch (_error) {
       // Server may still be starting up.
     }
@@ -51,30 +67,29 @@ async function waitForServer(baseUrl: string, timeoutMs = 15000) {
 export async function startServer({ envOverrides = {} as any } = {}) {
   const port = await findFreePort();
   const cwd = repoRoot;
+  const defaultSqliteDbPath = path.join(cwd, "data", "microfinance.db");
+  const useBaselineSqliteCopy = String(
+    envOverrides.TEST_SQLITE_BOOTSTRAP_BASELINE
+      || process.env.TEST_SQLITE_BOOTSTRAP_BASELINE
+      || "false",
+  ).toLowerCase() === "true";
   const requestedDbClient = String(
-    envOverrides.DB_CLIENT
-      || process.env.TEST_DB_CLIENT
-      || process.env.DB_CLIENT
-      || "sqlite",
+    envOverrides.DB_CLIENT || process.env.TEST_DB_CLIENT || process.env.DB_CLIENT || "sqlite",
   ).toLowerCase();
   const usePostgres = requestedDbClient === "postgres";
 
   let dbFilePath: string | null = null;
   let databaseUrl: string | undefined;
   let shouldCleanupDbFile = false;
+  const shouldRunPrismaDbPush = usePostgres;
 
   if (usePostgres) {
     databaseUrl = String(
-      envOverrides.DATABASE_URL
-      || process.env.TEST_DATABASE_URL
-      || process.env.DATABASE_URL
-      || "",
+      envOverrides.DATABASE_URL || process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "",
     ).trim();
 
     if (!databaseUrl) {
-      throw new Error(
-        "PostgreSQL test mode requires DATABASE_URL or TEST_DATABASE_URL to be set.",
-      );
+      throw new Error("PostgreSQL test mode requires DATABASE_URL or TEST_DATABASE_URL to be set.");
     }
   } else {
     const requestedDatabaseUrl = String(envOverrides.DATABASE_URL || "").trim();
@@ -85,11 +100,17 @@ export async function startServer({ envOverrides = {} as any } = {}) {
     } else if (requestedDbPath) {
       dbFilePath = path.resolve(cwd, requestedDbPath);
       await fs.mkdir(path.dirname(dbFilePath), { recursive: true });
+      if (useBaselineSqliteCopy && !(await sqliteDbFileHasContent(dbFilePath))) {
+        await fs.copyFile(defaultSqliteDbPath, dbFilePath);
+      }
       databaseUrl = `file:${dbFilePath.replace(/\\/g, "/")}`;
     } else {
       const dbDir = path.join(cwd, ".runtime", "test-dbs");
       await fs.mkdir(dbDir, { recursive: true });
       dbFilePath = path.join(dbDir, `integration-${Date.now()}-${port}.sqlite`);
+      if (useBaselineSqliteCopy) {
+        await fs.copyFile(defaultSqliteDbPath, dbFilePath);
+      }
       databaseUrl = `file:${dbFilePath.replace(/\\/g, "/")}`;
       shouldCleanupDbFile = true;
     }
@@ -108,19 +129,22 @@ export async function startServer({ envOverrides = {} as any } = {}) {
     ...envOverrides,
   };
 
-  // FIX #3: Use stdio:"pipe" so we capture output, and throw on failure so
-  // the test fails loudly with a meaningful message rather than silently
-  // proceeding with an un-migrated DB and returning 500 on every route.
-  try {
-    execSync("npx prisma db push --accept-data-loss", { env, stdio: "pipe", cwd });
-  } catch (err: any) {
-    const output = [
-      err?.stdout?.toString?.() || "",
-      err?.stderr?.toString?.() || "",
-    ].join("\n").trim();
-    throw new Error(
-      `Prisma db push failed during test setup — cannot start server.\n${output}`,
-    );
+  // Postgres still needs an explicit Prisma schema sync in test startup.
+  // SQLite is bootstrapped by the app's own runtime migration path.
+  if (shouldRunPrismaDbPush) {
+    try {
+      execSync("npx prisma db push --force-reset --accept-data-loss", {
+        env: {
+          ...env,
+          RUST_LOG: env.RUST_LOG || "trace",
+        },
+        stdio: "pipe",
+        cwd,
+      });
+    } catch (err: any) {
+      const output = [err?.stdout?.toString?.() || "", err?.stderr?.toString?.() || ""].join("\n").trim();
+      throw new Error(`Prisma db push/reset failed during test setup — cannot start server.\n${output}`);
+    }
   }
 
   const child = spawn(process.execPath, ["dist/src/server.js"], {
@@ -195,7 +219,22 @@ export async function ensureClientLoanOnboarding(baseUrl: string, clientId: numb
     Authorization: `Bearer ${adminToken}`,
   };
 
-  // Step 1: verify KYC first — everything downstream depends on this.
+  // Step 1: seed the profile fields that onboarding now requires before KYC can be final.
+  await fetch(`${baseUrl}/api/clients/${clientId}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({
+      photoUrl: `https://example.com/uploads/client-photo-${suffix}.jpg`,
+      latitude: -1.286389,
+      longitude: 36.817223,
+      locationAccuracyMeters: 8,
+      locationCapturedAt: new Date().toISOString(),
+    }),
+  }).catch(() => {
+    /* best-effort */
+  });
+
+  // Step 2: verify KYC once the profile prerequisites are in place.
   await fetch(`${baseUrl}/api/clients/${clientId}/kyc`, {
     method: "PATCH",
     headers: adminHeaders,
@@ -203,9 +242,11 @@ export async function ensureClientLoanOnboarding(baseUrl: string, clientId: numb
       status: "verified",
       note: "Integration test auto KYC verification",
     }),
-  }).catch(() => {/* best-effort */});
+  }).catch(() => {
+    /* best-effort */
+  });
 
-  // Step 2: add guarantor to client profile.
+  // Step 3: add guarantor to client profile.
   await fetch(`${baseUrl}/api/clients/${clientId}/guarantors`, {
     method: "POST",
     headers,
@@ -215,30 +256,52 @@ export async function ensureClientLoanOnboarding(baseUrl: string, clientId: numb
       nationalId: `INTG-${suffix}`,
       monthlyIncome: 35000,
       guaranteeAmount: 25000,
+      idDocumentUrl: `https://example.com/uploads/guarantor-id-${suffix}.jpg`,
     }),
-  }).catch(() => {/* best-effort */});
+  }).catch(() => {
+    /* best-effort */
+  });
 
-  // Step 3: add collateral to client profile.
-  await fetch(`${baseUrl}/api/clients/${clientId}/collaterals`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
+  // Step 4: add the minimum collateral set required for onboarding readiness.
+  const collateralPayloads = [
+    {
       assetType: "vehicle",
       description: `Integration collateral ${suffix}`,
       estimatedValue: 250000,
       registrationNumber: `INT-${suffix}`.slice(0, 24),
       logbookNumber: `LOG-${suffix}`.slice(0, 24),
-    }),
-  }).catch(() => {/* best-effort */});
+      documentUrl: `https://example.com/uploads/collateral-${suffix}.jpg`,
+    },
+    {
+      assetType: "equipment",
+      description: `Integration backup collateral ${suffix}`,
+      estimatedValue: 175000,
+      registrationNumber: `EQ-${suffix}`.slice(0, 24),
+      logbookNumber: `EQLOG-${suffix}`.slice(0, 24),
+      documentUrl: `https://example.com/uploads/collateral-backup-${suffix}.jpg`,
+    },
+  ];
 
-  // Step 4: mark onboarding fees as paid.
+  for (const collateralPayload of collateralPayloads) {
+    await fetch(`${baseUrl}/api/clients/${clientId}/collaterals`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(collateralPayload),
+    }).catch(() => {
+      /* best-effort */
+    });
+  }
+
+  // Step 5: mark onboarding fees as paid.
   await fetch(`${baseUrl}/api/clients/${clientId}/fees`, {
     method: "POST",
     headers,
     body: JSON.stringify({
       note: "Integration test auto fee payment",
     }),
-  }).catch(() => {/* best-effort */});
+  }).catch(() => {
+    /* best-effort */
+  });
 }
 
 export async function api(
@@ -263,12 +326,12 @@ export async function api(
   const normalizedRoute = String(route || "").split("?")[0];
 
   if (
-    !skipLoanOnboardingAutomation
-    && normalizedMethod === "POST"
-    && normalizedRoute === "/api/loans"
-    && token
-    && body
-    && typeof body === "object"
+    !skipLoanOnboardingAutomation &&
+    normalizedMethod === "POST" &&
+    normalizedRoute === "/api/loans" &&
+    token &&
+    body &&
+    typeof body === "object"
   ) {
     const clientIdCandidate = Number(body.clientId || body.client_id || 0);
     if (Number.isInteger(clientIdCandidate) && clientIdCandidate > 0) {
@@ -386,17 +449,11 @@ export async function approveLoan(baseUrl: string, loanId: number, token: string
 
 export async function submitAndReviewHighRiskRequest(
   baseUrl: string,
-  {
-    loanId,
-    action,
-    requestToken,
-    reviewToken,
-    requestBody = {},
-    decision = "approve",
-    reviewNote = "",
-  }: any,
+  { loanId, action, requestToken, reviewToken, requestBody = {}, decision = "approve", reviewNote = "" }: any,
 ) {
-  const normalizedAction = String(action || "").trim().toLowerCase();
+  const normalizedAction = String(action || "")
+    .trim()
+    .toLowerCase();
   const actionMap: Record<string, { path: string; requestType: string }> = {
     write_off: { path: "write-off", requestType: "loan_write_off" },
     "write-off": { path: "write-off", requestType: "loan_write_off" },
@@ -427,9 +484,10 @@ export async function submitAndReviewHighRiskRequest(
       token: pendingToken,
     });
     if (pending.status === 200 && Array.isArray(pending.data?.rows)) {
-      approvalRequest = pending.data.rows.find(
-        (row: any) => String(row.request_type || "").toLowerCase() === expectedRequestType,
-      ) || null;
+      approvalRequest =
+        pending.data.rows.find(
+          (row: any) => String(row.request_type || "").toLowerCase() === expectedRequestType,
+        ) || null;
     }
   }
 

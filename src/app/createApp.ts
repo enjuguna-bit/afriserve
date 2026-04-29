@@ -1,8 +1,14 @@
 ﻿import path from "node:path";
 import compression from "compression";
 import express from "express";
-import type { Request, Response } from "express";
-import type { LoggerLike, MetricsLike } from "../types/runtime.js";
+import type { ErrorRequestHandler, Request, RequestHandler, Response } from "express";
+import type {
+  LoggerLike,
+  MetricsLike,
+  NextFunctionLike,
+  RequestLike,
+  ResponseLike,
+} from "../types/runtime.js";
 import { applySecurityMiddleware, resolveStaticAppIndexPath } from "../config/security.js";
 import { enforceHttps } from "../middleware/https.js";
 import { enforceAdminIpWhitelist } from "../middleware/ipWhitelist.js";
@@ -20,8 +26,15 @@ import { registerBranchRoutes } from "../routes/branchRoutes.js";
 import { registerReportRoutes } from "../routes/reportRoutes.js";
 import registerSimplifiedReportingRoutes from "../routes/simplifiedReportingRoutes.js";
 import { registerUploadRoutes } from "../routes/uploadRoutes.js";
+import { registerLocationRoutes } from "../routes/locationRoutes.js";
 import { registerCapitalRoutes } from "../routes/capitalRoutes.js";
 import { registerTenantRoutes } from "../routes/tenantRoutes.js";
+
+type AppRouteDeps = Record<string, unknown>;
+type GeneralApiLimiter =
+  | RequestHandler
+  | ((req: RequestLike, res: ResponseLike, next: NextFunctionLike) => void);
+
 type CreateAppOptions = {
   logger: LoggerLike | null;
   metrics: MetricsLike | null;
@@ -30,9 +43,9 @@ type CreateAppOptions = {
     localPublicBasePath: string;
     localDirectory: string;
   };
-  generalApiLimiter: any;
-  errorHandler: any;
-  routeDeps: Record<string, any>;
+  generalApiLimiter: GeneralApiLimiter;
+  errorHandler: ErrorRequestHandler;
+  routeDeps: AppRouteDeps;
 };
 
 type RequestWithContext = Request & {
@@ -102,21 +115,22 @@ function createApp(options: CreateAppOptions) {
     next();
   });
 
-  app.use("/api/", generalApiLimiter);
+  app.use("/api/", generalApiLimiter as RequestHandler);
   registerOpenApiDocs(app);
 
-  registerSystemRoutes(app, routeDeps as any);
-  registerAuthRoutes(app, routeDeps as any);
-  registerUserRoutes(app, routeDeps as any);
-  registerClientRoutes(app, routeDeps as any);
-  registerUploadRoutes(app, routeDeps as any);
-  registerLoanRoutes(app, routeDeps as any);
-  registerCollectionRoutes(app, routeDeps as any);
-  registerBranchRoutes(app, routeDeps as any);
-  registerReportRoutes(app, routeDeps as any);
-  registerSimplifiedReportingRoutes(app, routeDeps as any);
-  registerCapitalRoutes(app, routeDeps as any);
-  registerTenantRoutes(app, routeDeps as any);
+  registerSystemRoutes(app, routeDeps as unknown as Parameters<typeof registerSystemRoutes>[1]);
+  registerAuthRoutes(app, routeDeps as unknown as Parameters<typeof registerAuthRoutes>[1]);
+  registerUserRoutes(app, routeDeps as unknown as Parameters<typeof registerUserRoutes>[1]);
+  registerClientRoutes(app, routeDeps as unknown as Parameters<typeof registerClientRoutes>[1]);
+  registerUploadRoutes(app, routeDeps as unknown as Parameters<typeof registerUploadRoutes>[1]);
+  registerLocationRoutes(app, routeDeps as unknown as Parameters<typeof registerLocationRoutes>[1]);
+  registerLoanRoutes(app, routeDeps as unknown as Parameters<typeof registerLoanRoutes>[1]);
+  registerCollectionRoutes(app, routeDeps as unknown as Parameters<typeof registerCollectionRoutes>[1]);
+  registerBranchRoutes(app, routeDeps as unknown as Parameters<typeof registerBranchRoutes>[1]);
+  registerReportRoutes(app, routeDeps as unknown as Parameters<typeof registerReportRoutes>[1]);
+  registerSimplifiedReportingRoutes(app, routeDeps as unknown as Parameters<typeof registerSimplifiedReportingRoutes>[1]);
+  registerCapitalRoutes(app, routeDeps as unknown as Parameters<typeof registerCapitalRoutes>[1]);
+  registerTenantRoutes(app, routeDeps as unknown as Parameters<typeof registerTenantRoutes>[1]);
 
   app.use((req: Request, res: Response, next) => {
     if (!staticAppIndexPath) {
@@ -161,3 +175,6 @@ export {
   createApp,
 };
 
+export type {
+  AppRouteDeps,
+};

@@ -23,8 +23,8 @@ const RBAC_POLICIES = {
     capabilities: ["clients:create"],
   },
   "clients.update": {
-    description: "Update client profile fields",
-    roles: ["admin", "loan_officer", "operations_manager", "area_manager"],
+    description: "Directly update active client profile fields",
+    roles: ["admin", "loan_officer"],
     permissions: ["client.update"],
     capabilities: ["clients:update"],
   },
@@ -39,6 +39,31 @@ const RBAC_POLICIES = {
     roles: ["admin", "operations_manager", "area_manager"],
     permissions: ["client.assign"],
     capabilities: ["clients:assign"],
+  },
+  "clients.profile_refresh.request": {
+    description: "Create and assign client profile refresh drafts",
+    roles: ["admin", "operations_manager", "loan_officer"],
+    permissions: ["client.profile_refresh.request"],
+    capabilities: ["clients:profile-refresh:request"],
+  },
+  "clients.profile_refresh.update": {
+    description: "Update assigned client profile refresh drafts",
+    roles: ["admin", "loan_officer"],
+    permissions: ["client.profile_refresh.update"],
+    capabilities: ["clients:profile-refresh:update"],
+  },
+  "clients.profile_refresh.review": {
+    description: "Review and approve client profile refresh drafts",
+    roles: ["admin", "operations_manager"],
+    permissions: ["client.profile_refresh.review"],
+    capabilities: ["clients:profile-refresh:review"],
+    constraints: ["maker_checker"],
+  },
+  "clients.pii.override": {
+    description: "Override locked client PII fields on approved admin actions",
+    roles: ["admin"],
+    permissions: ["client.pii.override"],
+    capabilities: ["clients:pii:override"],
   },
   "loans.create": {
     description: "Submit a new loan application",

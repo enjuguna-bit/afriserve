@@ -898,7 +898,10 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                   INNER JOIN guarantors g ON g.id = lg.guarantor_id
                   WHERE lg.loan_id = l.id
                 ), '') AS guarantorphone,
-                (CAST(julianday(?) - julianday(l.disbursed_at) AS INTEGER) - 215) AS daystonpl
+                CASE
+                  WHEN la.days_overdue >= 90 THEN 0
+                  ELSE 90 - la.days_overdue
+                END AS daystonpl
               FROM loan_arrears la
               INNER JOIN loans l ON l.id = la.loan_id
               INNER JOIN clients c ON c.id = l.client_id
@@ -924,7 +927,7 @@ function registerPortfolioReports(app: RouteRegistrar, context: Record<string, a
                 u.full_name
               ORDER BY borrowerid DESC, la.loan_id DESC
             `,
-            [arrearsSnapshotAt, ...queryParams, arrearsSnapshotAt, arrearsSnapshotAt, arrearsSnapshotAt],
+            [arrearsSnapshotAt, ...queryParams, arrearsSnapshotAt, arrearsSnapshotAt],
           ),
         });
         const reportTemplate = getLegacyReportTemplate("arrears");

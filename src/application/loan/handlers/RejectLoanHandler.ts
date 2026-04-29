@@ -2,6 +2,7 @@ import type { ILoanRepository } from "../../../domain/loan/repositories/ILoanRep
 import type { IEventBus } from "../../../infrastructure/events/IEventBus.js";
 import type { RejectLoanCommand } from "../commands/LoanCommands.js";
 import { LoanId } from "../../../domain/loan/value-objects/LoanId.js";
+import { ForbiddenActionError, LoanNotFoundError } from "../../../domain/errors.js";
 
 export interface RejectLoanResult {
   loanId: number;
@@ -23,7 +24,18 @@ export class RejectLoanHandler {
   async handle(command: RejectLoanCommand): Promise<RejectLoanResult> {
     const loan = await this.loanRepository.findById(LoanId.fromNumber(command.loanId));
     if (!loan) {
-      throw new Error(`Loan ${command.loanId} not found`);
+      throw new LoanNotFoundError();
+    }
+
+    const rejectorRole = String(command.rejectedByRole || "").trim().toLowerCase();
+    const isAdminRejector = rejectorRole === "admin";
+    if (!isAdminRejector) {
+      if (Number(loan.createdByUserId || 0) === Number(command.rejectedByUserId || 0)) {
+        throw new ForbiddenActionError("Maker-Checker violation: You cannot reject a loan you created");
+      }
+      if (Number(loan.officerId || 0) > 0 && Number(loan.officerId || 0) === Number(command.rejectedByUserId || 0)) {
+        throw new ForbiddenActionError("Maker-Checker violation: You cannot reject a loan you are assigned to as officer");
+      }
     }
 
     loan.reject(command.rejectedByUserId, command.reason);

@@ -176,20 +176,54 @@ function validateEnvironment(env: NodeJS.ProcessEnv = process.env): ValidationRe
     errors.push("AUTH_SESSION_CACHE_TTL_SECONDS must be an integer between 1 and 86400.");
   }
 
+  const authSessionCacheRevalidateAfterSeconds = parseNumberEnv(env.AUTH_SESSION_CACHE_REVALIDATE_AFTER_SECONDS);
+  if (
+    env.AUTH_SESSION_CACHE_REVALIDATE_AFTER_SECONDS
+    && (!isIntegerNumber(authSessionCacheRevalidateAfterSeconds) || authSessionCacheRevalidateAfterSeconds < 1 || authSessionCacheRevalidateAfterSeconds > 86400)
+  ) {
+    errors.push("AUTH_SESSION_CACHE_REVALIDATE_AFTER_SECONDS must be an integer between 1 and 86400.");
+  }
+
+  const seedDefaultAdminOnEmptyDb = parseBooleanEnv(
+    env.SEED_DEFAULT_ADMIN_ON_EMPTY_DB,
+    !isProduction,
+  );
+  const defaultAdminEmail = String(env.DEFAULT_ADMIN_EMAIL || "").trim().toLowerCase();
+  if (defaultAdminEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(defaultAdminEmail)) {
+    errors.push("DEFAULT_ADMIN_EMAIL must be a valid email address.");
+  }
+  const defaultAdminPassword = String(env.DEFAULT_ADMIN_PASSWORD || "").trim();
+  if (isProduction && seedDefaultAdminOnEmptyDb && !defaultAdminPassword) {
+    errors.push("DEFAULT_ADMIN_PASSWORD is required when SEED_DEFAULT_ADMIN_ON_EMPTY_DB=true in production.");
+  }
+  if (isProduction && seedDefaultAdminOnEmptyDb && defaultAdminPassword === "Admin@123") {
+    errors.push("DEFAULT_ADMIN_PASSWORD must not use the built-in default password in production.");
+  }
+  if (isProduction && seedDefaultAdminOnEmptyDb) {
+    warnings.push("SEED_DEFAULT_ADMIN_ON_EMPTY_DB=true will create an initial admin account on first boot when the users table is empty.");
+  }
+
   const rateLimitRedisUrl = String(env.RATE_LIMIT_REDIS_URL || env.REDIS_URL || "").trim();
   if (rateLimitRedisUrl && !/^rediss?:\/\//i.test(rateLimitRedisUrl)) {
     errors.push("RATE_LIMIT_REDIS_URL must use redis:// or rediss://.");
   }
 
   const effectiveAuthSessionCacheRedisUrl = authSessionCacheRedisUrl || tokenStoreRedisUrl;
-  if (isProduction && !tokenStoreRedisUrl) {
+  const requireDistributedRedisInProduction = isProduction && !(dbClient === "sqlite" && allowSqliteInProduction);
+  if (requireDistributedRedisInProduction && !tokenStoreRedisUrl) {
     errors.push("AUTH_TOKEN_STORE_REDIS_URL (or REDIS_URL) is required in production for token blacklist and refresh token storage.");
+  } else if (isProduction && !tokenStoreRedisUrl) {
+    warnings.push("AUTH_TOKEN_STORE_REDIS_URL (or REDIS_URL) is recommended in production when ALLOW_SQLITE_IN_PRODUCTION=true.");
   }
-  if (isProduction && !effectiveAuthSessionCacheRedisUrl) {
+  if (requireDistributedRedisInProduction && !effectiveAuthSessionCacheRedisUrl) {
     errors.push("AUTH_SESSION_CACHE_REDIS_URL (or AUTH_TOKEN_STORE_REDIS_URL / REDIS_URL) is required in production for auth session caching.");
+  } else if (isProduction && !effectiveAuthSessionCacheRedisUrl) {
+    warnings.push("AUTH_SESSION_CACHE_REDIS_URL (or AUTH_TOKEN_STORE_REDIS_URL / REDIS_URL) is recommended in production when ALLOW_SQLITE_IN_PRODUCTION=true.");
   }
-  if (isProduction && !rateLimitRedisUrl) {
+  if (requireDistributedRedisInProduction && !rateLimitRedisUrl) {
     errors.push("RATE_LIMIT_REDIS_URL (or REDIS_URL) is required in production for distributed rate limiting.");
+  } else if (isProduction && !rateLimitRedisUrl) {
+    warnings.push("RATE_LIMIT_REDIS_URL (or REDIS_URL) is recommended in production when ALLOW_SQLITE_IN_PRODUCTION=true.");
   }
 
   const reportDeliveryEnabled = parseBooleanEnv(env.REPORT_DELIVERY_ENABLED);
@@ -355,6 +389,30 @@ function validateEnvironment(env: NodeJS.ProcessEnv = process.env): ValidationRe
     && (sentryProfilesSampleRate === null || sentryProfilesSampleRate < 0 || sentryProfilesSampleRate > 1)
   ) {
     errors.push("SENTRY_PROFILES_SAMPLE_RATE must be a number between 0 and 1.");
+  }
+
+  const otelExporterEndpoint = String(
+    env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || env.OTEL_EXPORTER_OTLP_ENDPOINT || "",
+  ).trim();
+  if (otelExporterEndpoint) {
+    try {
+      const parsed = new URL(otelExporterEndpoint);
+      if (!["http:", "https:"].includes(parsed.protocol)) {
+        errors.push("OTEL_EXPORTER_OTLP_ENDPOINT must use http:// or https://.");
+      }
+    } catch (_error) {
+      errors.push("OTEL_EXPORTER_OTLP_ENDPOINT must be a valid URL.");
+    }
+  }
+  const otelTraceSampleRatio = parseNumberEnv(env.OTEL_TRACE_SAMPLE_RATIO);
+  if (
+    env.OTEL_TRACE_SAMPLE_RATIO
+    && (otelTraceSampleRatio === null || otelTraceSampleRatio < 0 || otelTraceSampleRatio > 1)
+  ) {
+    errors.push("OTEL_TRACE_SAMPLE_RATIO must be a number between 0 and 1.");
+  }
+  if (typeof env.OTEL_SERVICE_NAME === "string" && !String(env.OTEL_SERVICE_NAME).trim()) {
+    errors.push("OTEL_SERVICE_NAME must not be empty when provided.");
   }
 
   const uptimeHeartbeatUrl = String(env.UPTIME_HEARTBEAT_URL || "").trim();

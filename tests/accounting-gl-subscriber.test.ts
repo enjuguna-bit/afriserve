@@ -29,12 +29,6 @@ function makeDb(overrides: Record<string, any> = {}) {
     async get(sql: string, params: unknown[] = []) {
       const s = sql.trim().toLowerCase();
 
-      // GL journal lookup for idempotency / reconcile
-      if (s.includes("gl_journals") && s.includes("reference_type")) {
-        const refType = params[0] as string;
-        const refId   = Number(params[1]);
-        return journals[`${refType}:${refId}`] ?? null;
-      }
       // Repayment lookup
       if (s.includes("repayments") && s.includes("loan_id")) {
         const loanId = Number(params[0]);
@@ -43,6 +37,12 @@ function makeDb(overrides: Record<string, any> = {}) {
           (r: any) => r.loan_id === loanId && Math.abs(r.amount - amount) < 0.005,
         );
         return match ?? null;
+      }
+      // GL journal lookup for idempotency / reconcile
+      if (s.includes("gl_journals") && s.includes("reference_type")) {
+        const refType = params[0] as string;
+        const refId   = Number(params[1]);
+        return journals[`${refType}:${refId}`] ?? null;
       }
       // Loan lookup
       if (s.includes("from loans")) {
@@ -89,14 +89,15 @@ function makeLogger() {
 }
 
 function makeSubscribableBus() {
-  const handlers: Record<string, Function[]> = {};
+  type Handler = (payload: unknown) => Promise<void> | void;
+  const handlers: Record<string, Handler[]> = {};
   return {
     handlers,
-    subscribe(eventType: string, handler: Function) {
+    subscribe(eventType: string, handler: Handler) {
       handlers[eventType] = handlers[eventType] || [];
       handlers[eventType].push(handler);
     },
-    async emit(eventType: string, payload: any) {
+    async emit(eventType: string, payload: unknown) {
       for (const h of (handlers[eventType] || [])) await h(payload);
     },
   };
@@ -195,7 +196,8 @@ describe("AccountingGlSubscriber — shadow mode", () => {
 
     const match = logger.logs.find(l => l.event === "gl.subscriber.reconcile.match");
     assert.ok(match, "match log emitted");
-    assert.equal(match?.data?.referenceType, "disbursement");
+    assert.equal(match?.data?.referenceType, "loan_disbursement");
+    assert.equal(match?.data?.matchedReferenceType, "disbursement");
     assert.equal(match?.data?.referenceId, 42);
     assert.equal(gl.posted.length, 0, "no GL write in shadow mode");
   });
@@ -205,7 +207,7 @@ describe("AccountingGlSubscriber — shadow mode", () => {
 
     const missing = logger.logs.find(l => l.event === "gl.subscriber.reconcile.missing");
     assert.ok(missing, "missing log emitted");
-    assert.equal(missing?.data?.referenceType, "disbursement");
+    assert.equal(missing?.data?.referenceType, "loan_disbursement");
     assert.equal(gl.posted.length, 0, "no GL write in shadow mode");
   });
 
@@ -215,7 +217,8 @@ describe("AccountingGlSubscriber — shadow mode", () => {
 
     const match = logger.logs.find(l => l.event === "gl.subscriber.reconcile.match");
     assert.ok(match, "match log emitted for write-off");
-    assert.equal(match?.data?.referenceType, "write_off");
+    assert.equal(match?.data?.referenceType, "loan_write_off");
+    assert.equal(match?.data?.matchedReferenceType, "write_off");
   });
 
   it("always shadow-logs restructure regardless of mode", async () => {
@@ -263,7 +266,7 @@ describe("AccountingGlSubscriber — active mode (GL posting)", () => {
 
     assert.equal(gl.posted.length, 1, "one journal posted");
     const j = gl.posted[0];
-    assert.equal(j.referenceType, "disbursement");
+    assert.equal(j.referenceType, "loan_disbursement");
     assert.equal(j.referenceId,   42);
     assert.equal(j.loanId,        42);
 
@@ -283,7 +286,7 @@ describe("AccountingGlSubscriber — active mode (GL posting)", () => {
 
     assert.equal(gl.posted.length, 1);
     const j = gl.posted[0];
-    assert.equal(j.referenceType, "repayment");
+    assert.equal(j.referenceType, "loan_repayment");
     assert.equal(j.referenceId,   99);
 
     const debit  = j.lines.filter((l: any) => l.side === "debit");
@@ -303,7 +306,7 @@ describe("AccountingGlSubscriber — active mode (GL posting)", () => {
 
     assert.equal(gl.posted.length, 1);
     const j = gl.posted[0];
-    assert.equal(j.referenceType, "write_off");
+    assert.equal(j.referenceType, "loan_write_off");
     const debit  = j.lines.filter((l: any) => l.side === "debit");
     const credit = j.lines.filter((l: any) => l.side === "credit");
     assert.ok(debit.some( (l: any) => l.accountCode === "WRITE_OFF_EXPENSE"), "DR WRITE_OFF_EXPENSE");
@@ -318,7 +321,7 @@ describe("AccountingGlSubscriber — active mode (GL posting)", () => {
     await bus.emit("loan.disbursed", DISBURSEMENT_EVENT);
     const posted = logger.logs.find(l => l.event === "gl.subscriber.journal_posted");
     assert.ok(posted, "journal_posted info log emitted");
-    assert.equal(posted?.data?.referenceType, "disbursement");
+    assert.equal(posted?.data?.referenceType, "loan_disbursement");
   });
 });
 

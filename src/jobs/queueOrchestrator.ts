@@ -28,6 +28,7 @@ type QueueOrchestratorOptions = {
   deadLetterInspectIntervalMs?: number;
   deadLetterAlertThreshold?: number;
   deadLetterAutoRetryBatchSize?: number;
+  deadLetterAlertRepeatWindowMs?: number;
 };
 
 function createQueueOrchestrator(options: QueueOrchestratorOptions) {
@@ -47,6 +48,7 @@ function createQueueOrchestrator(options: QueueOrchestratorOptions) {
     deadLetterInspectIntervalMs = 60000,
     deadLetterAlertThreshold = 1,
     deadLetterAutoRetryBatchSize = 0,
+    deadLetterAlertRepeatWindowMs = 15 * 60 * 1000,
   } = options;
 
   /** @type {import("bullmq").Queue | null} */
@@ -61,7 +63,19 @@ function createQueueOrchestrator(options: QueueOrchestratorOptions) {
   let deadLetterEvents: QueueEvents | null = null;
   /** @type {NodeJS.Timeout | null} */
   let deadLetterInspectorTimer: NodeJS.Timeout | null = null;
+  let lastDeadLetterAlertSignature: string | null = null;
+  let lastDeadLetterAlertAtMs = 0;
   const byName = new Map<string, QueueJob>(jobs.map((job) => [job.name, job]));
+
+  function shouldSkipBullMqVersionCheck(url: string): boolean {
+    try {
+      const hostname = new URL(String(url || "")).hostname;
+      return /(?:^|\.)redis\.cache\.windows\.net$/i.test(hostname)
+        || /(?:^|\.)redisenterprise\.cache\.azure\.net$/i.test(hostname);
+    } catch (_error) {
+      return false;
+    }
+  }
 
   function observeDeadLetterFailureMetric(failedReason: string) {
     if (metrics && typeof metrics.observeBackgroundTask === "function") {
@@ -114,16 +128,44 @@ function createQueueOrchestrator(options: QueueOrchestratorOptions) {
     const waitingCount = await deadLetterQueue.getWaitingCount();
     const failedCount = await deadLetterQueue.getFailedCount();
     const totalCount = Number(waitingCount || 0) + Number(failedCount || 0);
+    const threshold = Math.max(0, Math.floor(deadLetterAlertThreshold));
+    const sampleDeadLetterJobs = totalCount > 0
+      ? await deadLetterQueue.getJobs(["waiting", "failed"], 0, 2, false)
+      : [];
+    const sampleJobs = sampleDeadLetterJobs.map((job) => {
+      const payload = (job.data || {}) as Record<string, unknown>;
+      return {
+        originalJobName: String(payload.originalJobName || job.name || ""),
+        failedReason: String(payload.failedReason || job.failedReason || "unknown_failure"),
+        attemptsMade: Number(payload.attemptsMade || job.attemptsMade || 0),
+      };
+    });
 
-    if (totalCount >= Math.max(0, Math.floor(deadLetterAlertThreshold))) {
-      if (logger && typeof logger.warn === "function") {
+    if (totalCount < threshold) {
+      lastDeadLetterAlertSignature = null;
+      lastDeadLetterAlertAtMs = 0;
+    } else {
+      const nowMs = Date.now();
+      const alertSignature = JSON.stringify({
+        waitingCount,
+        failedCount,
+        sampleJobs,
+      });
+      const repeatWindowMs = Math.max(60000, Math.floor(deadLetterAlertRepeatWindowMs || 0));
+      const shouldAlert = alertSignature !== lastDeadLetterAlertSignature
+        || (nowMs - lastDeadLetterAlertAtMs) >= repeatWindowMs;
+
+      if (shouldAlert && logger && typeof logger.warn === "function") {
         logger.warn("jobs.queue.dead_letter_detected", {
           queueName,
           deadLetterQueueName,
           waitingCount,
           failedCount,
           totalCount,
+          sampleJobs,
         });
+        lastDeadLetterAlertSignature = alertSignature;
+        lastDeadLetterAlertAtMs = nowMs;
       }
     }
 
@@ -186,11 +228,12 @@ function createQueueOrchestrator(options: QueueOrchestratorOptions) {
     const connection = {
       url: redisUrl,
     };
+    const skipVersionCheck = shouldSkipBullMqVersionCheck(redisUrl);
 
-    queue = new Queue(queueName, { connection });
-    deadLetterQueue = new Queue(deadLetterQueueName, { connection });
-    events = new QueueEvents(queueName, { connection });
-    deadLetterEvents = new QueueEvents(deadLetterQueueName, { connection });
+    queue = new Queue(queueName, { connection, skipVersionCheck });
+    deadLetterQueue = new Queue(deadLetterQueueName, { connection, skipVersionCheck });
+    events = new QueueEvents(queueName, { connection, skipVersionCheck });
+    deadLetterEvents = new QueueEvents(deadLetterQueueName, { connection, skipVersionCheck });
     if (workerEnabled) {
       worker = new Worker(
         queueName,
@@ -204,6 +247,7 @@ function createQueueOrchestrator(options: QueueOrchestratorOptions) {
         {
           connection,
           concurrency: Math.max(1, Math.floor(concurrency || 1)),
+          skipVersionCheck,
         },
       );
 

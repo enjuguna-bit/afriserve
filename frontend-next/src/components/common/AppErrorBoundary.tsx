@@ -3,23 +3,41 @@ import styles from './AppErrorBoundary.module.css'
 
 type AppErrorBoundaryState = {
   hasError: boolean
+  // Incrementing resetKey forces React to unmount+remount children on reset,
+  // clearing the broken component state instead of re-crashing immediately.
+  resetKey: number
 }
 
 export class AppErrorBoundary extends Component<PropsWithChildren, AppErrorBoundaryState> {
   state: AppErrorBoundaryState = {
     hasError: false,
+    resetKey: 0,
   }
 
-  static getDerivedStateFromError(): AppErrorBoundaryState {
+  static getDerivedStateFromError(): Partial<AppErrorBoundaryState> {
     return { hasError: true }
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('Unhandled UI error:', error, info)
+    try {
+      const entry = JSON.stringify({
+        level: 'error',
+        message: 'ui.unhandled_error',
+        error: error.message,
+        stack: error.stack,
+        componentStack: info.componentStack,
+        ts: new Date().toISOString(),
+      })
+      console.error(entry)
+    } catch {
+      console.error('Unhandled UI error:', error, info)
+    }
   }
 
   private resetBoundary = () => {
-    this.setState({ hasError: false })
+    // Increment resetKey so React fully unmounts and remounts children,
+    // clearing whatever state triggered the crash.
+    this.setState((prev) => ({ hasError: false, resetKey: prev.resetKey + 1 }))
   }
 
   render(): ReactNode {
@@ -47,6 +65,7 @@ export class AppErrorBoundary extends Component<PropsWithChildren, AppErrorBound
       )
     }
 
-    return this.props.children
+    // Keyed wrapper forces full remount of children after a reset
+    return <div key={this.state.resetKey}>{this.props.children}</div>
   }
 }

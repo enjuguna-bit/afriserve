@@ -6,6 +6,7 @@ import { LoanStatus } from "../../domain/loan/value-objects/LoanStatus.js";
 import { InterestRate } from "../../domain/loan/value-objects/InterestRate.js";
 import { LoanTerm } from "../../domain/loan/value-objects/LoanTerm.js";
 import { Money } from "../../domain/shared/value-objects/Money.js";
+import { getCurrentTenantId } from "../../utils/tenantStore.js";
 
 type DbGet = (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
 type DbAll = (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
@@ -15,6 +16,7 @@ export interface SqliteLoanRepositoryDeps {
   get: DbGet;
   all: DbAll;
   run: DbRun;
+  executeTransaction?: (callback: (tx: { get: DbGet; run: DbRun }) => Promise<unknown>) => Promise<unknown>;
 }
 
 /**
@@ -26,43 +28,50 @@ export class SqliteLoanRepository implements ILoanRepository {
 
   async save(loan: Loan): Promise<void> {
     const d = loan.toPersistence();
-    const existing = await this.deps.get("SELECT id FROM loans WHERE id = ?", [d["id"]]);
-
-    if (existing) {
-      await this.deps.run(
-        `UPDATE loans SET
-          client_id = ?, product_id = ?, branch_id = ?, created_by_user_id = ?, officer_id = ?,
-          principal = ?, interest_rate = ?, term_weeks = ?, term_months = ?,
-          registration_fee = ?, processing_fee = ?,
-          expected_total = ?, balance = ?, repaid_total = ?, status = ?,
-          approved_by_user_id = ?, approved_at = ?,
-          disbursed_by_user_id = ?, disbursed_at = ?, disbursement_note = ?, external_reference = ?,
-          rejected_by_user_id = ?, rejected_at = ?, rejection_reason = ?, archived_at = ?
-        WHERE id = ?`,
-        [
-          d["client_id"], d["product_id"], d["branch_id"], d["created_by_user_id"], d["officer_id"],
-          d["principal"], d["interest_rate"], d["term_weeks"], d["term_months"],
-          d["registration_fee"], d["processing_fee"],
-          d["expected_total"], d["balance"], d["repaid_total"], d["status"],
-          d["approved_by_user_id"], d["approved_at"],
-          d["disbursed_by_user_id"], d["disbursed_at"], d["disbursement_note"], d["external_reference"],
-          d["rejected_by_user_id"], d["rejected_at"], d["rejection_reason"], d["archived_at"],
-          d["id"],
-        ],
+    const tenantId = getCurrentTenantId();
+    const persist = async (db: { get: DbGet; run: DbRun }) => {
+      const existing = await db.get(
+        "SELECT id FROM loans WHERE id = ? AND tenant_id = ?",
+        [d["id"], tenantId],
       );
-    } else {
-      await this.deps.run(
+
+      if (existing) {
+        await db.run(
+          `UPDATE loans SET
+            client_id = ?, product_id = ?, branch_id = ?, purpose = ?, created_by_user_id = ?, officer_id = ?,
+            principal = ?, interest_rate = ?, term_weeks = ?, term_months = ?,
+            registration_fee = ?, processing_fee = ?,
+            expected_total = ?, balance = ?, repaid_total = ?, status = ?,
+            approved_by_user_id = ?, approved_at = ?,
+            disbursed_by_user_id = ?, disbursed_at = ?, disbursement_note = ?, external_reference = ?,
+            rejected_by_user_id = ?, rejected_at = ?, rejection_reason = ?, archived_at = ?
+          WHERE id = ? AND tenant_id = ?`,
+          [
+            d["client_id"], d["product_id"], d["branch_id"], d["purpose"], d["created_by_user_id"], d["officer_id"],
+            d["principal"], d["interest_rate"], d["term_weeks"], d["term_months"],
+            d["registration_fee"], d["processing_fee"],
+            d["expected_total"], d["balance"], d["repaid_total"], d["status"],
+            d["approved_by_user_id"], d["approved_at"],
+            d["disbursed_by_user_id"], d["disbursed_at"], d["disbursement_note"], d["external_reference"],
+            d["rejected_by_user_id"], d["rejected_at"], d["rejection_reason"], d["archived_at"],
+            d["id"], tenantId,
+          ],
+        );
+        return;
+      }
+
+      await db.run(
         `INSERT INTO loans (
-          id, client_id, product_id, branch_id, created_by_user_id, officer_id,
+          id, tenant_id, client_id, product_id, branch_id, purpose, created_by_user_id, officer_id,
           principal, interest_rate, term_weeks, term_months,
           registration_fee, processing_fee,
           expected_total, balance, repaid_total, status,
           approved_by_user_id, approved_at,
           disbursed_by_user_id, disbursed_at, disbursement_note, external_reference,
           rejected_by_user_id, rejected_at, rejection_reason, archived_at, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
-          d["id"], d["client_id"], d["product_id"], d["branch_id"],
+          d["id"], tenantId, d["client_id"], d["product_id"], d["branch_id"], d["purpose"],
           d["created_by_user_id"], d["officer_id"],
           d["principal"], d["interest_rate"], d["term_weeks"], d["term_months"],
           d["registration_fee"], d["processing_fee"],
@@ -73,39 +82,52 @@ export class SqliteLoanRepository implements ILoanRepository {
           d["created_at"],
         ],
       );
+    };
+
+    if (this.deps.executeTransaction) {
+      await this.deps.executeTransaction((tx) => persist(tx as { get: DbGet; run: DbRun }));
+      return;
     }
+
+    await persist(this.deps);
   }
 
   async findById(id: LoanId): Promise<Loan | null> {
-    const row = await this.deps.get("SELECT * FROM loans WHERE id = ?", [id.value]);
+    const row = await this.deps.get(
+      "SELECT * FROM loans WHERE id = ? AND tenant_id = ?",
+      [id.value, getCurrentTenantId()],
+    );
     return row ? this._rowToLoan(row) : null;
   }
 
   async exists(id: LoanId): Promise<boolean> {
-    const row = await this.deps.get("SELECT id FROM loans WHERE id = ?", [id.value]);
+    const row = await this.deps.get(
+      "SELECT id FROM loans WHERE id = ? AND tenant_id = ?",
+      [id.value, getCurrentTenantId()],
+    );
     return Boolean(row);
   }
 
   async findByClientId(clientId: number): Promise<Loan[]> {
     const rows = await this.deps.all(
-      "SELECT * FROM loans WHERE client_id = ? ORDER BY id DESC",
-      [clientId],
+      "SELECT * FROM loans WHERE client_id = ? AND tenant_id = ? ORDER BY id DESC",
+      [clientId, getCurrentTenantId()],
     );
     return rows.map((r) => this._rowToLoan(r));
   }
 
   async findByBranchId(branchId: number, limit: number, offset: number): Promise<Loan[]> {
     const rows = await this.deps.all(
-      "SELECT * FROM loans WHERE branch_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
-      [branchId, limit, offset],
+      "SELECT * FROM loans WHERE branch_id = ? AND tenant_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+      [branchId, getCurrentTenantId(), limit, offset],
     );
     return rows.map((r) => this._rowToLoan(r));
   }
 
   async countActiveLoansByClientId(clientId: number): Promise<number> {
     const row = await this.deps.get(
-      "SELECT COUNT(*) AS total FROM loans WHERE client_id = ? AND status IN ('active', 'restructured')",
-      [clientId],
+      "SELECT COUNT(*) AS total FROM loans WHERE client_id = ? AND tenant_id = ? AND status IN ('active', 'restructured', 'overdue')",
+      [clientId, getCurrentTenantId()],
     );
     return Number(row?.["total"] || 0);
   }
@@ -131,6 +153,7 @@ export class SqliteLoanRepository implements ILoanRepository {
       clientId:             Number(row["client_id"]),
       productId:            row["product_id"] != null ? Number(row["product_id"]) : null,
       branchId:             row["branch_id"] != null ? Number(row["branch_id"]) : null,
+      purpose:              row["purpose"] ? String(row["purpose"]) : null,
       createdByUserId:      row["created_by_user_id"] != null ? Number(row["created_by_user_id"]) : null,
       officerId:            row["officer_id"] != null ? Number(row["officer_id"]) : null,
       principal:            safeMoney(row["principal"]),

@@ -1,2 +1,0 @@
-WARNING: For prices please refer to https://aka.ms/postgres-pricing
-

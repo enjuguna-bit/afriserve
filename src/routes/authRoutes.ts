@@ -1,8 +1,12 @@
 import type { AuthRouteDeps, RouteRegistrar } from "../types/routeDeps.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
+// Use env-configured rounds (default 12) — OWASP recommends ≥12 for bcrypt
+const bcryptRounds = Math.max(10, Math.min(16, parseInt(String(process.env.BCRYPT_ROUNDS || "12"), 10) || 12));
 import { invalidateCachedAuthSessionUser } from "../services/authSessionCache.js";
+import { loadUserWithPrivilegedTenantFallback } from "../services/authTenantLookupService.js";
 import { changePasswordLimiter, passwordResetLimiter } from "../middleware/userRateLimit.js";
 import { getEffectivePermissionsForUser } from "../services/permissionService.js";
-import { getUserRolesForUser, resolveAssignedRoles } from "../services/userRoleService.js";
+import { resolveAssignedRoles } from "../services/userRoleService.js";
 import { validate } from "../middleware/validate.js";
 
 /**
@@ -50,7 +54,6 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
     executeTransaction,
     authenticate,
     createToken,
-    verifyToken,
     issueRefreshToken,
     rotateRefreshToken,
     revokeRefreshToken,
@@ -91,11 +94,6 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
       || refreshTokenErrorMessages.has(error.message);
   }
 
-  function isAccessTokenPayload(decoded: Record<string, any>): boolean {
-    const tokenType = typeof decoded.typ === "string" ? decoded.typ.trim().toLowerCase() : "";
-    return !tokenType || tokenType === "access";
-  }
-
   /**
    * @openapi
    * /api/auth/login:
@@ -120,25 +118,32 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
     try {
       const payload = req.body;
       const normalizedEmail = normalizeEmail(payload.email);
-      const user = await get(
-        `
-          SELECT
-            id,
-            full_name,
-            email,
-            password_hash,
-            role,
-            is_active,
-            failed_login_attempts,
-            locked_until,
-            token_version,
-            branch_id,
-            primary_region_id
-          FROM users
-          WHERE LOWER(email) = ?
-        `,
-        [normalizedEmail],
-      );
+      const lookupResult = await loadUserWithPrivilegedTenantFallback({
+        get,
+        all,
+        lookupByTenant: async (tenantId) => (
+          await get(
+            `
+              SELECT
+                id,
+                full_name,
+                email,
+                password_hash,
+                role,
+                is_active,
+                failed_login_attempts,
+                locked_until,
+                token_version,
+                branch_id,
+                primary_region_id
+              FROM users
+              WHERE LOWER(email) = ? AND tenant_id = ?
+            `,
+            [normalizedEmail, tenantId],
+          )
+        ) || null,
+      });
+      const user = lookupResult.user;
 
       if (!user || user.is_active !== 1) {
         res.status(401).json({ message: "Invalid credentials" });
@@ -166,8 +171,8 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
           : null;
 
         await run(
-          "UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?",
-          [attempts, lockedUntil, user.id],
+          "UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ? AND tenant_id = ?",
+          [attempts, lockedUntil, user.id, lookupResult.lookupTenantId],
         );
 
         await writeAuditLog({
@@ -184,19 +189,19 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
       }
 
       await run(
-        "UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?",
-        [user.id],
+        "UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ? AND tenant_id = ?",
+        [user.id, lookupResult.lookupTenantId],
       );
 
-      const userRoles = await getUserRolesForUser({
-        all,
-        get,
-        userId: Number(user.id),
-        primaryRole: user.role,
+      const userRoles = lookupResult.roles;
+      const permissions = await getEffectivePermissionsForUser(Number(user.id), userRoles, {
+        tenantId: lookupResult.lookupTenantId,
       });
-      const permissions = await getEffectivePermissionsForUser(Number(user.id), userRoles);
-      const token = createToken({ ...user, roles: userRoles });
-      const refreshToken = await issueRefreshToken(user.id, Number(user.token_version || 0));
+      const requestTenantId = String(req.tenantId || "").trim() || lookupResult.lookupTenantId;
+      const token = createToken({ ...user, roles: userRoles, tenantId: requestTenantId });
+      const refreshToken = await issueRefreshToken(user.id, Number(user.token_version || 0), {
+        tenantId: requestTenantId,
+      });
       await writeAuditLog({
         userId: user.id,
         action: "auth.login.success",
@@ -257,37 +262,41 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
       let userId: number | null = null;
       let presentedTokenVersion = 0;
       let nextRefreshToken: string | null = null;
-
-      try {
-        const rotated = await rotateRefreshToken(normalizedToken);
-        userId = Number(rotated.userId);
-        presentedTokenVersion = Number(rotated.tokenVersion || 0);
-        nextRefreshToken = rotated.refreshToken;
-      } catch (rotationError) {
-        throw rotationError;
-      }
+      let refreshTenantId = String(req.tenantId || "").trim();
+      const rotated = await rotateRefreshToken(normalizedToken);
+      userId = Number(rotated.userId);
+      presentedTokenVersion = Number(rotated.tokenVersion || 0);
+      nextRefreshToken = rotated.refreshToken;
+      refreshTenantId = String(rotated.tenantId || refreshTenantId || "").trim();
 
       if (!Number.isInteger(userId) || userId <= 0) {
         res.status(401).json({ message: "Invalid or expired token" });
         return;
       }
 
-      const user = await get(
-        `
-          SELECT
-            id,
-            full_name,
-            email,
-            role,
-            is_active,
-            token_version,
-            branch_id,
-            primary_region_id
-          FROM users
-          WHERE id = ?
-        `,
-        [userId],
-      );
+      const lookupResult = await loadUserWithPrivilegedTenantFallback({
+        get,
+        all,
+        lookupByTenant: async (tenantId) => (
+          await get(
+            `
+              SELECT
+                id,
+                full_name,
+                email,
+                role,
+                is_active,
+                token_version,
+                branch_id,
+                primary_region_id
+              FROM users
+              WHERE id = ? AND tenant_id = ?
+            `,
+            [userId, tenantId],
+          )
+        ) || null,
+      });
+      const user = lookupResult.user;
 
       if (!user || user.is_active !== 1) {
         await invalidateCachedAuthSessionUser(Number(userId));
@@ -303,17 +312,20 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
       }
 
       if (!nextRefreshToken) {
-        nextRefreshToken = await issueRefreshToken(user.id, currentVersion);
+        nextRefreshToken = await issueRefreshToken(user.id, currentVersion, {
+          tenantId: refreshTenantId || lookupResult.lookupTenantId,
+        });
       }
 
-      const userRoles = await getUserRolesForUser({
-        all,
-        get,
-        userId: Number(user.id),
-        primaryRole: user.role,
+      const userRoles = lookupResult.roles;
+      const permissions = await getEffectivePermissionsForUser(Number(user.id), userRoles, {
+        tenantId: lookupResult.lookupTenantId,
       });
-      const permissions = await getEffectivePermissionsForUser(Number(user.id), userRoles);
-      const token = createToken({ ...user, roles: userRoles });
+      const token = createToken({
+        ...user,
+        roles: userRoles,
+        tenantId: refreshTenantId || lookupResult.lookupTenantId,
+      });
       await writeAuditLog({
         userId: user.id,
         action: "auth.token.refreshed",
@@ -352,46 +364,50 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
    */
   app.get("/api/auth/me", authenticate, async (req, res, next) => {
     try {
-      const user = await get(
-        `
-          SELECT
-            u.id,
-            u.full_name,
-            u.email,
-            u.role,
-            u.is_active,
-            u.branch_id,
-            u.primary_region_id,
-            u.created_at,
-            b.name AS branch_name,
-            r.name AS region_name
-          FROM users u
-          LEFT JOIN branches b ON b.id = u.branch_id
-          LEFT JOIN regions r ON r.id = COALESCE(u.primary_region_id, b.region_id)
-          WHERE u.id = ?
-        `,
-        [req.user.sub],
-      );
+      const lookupResult = await loadUserWithPrivilegedTenantFallback({
+        get,
+        all,
+        lookupByTenant: async (tenantId) => (
+          await get(
+            `
+              SELECT
+                u.id,
+                u.full_name,
+                u.email,
+                u.role,
+                u.is_active,
+                u.branch_id,
+                u.primary_region_id,
+                u.created_at,
+                b.name AS branch_name,
+                r.name AS region_name
+              FROM users u
+              LEFT JOIN branches b ON b.id = u.branch_id AND b.tenant_id = u.tenant_id
+              LEFT JOIN regions r ON r.id = COALESCE(u.primary_region_id, b.region_id)
+              WHERE u.id = ? AND u.tenant_id = ?
+            `,
+            [req.user.sub, tenantId],
+          )
+        ) || null,
+      });
+      const user = lookupResult.user;
 
       if (!user) {
         res.status(404).json({ message: "User not found" });
         return;
       }
 
-      const assignedBranchIds: number[] = assignmentRoles.has(String(user.role || "").trim().toLowerCase())
-        ? await hierarchyService.getAreaManagerBranchIds(user.id)
-        : [];
-      const roles = await getUserRolesForUser({
-        all,
-        get,
-        userId: Number(user.id),
-        primaryRole: user.role,
-      });
+      const roles = lookupResult.roles;
       const normalizedRoles = resolveAssignedRoles({
         role: user.role,
         roles,
       });
-      const permissions = await getEffectivePermissionsForUser(Number(user.id), normalizedRoles);
+      const assignedBranchIds: number[] = normalizedRoles.some((role) => assignmentRoles.has(String(role || "").trim().toLowerCase()))
+        ? await hierarchyService.getAreaManagerBranchIds(user.id)
+        : [];
+      const permissions = await getEffectivePermissionsForUser(Number(user.id), normalizedRoles, {
+        tenantId: lookupResult.lookupTenantId,
+      });
 
       const roleCatalog = typeof getRoleCatalog === "function" ? getRoleCatalog() : {};
       const roleMetadata = roleCatalog && typeof roleCatalog === "object"
@@ -444,7 +460,20 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
         await revokeRefreshToken(refreshTokenCandidate);
       }
 
-      await run("UPDATE users SET token_version = token_version + 1 WHERE id = ?", [req.user.sub]);
+      const lookupResult = await loadUserWithPrivilegedTenantFallback({
+        get,
+        all,
+        lookupByTenant: async (tenantId) => (
+          await get("SELECT id FROM users WHERE id = ? AND tenant_id = ?", [req.user.sub, tenantId])
+        ) || null,
+      });
+
+      if (lookupResult.user) {
+        await run(
+          "UPDATE users SET token_version = token_version + 1 WHERE id = ? AND tenant_id = ?",
+          [req.user.sub, lookupResult.lookupTenantId],
+        );
+      }
       await invalidateCachedAuthSessionUser(Number(req.user.sub));
       hierarchyService.invalidateHierarchyCaches({ userId: req.user.sub });
 
@@ -465,7 +494,17 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
   app.post("/api/auth/change-password", authenticate, changePasswordLimiter, validate(changePasswordSchema), async (req, res, next) => {
     try {
       const payload = req.body;
-      const user = await get("SELECT id, password_hash FROM users WHERE id = ?", [req.user.sub]);
+      const lookupResult = await loadUserWithPrivilegedTenantFallback({
+        get,
+        all,
+        lookupByTenant: async (tenantId) => (
+          await get(
+            "SELECT id, password_hash, role FROM users WHERE id = ? AND tenant_id = ?",
+            [req.user.sub, tenantId],
+          )
+        ) || null,
+      });
+      const user = lookupResult.user;
 
       if (!user) {
         res.status(404).json({ message: "User not found" });
@@ -478,10 +517,10 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
         return;
       }
 
-      const newPasswordHash = await bcrypt.hash(payload.newPassword, 10);
+      const newPasswordHash = await bcrypt.hash(payload.newPassword, bcryptRounds);
       await run(
-        "UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL, token_version = token_version + 1 WHERE id = ?",
-        [newPasswordHash, req.user.sub],
+        "UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL, token_version = token_version + 1 WHERE id = ? AND tenant_id = ?",
+        [newPasswordHash, req.user.sub, lookupResult.lookupTenantId],
       );
       await invalidateCachedAuthSessionUser(Number(req.user.sub));
 
@@ -503,7 +542,11 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
     try {
       const payload = req.body;
       const normalizedEmail = normalizeEmail(payload.email);
-      const user = await get("SELECT id, email, is_active FROM users WHERE LOWER(email) = ?", [normalizedEmail]);
+      const tenantId = getCurrentTenantId();
+      const user = await get(
+        "SELECT id, email, is_active FROM users WHERE LOWER(email) = ? AND tenant_id = ?",
+        [normalizedEmail, tenantId],
+      );
 
       if (user && user.is_active === 1) {
         try {
@@ -512,6 +555,7 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
             userEmail: user.email,
             ipAddress: req.ip,
             requestedBy: "self",
+            tenantId,
           });
         } catch (deliveryError) {
           if (logger && typeof logger.error === "function") {
@@ -535,14 +579,15 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
     try {
       const payload = req.body;
       const tokenHash = crypto.createHash("sha256").update(payload.token).digest("hex");
+      const tenantId = getCurrentTenantId();
 
       const resetRow = await get(
         `
           SELECT id, user_id, expires_at, used_at
           FROM password_resets
-          WHERE token_hash = ?
+          WHERE token_hash = ? AND tenant_id = ?
         `,
-        [tokenHash],
+        [tokenHash, tenantId],
       );
 
       if (!resetRow || resetRow.used_at) {
@@ -555,19 +600,19 @@ function registerAuthRoutes(app: RouteRegistrar, deps: AuthRouteDeps) {
         return;
       }
 
-      const newPasswordHash = await bcrypt.hash(payload.newPassword, 10);
+      const newPasswordHash = await bcrypt.hash(payload.newPassword, bcryptRounds);
       await executeTransaction(async ({ run: txRun }) => {
         const updateUser = await txRun(
-          "UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL, token_version = token_version + 1 WHERE id = ?",
-          [newPasswordHash, resetRow.user_id],
+          "UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL, token_version = token_version + 1 WHERE id = ? AND tenant_id = ?",
+          [newPasswordHash, resetRow.user_id, tenantId],
         );
         if (updateUser.changes !== 1) {
           throw createHttpError(404, "User not found");
         }
 
         const markResetUsed = await txRun(
-          "UPDATE password_resets SET used_at = datetime('now') WHERE id = ? AND used_at IS NULL",
-          [resetRow.id],
+          "UPDATE password_resets SET used_at = datetime('now') WHERE id = ? AND used_at IS NULL AND tenant_id = ?",
+          [resetRow.id, tenantId],
         );
         if (markResetUsed.changes !== 1) {
           throw createHttpError(400, "Invalid or already used reset token");

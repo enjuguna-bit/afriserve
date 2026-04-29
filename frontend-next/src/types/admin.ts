@@ -141,6 +141,10 @@ export type CreateUserRequest = {
   branchIds?: number[]
 }
 
+export type AdminResetUserPasswordRequest = {
+  newPassword: string
+}
+
 // ── Tenant management types ──────────────────────────────────────────────────
 
 export type TenantStatus = 'active' | 'suspended' | 'deactivated'

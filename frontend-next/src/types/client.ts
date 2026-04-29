@@ -15,6 +15,10 @@ export type ClientRecord = {
   business_years: number | null
   business_location: string | null
   residential_address: string | null
+  latitude: number | null
+  longitude: number | null
+  location_accuracy_meters: number | null
+  location_captured_at: string | null
   is_active: number
   branch_id: number | null
   branch_name?: string | null
@@ -77,14 +81,25 @@ export type ClientOnboardingStatus = {
   feesPaidAt: string | null
   readyForLoanApplication: boolean
   checklist: {
+    profilePhotoAdded: boolean
+    locationCaptured: boolean
     guarantorAdded: boolean
+    guarantorDocumentsComplete: boolean
     collateralAdded: boolean
+    collateralDocumentsComplete: boolean
     feesPaid: boolean
     complete: boolean
   }
   counts: {
     guarantors: number
+    guarantorDocuments: number
     collaterals: number
+    collateralDocuments: number
+  }
+  location: {
+    captured: boolean
+    accuracyMeters: number | null
+    capturedAt: string | null
   }
   nextStep: string | null
 }
@@ -99,6 +114,7 @@ export type ClientGuarantorRecord = {
   employer_name: string | null
   monthly_income: number
   guarantee_amount: number
+  id_document_url: string | null
   is_active: number
   client_id?: number | null
   branch_id?: number | null
@@ -115,6 +131,7 @@ export type CreateClientGuarantorPayload = {
   employerName?: string
   monthlyIncome?: number
   guaranteeAmount: number
+  idDocumentUrl?: string
 }
 
 export type ClientCollateralAssetType = 'chattel' | 'vehicle' | 'land' | 'equipment' | 'machinery' | 'inventory' | 'livestock' | 'savings'
@@ -134,6 +151,7 @@ export type ClientCollateralRecord = {
   title_number: string | null
   location_details: string | null
   valuation_date: string | null
+  document_url: string | null
   status: 'active' | 'released' | 'liquidated' | string
   client_id?: number | null
   branch_id?: number | null
@@ -153,6 +171,7 @@ export type CreateClientCollateralPayload = {
   titleNumber?: string
   locationDetails?: string
   valuationDate?: string
+  documentUrl?: string
 }
 
 export type RecordClientFeePayload = {
@@ -205,6 +224,10 @@ export type CreateClientPayload = {
   businessYears?: number
   businessLocation?: string
   residentialAddress?: string
+  latitude?: number
+  longitude?: number
+  locationAccuracyMeters?: number
+  locationCapturedAt?: string
   officerId?: number
   branchId?: number
 }
@@ -213,6 +236,7 @@ export type UpdateClientPayload = {
   fullName?: string
   phone?: string | null
   nationalId?: string | null
+  piiOverrideReason?: string
   isActive?: boolean
   kraPin?: string | null
   photoUrl?: string | null
@@ -224,7 +248,27 @@ export type UpdateClientPayload = {
   businessYears?: number | null
   businessLocation?: string | null
   residentialAddress?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  locationAccuracyMeters?: number | null
+  locationCapturedAt?: string | null
   officerId?: number | null
+}
+
+export type ReverseGeocodeResult = {
+  latitude: number
+  longitude: number
+  displayName: string | null
+  address: {
+    street: string | null
+    suburb: string | null
+    city: string | null
+    county: string | null
+    state: string | null
+    postalCode: string | null
+    country: string | null
+  }
+  provider: string
 }
 
 export type ClientKycUpdatePayload = {

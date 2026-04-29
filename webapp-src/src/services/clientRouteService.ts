@@ -3,6 +3,15 @@ import { buildTabularExport } from "./reportExportService.js";
 import type { ClientRouteDeps } from "../types/routeDeps.js";
 import { createClientReadRepository } from "../repositories/clientReadRepository.js";
 import { createLoanUnderwritingService } from "./loanUnderwritingService.js";
+import {
+  deriveOnboardingStatus,
+  deriveOnboardingNextStep,
+  checkGuarantorNationalIdUnique,
+  checkCollateralAssetUnique,
+  refreshAssessmentsForGuarantor,
+  refreshAssessmentsForCollateral,
+  computeGraduatedLimitForClient,
+} from "./stakeholderService.js";
 
 type UserLike = Record<string, any>;
 type QueryLike = Record<string, any>;
@@ -10,106 +19,7 @@ type DbRow = Record<string, any>;
 type DbGetLike = (sql: string, params?: unknown[]) => Promise<DbRow | null | undefined>;
 type DbAllLike = (sql: string, params?: unknown[]) => Promise<DbRow[]>;
 
-/**
- * Computes the next graduated loan limit for a client based on repayment history and frequency.
- * Graduation rules:
- * - 1st loan: can graduate to 3k if very good repayment, 2k if repayment is good
- * - Subsequent loans: typically 2k, higher only for exceptional repayment
- * - Uses payment frequency and set terms to assess
- * Returns the next graduated limit (number, in thousands)
- */
-async function computeGraduatedLimitForClient(
-  clientId: number,
-  user: UserLike,
-  get: DbGetLike,
-  all: DbAllLike,
-): Promise<number> {
-  // Fetch all loans for the client
-  const loans = await all(
-    `SELECT id, status, principal, expected_total, repaid_total, disbursed_at, closed_at FROM loans WHERE client_id = ? ORDER BY disbursed_at ASC, id ASC`,
-    [clientId],
-  );
-  if (!loans || loans.length === 0) return 0;
-
-  // Only consider closed loans for graduation
-  const closedLoans = loans.filter((l: any) => String(l.status) === "closed");
-  if (closedLoans.length === 0) return 0;
-
-  // Get repayment history for the most recent closed loan
-  const lastLoan = closedLoans[closedLoans.length - 1];
-  const repayments = await all(
-    `SELECT amount, paid_at FROM repayments WHERE loan_id = ? ORDER BY paid_at ASC`,
-    [lastLoan.id]
-  );
-
-  // Calculate repayment stats
-  const totalRepaid = repayments.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0);
-  const expectedTotal = Number(lastLoan.expected_total || 0);
-  const principal = Number(lastLoan.principal || 0);
-  const repaidRatio = expectedTotal > 0 ? totalRepaid / expectedTotal : 0;
-
-  // Calculate repayment frequency (average days between payments)
-  let avgDaysBetweenPayments = null;
-  if (repayments.length > 1) {
-    let totalDays = 0;
-    for (let i = 1; i < repayments.length; ++i) {
-      const prev = new Date(repayments[i - 1].paid_at);
-      const curr = new Date(repayments[i].paid_at);
-      totalDays += (curr.getTime() - prev.getTime()) / (1000 * 60 * 60 * 24);
-    }
-    avgDaysBetweenPayments = totalDays / (repayments.length - 1);
-  }
-
-  // Graduation logic
-  if (closedLoans.length === 1) {
-    // 1st loan graduation
-    if (repaidRatio >= 0.98 && avgDaysBetweenPayments !== null && avgDaysBetweenPayments <= 8) {
-      // Very good repayment: almost all paid, frequent payments (weekly or better)
-      return 3000;
-    } else if (repaidRatio >= 0.95) {
-      // Good repayment, but not perfect
-      return 2000;
-    } else {
-      // Otherwise, no graduation
-      return principal;
-    }
-  } else {
-    // Subsequent loans
-    // Check last 2 closed loans for consistent good repayment
-    const recentLoans = closedLoans.slice(-2);
-    let allGood = true;
-    for (const loan of recentLoans) {
-      const reps = await all(
-        `SELECT amount, paid_at FROM repayments WHERE loan_id = ? ORDER BY paid_at ASC`,
-      [loan.id],
-      );
-      const totRep = reps.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0);
-      const expTot = Number(loan.expected_total || 0);
-      const repRatio = expTot > 0 ? totRep / expTot : 0;
-      let avgDays = null;
-      if (reps.length > 1) {
-        let tDays = 0;
-        for (let i = 1; i < reps.length; ++i) {
-          const prev = new Date(reps[i - 1].paid_at);
-          const curr = new Date(reps[i].paid_at);
-          tDays += (curr.getTime() - prev.getTime()) / (1000 * 60 * 60 * 24);
-        }
-        avgDays = tDays / (reps.length - 1);
-      }
-      if (!(repRatio >= 0.97 && avgDays !== null && avgDays <= 8)) {
-        allGood = false;
-        break;
-      }
-    }
-    if (allGood) {
-      // Exceptional: allow 3k graduation
-      return 3000;
-    } else {
-      // Typical graduation: 2k
-      return 2000;
-    }
-  }
-}
+// computeGraduatedLimitForClient is now in stakeholderService.ts (batched query, named constants)
 
 type PotentialDuplicateResult = Record<string, unknown> & {
   id?: number | string;
@@ -202,57 +112,8 @@ function createClientRouteService(deps: ClientRouteDeps) {
     return false;
   }
 
-  function deriveOnboardingStatus(payload: {
-    kycStatus: string;
-    hasGuarantor: boolean;
-    hasCollateral: boolean;
-    feesPaid: boolean;
-  }) {
-    const normalizedKycStatus = String(payload.kycStatus || "pending").trim().toLowerCase();
+  // deriveOnboardingStatus and deriveOnboardingNextStep are now imported from stakeholderService.js
 
-    if (normalizedKycStatus === "verified" && payload.hasGuarantor && payload.hasCollateral && payload.feesPaid) {
-      return "complete";
-    }
-    if (normalizedKycStatus === "verified") {
-      return "kyc_verified";
-    }
-    if (["in_review", "rejected", "suspended"].includes(normalizedKycStatus)) {
-      return "kyc_pending";
-    }
-    return "registered";
-  }
-
-  function deriveOnboardingNextStep(payload: {
-    kycStatus: string;
-    hasGuarantor: boolean;
-    hasCollateral: boolean;
-    feesPaid: boolean;
-  }) {
-    const normalizedKycStatus = String(payload.kycStatus || "pending").trim().toLowerCase();
-
-    if (normalizedKycStatus !== "verified") {
-      if (normalizedKycStatus === "in_review") {
-        return "complete_kyc_review";
-      }
-      if (normalizedKycStatus === "rejected") {
-        return "resubmit_kyc";
-      }
-      if (normalizedKycStatus === "suspended") {
-        return "resolve_kyc_hold";
-      }
-      return "start_kyc";
-    }
-    if (!payload.hasGuarantor) {
-      return "add_guarantor";
-    }
-    if (!payload.hasCollateral) {
-      return "add_collateral";
-    }
-    if (!payload.feesPaid) {
-      return "record_fee_payment";
-    }
-    return null;
-  }
 
   async function loadClientOnboardingProgress(clientId: number) {
     const [guarantorCountRow, collateralCountRow, clientRow] = await Promise.all([
@@ -431,43 +292,8 @@ function createClientRouteService(deps: ClientRouteDeps) {
     return Boolean(existing?.id);
   }
 
-  async function refreshLoanAssessments(loanIds: number[]) {
-    const normalizedLoanIds = [...new Set(
-      loanIds
-        .map((value) => Number(value))
-        .filter((value) => Number.isInteger(value) && value > 0),
-    )];
+  // refreshLinkedLoanAssessmentsForGuarantor/Collateral are now imported from stakeholderService.js
 
-    for (const loanId of normalizedLoanIds) {
-      await loanUnderwritingService.refreshLoanAssessment(loanId);
-    }
-  }
-
-  async function refreshLinkedLoanAssessmentsForGuarantor(guarantorId: number) {
-    const linkedLoans = await all(
-      `
-        SELECT DISTINCT loan_id
-        FROM loan_guarantors
-        WHERE guarantor_id = ?
-      `,
-      [guarantorId],
-    );
-
-    await refreshLoanAssessments(linkedLoans.map((row) => Number(row.loan_id || 0)));
-  }
-
-  async function refreshLinkedLoanAssessmentsForCollateral(collateralAssetId: number) {
-    const linkedLoans = await all(
-      `
-        SELECT DISTINCT loan_id
-        FROM loan_collaterals
-        WHERE collateral_asset_id = ?
-      `,
-      [collateralAssetId],
-    );
-
-    await refreshLoanAssessments(linkedLoans.map((row) => Number(row.loan_id || 0)));
-  }
 
   async function resolveClientScopeClient(clientId: number, user: UserLike) {
     const scope = await hierarchyService.resolveHierarchyScope(user);
@@ -1189,18 +1015,8 @@ function createClientRouteService(deps: ClientRouteDeps) {
       return { status: resolved.status, body: resolved.body };
     }
 
-    if (payload.nationalId) {
-      const existingGuarantor = await get(
-        `
-          SELECT id
-          FROM guarantors
-          WHERE LOWER(TRIM(COALESCE(national_id, ''))) = LOWER(TRIM(?))
-        `,
-        [payload.nationalId],
-      );
-      if (existingGuarantor) {
-        return { status: 409, body: { message: "A guarantor with this national ID already exists" } };
-      }
+    if (!(await checkGuarantorNationalIdUnique(get, payload.nationalId || null))) {
+      return { status: 409, body: { message: "A guarantor with this national ID already exists" } };
     }
 
     const createdAt = new Date().toISOString();
@@ -1333,19 +1149,8 @@ function createClientRouteService(deps: ClientRouteDeps) {
       const nextNationalId = payload.nationalId || null;
       const currentNationalId = guarantor.national_id || null;
       if (nextNationalId !== currentNationalId) {
-        if (nextNationalId) {
-          const existingGuarantor = await get(
-            `
-              SELECT id
-              FROM guarantors
-              WHERE id != ?
-                AND LOWER(TRIM(COALESCE(national_id, ''))) = LOWER(TRIM(?))
-            `,
-            [guarantorId, nextNationalId],
-          );
-          if (existingGuarantor) {
-            return { status: 409, body: { message: "A guarantor with this national ID already exists" } };
-          }
+        if (!(await checkGuarantorNationalIdUnique(get, nextNationalId, guarantorId))) {
+          return { status: 409, body: { message: "A guarantor with this national ID already exists" } };
         }
 
         setClauses.push("national_id = ?");
@@ -1427,7 +1232,7 @@ function createClientRouteService(deps: ClientRouteDeps) {
 
     const updatedGuarantor = await get("SELECT * FROM guarantors WHERE id = ?", [guarantorId]);
     const onboarding = await syncClientOnboardingStatus(clientId);
-    await refreshLinkedLoanAssessmentsForGuarantor(guarantorId);
+    await refreshAssessmentsForGuarantor(all, loanUnderwritingService, guarantorId);
 
     await writeAuditLog({
       userId: user.sub,
@@ -1459,44 +1264,13 @@ function createClientRouteService(deps: ClientRouteDeps) {
       return { status: resolved.status, body: resolved.body };
     }
 
-    if (payload.registrationNumber) {
-      const existingByRegistration = await get(
-        `
-          SELECT id
-          FROM collateral_assets
-          WHERE LOWER(TRIM(COALESCE(registration_number, ''))) = LOWER(TRIM(?))
-        `,
-        [payload.registrationNumber],
-      );
-      if (existingByRegistration) {
-        return { status: 409, body: { message: "A collateral asset with this registration number already exists" } };
-      }
-    }
-    if (payload.logbookNumber) {
-      const existingByLogbook = await get(
-        `
-          SELECT id
-          FROM collateral_assets
-          WHERE LOWER(TRIM(COALESCE(logbook_number, ''))) = LOWER(TRIM(?))
-        `,
-        [payload.logbookNumber],
-      );
-      if (existingByLogbook) {
-        return { status: 409, body: { message: "A collateral asset with this logbook number already exists" } };
-      }
-    }
-    if (payload.titleNumber) {
-      const existingByTitle = await get(
-        `
-          SELECT id
-          FROM collateral_assets
-          WHERE LOWER(TRIM(COALESCE(title_number, ''))) = LOWER(TRIM(?))
-        `,
-        [payload.titleNumber],
-      );
-      if (existingByTitle) {
-        return { status: 409, body: { message: "A collateral asset with this title number already exists" } };
-      }
+    const collateralConflict = await checkCollateralAssetUnique(get, {
+      registrationNumber: payload.registrationNumber || null,
+      logbookNumber: payload.logbookNumber || null,
+      titleNumber: payload.titleNumber || null,
+    });
+    if (collateralConflict) {
+      return { status: 409, body: { message: collateralConflict.message } };
     }
 
     const createdAt = new Date().toISOString();
@@ -1667,23 +1441,9 @@ function createClientRouteService(deps: ClientRouteDeps) {
 
     if (hasOwn(payload, "registrationNumber")) {
       const nextRegistrationNumber = payload.registrationNumber || null;
-      const currentRegistrationNumber = collateral.registration_number || null;
-      if (nextRegistrationNumber !== currentRegistrationNumber) {
-        if (nextRegistrationNumber) {
-          const existingByRegistration = await get(
-            `
-              SELECT id
-              FROM collateral_assets
-              WHERE id != ?
-                AND LOWER(TRIM(COALESCE(registration_number, ''))) = LOWER(TRIM(?))
-            `,
-            [collateralId, nextRegistrationNumber],
-          );
-          if (existingByRegistration) {
-            return { status: 409, body: { message: "A collateral asset with this registration number already exists" } };
-          }
-        }
-
+      if (nextRegistrationNumber !== (collateral.registration_number || null)) {
+        const conflict = await checkCollateralAssetUnique(get, { registrationNumber: nextRegistrationNumber }, collateralId);
+        if (conflict) return { status: 409, body: { message: conflict.message } };
         setClauses.push("registration_number = ?");
         queryParams.push(nextRegistrationNumber);
         changedFields.registrationNumber = nextRegistrationNumber;
@@ -1692,23 +1452,9 @@ function createClientRouteService(deps: ClientRouteDeps) {
 
     if (hasOwn(payload, "logbookNumber")) {
       const nextLogbookNumber = payload.logbookNumber || null;
-      const currentLogbookNumber = collateral.logbook_number || null;
-      if (nextLogbookNumber !== currentLogbookNumber) {
-        if (nextLogbookNumber) {
-          const existingByLogbook = await get(
-            `
-              SELECT id
-              FROM collateral_assets
-              WHERE id != ?
-                AND LOWER(TRIM(COALESCE(logbook_number, ''))) = LOWER(TRIM(?))
-            `,
-            [collateralId, nextLogbookNumber],
-          );
-          if (existingByLogbook) {
-            return { status: 409, body: { message: "A collateral asset with this logbook number already exists" } };
-          }
-        }
-
+      if (nextLogbookNumber !== (collateral.logbook_number || null)) {
+        const conflict = await checkCollateralAssetUnique(get, { logbookNumber: nextLogbookNumber }, collateralId);
+        if (conflict) return { status: 409, body: { message: conflict.message } };
         setClauses.push("logbook_number = ?");
         queryParams.push(nextLogbookNumber);
         changedFields.logbookNumber = nextLogbookNumber;
@@ -1717,23 +1463,9 @@ function createClientRouteService(deps: ClientRouteDeps) {
 
     if (hasOwn(payload, "titleNumber")) {
       const nextTitleNumber = payload.titleNumber || null;
-      const currentTitleNumber = collateral.title_number || null;
-      if (nextTitleNumber !== currentTitleNumber) {
-        if (nextTitleNumber) {
-          const existingByTitle = await get(
-            `
-              SELECT id
-              FROM collateral_assets
-              WHERE id != ?
-                AND LOWER(TRIM(COALESCE(title_number, ''))) = LOWER(TRIM(?))
-            `,
-            [collateralId, nextTitleNumber],
-          );
-          if (existingByTitle) {
-            return { status: 409, body: { message: "A collateral asset with this title number already exists" } };
-          }
-        }
-
+      if (nextTitleNumber !== (collateral.title_number || null)) {
+        const conflict = await checkCollateralAssetUnique(get, { titleNumber: nextTitleNumber }, collateralId);
+        if (conflict) return { status: 409, body: { message: conflict.message } };
         setClauses.push("title_number = ?");
         queryParams.push(nextTitleNumber);
         changedFields.titleNumber = nextTitleNumber;
@@ -1783,7 +1515,7 @@ function createClientRouteService(deps: ClientRouteDeps) {
 
     const updatedCollateral = await get("SELECT * FROM collateral_assets WHERE id = ?", [collateralId]);
     const onboarding = await syncClientOnboardingStatus(clientId);
-    await refreshLinkedLoanAssessmentsForCollateral(collateralId);
+    await refreshAssessmentsForCollateral(all, loanUnderwritingService, collateralId);
 
     await writeAuditLog({
       userId: user.sub,
@@ -2161,7 +1893,7 @@ function createClientRouteService(deps: ClientRouteDeps) {
     recordClientFeePayment,
     getClientOnboardingStatus,
     getClientHistory,
-    computeGraduatedLimitForClient,
+    computeGraduatedLimitForClient: (clientId: number) => computeGraduatedLimitForClient(clientId, all),
   };
 }
 

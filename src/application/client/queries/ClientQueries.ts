@@ -62,6 +62,7 @@ export interface ClientOnboardingStatusDto {
   onboarding_status: string;
   kyc_status: string;
   fee_payment_status: string;
+  fees_paid_at?: string | null;
   ready_for_loan_application: boolean;
   blockers: string[];
   guarantor_count: number;

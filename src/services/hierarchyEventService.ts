@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { PrismaClientLike } from "../db/prismaClient.js";
+import { run, all } from "../db/connection.js";
 import type { HierarchyScope } from "../types/dataLayer.js";
 
 interface PublishedHierarchyEvent extends Record<string, any> {
@@ -13,7 +13,7 @@ interface PublishedHierarchyEvent extends Record<string, any> {
   created_at: string;
 }
 
-function createHierarchyEventService({ prisma }: { prisma: PrismaClientLike }) {
+function createHierarchyEventService() {
   const emitter = new EventEmitter();
   emitter.setMaxListeners(100);
 
@@ -33,20 +33,23 @@ function createHierarchyEventService({ prisma }: { prisma: PrismaClientLike }) {
     details?: unknown;
   }): Promise<PublishedHierarchyEvent> {
     const createdAt = new Date().toISOString();
-    const insert = await prisma.hierarchy_events.create({
-      data: {
-        event_type: eventType,
-        scope_level: scopeLevel,
-        region_id: regionId,
-        branch_id: branchId,
-        actor_user_id: actorUserId,
-        details: details ? JSON.stringify(details) : null,
-        created_at: createdAt,
-      },
-    });
+    const result = await run(
+      `INSERT INTO hierarchy_events
+         (event_type, scope_level, region_id, branch_id, actor_user_id, details, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        eventType,
+        scopeLevel,
+        regionId,
+        branchId,
+        actorUserId,
+        details !== null && details !== undefined ? JSON.stringify(details) : null,
+        createdAt,
+      ],
+    );
 
     const event: PublishedHierarchyEvent = {
-      id: Number(insert.id || 0),
+      id: Number(result.lastID || 0),
       event_type: eventType,
       scope_level: scopeLevel,
       region_id: regionId,
@@ -92,17 +95,11 @@ function createHierarchyEventService({ prisma }: { prisma: PrismaClientLike }) {
     { sinceId = 0, limit = 100, scope }: { sinceId?: number; limit?: number; scope?: HierarchyScope | null },
   ): Promise<Array<Record<string, any>>> {
     const safeLimit = Math.min(Math.max(Math.floor(Number(limit) || 50), 1), 500);
-    const rows = await prisma.hierarchy_events.findMany({
-      where: {
-        id: {
-          gt: Math.max(0, Number(sinceId) || 0),
-        },
-      },
-      orderBy: {
-        id: "asc",
-      },
-      take: safeLimit,
-    });
+    const safeSinceId = Math.max(0, Number(sinceId) || 0);
+    const rows = await all(
+      "SELECT * FROM hierarchy_events WHERE id > ? ORDER BY id ASC LIMIT ?",
+      [safeSinceId, safeLimit],
+    );
 
     return rows
       .filter((row: Record<string, any>) => isEventVisibleToScope(row, scope))

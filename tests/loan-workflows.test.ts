@@ -468,9 +468,8 @@ test("loan top-up workflow creates approval execution and contract version histo
     }
     assert.equal(topUpFlow.request.status, 200);
     assert.equal(topUpFlow.review?.status, 200);
-    const fs = require('node:fs');
     if (String(topUpFlow.review?.data?.execution?.transaction?.tx_type || "") !== "top_up") {
-        fs.writeFileSync('topup_response.json', JSON.stringify(topUpFlow.review?.data, null, 2));
+        await fs.writeFile('topup_response.json', JSON.stringify(topUpFlow.review?.data, null, 2));
     }
 
 
@@ -2348,7 +2347,6 @@ test("loan officer reassignment updates assignment, records audit log, and inval
     });
     assert.equal(createOfficerA.status, 201);
     const officerAId = Number(createOfficerA.data.id);
-
     const createOfficerB = await api(baseUrl, "/api/users", {
       method: "POST",
       token: adminToken,
@@ -2467,7 +2465,6 @@ test("loan officer reassignment permits operations and area managers and blocks 
     });
     assert.equal(createOfficerA.status, 201);
     const officerAId = Number(createOfficerA.data.id);
-
     const createOfficerB = await api(baseUrl, "/api/users", {
       method: "POST",
       token: adminToken,
@@ -2633,8 +2630,6 @@ test("pending approval queue supports manager filters and scope-aware visibility
       },
     });
     assert.equal(createOfficerA.status, 201);
-    const officerAId = Number(createOfficerA.data.id);
-
     const createOfficerB = await api(baseUrl, "/api/users", {
       method: "POST",
       token: adminToken,

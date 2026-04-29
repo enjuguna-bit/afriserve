@@ -1,0 +1,10 @@
+<resources>
+  <string name="app_name">AfriServe Customer</string>
+  <string name="notification_channel_payments_name">Payment reminders</string>
+  <string name="notification_channel_payments_description">Installment reminders and payment confirmations.</string>
+  <string name="notification_channel_account_name">Account updates</string>
+  <string name="notification_channel_account_description">Profile updates, approvals, and onboarding alerts.</string>
+  <string name="notification_default_title">AfriServe Customer Update</string>
+  <string name="notification_default_body">Open the app to view the latest update.</string>
+</resources>
+

@@ -23,8 +23,7 @@ export interface SqliteClientRepositoryDeps {
 
 /**
  * SQLite adapter for IClientRepository.
- * Uses the same raw sql get/all/run pattern as the existing service layer �
- * no new DB connection, just wraps the injected functions.
+ * Uses the same raw SQL get/all/run pattern as the existing service layer.
  *
  * Mapping convention: DB column snake_case <-> domain camelCase via rowToProps().
  */
@@ -47,7 +46,6 @@ export class SqliteClientRepository implements IClientRepository {
       : null;
 
     const runInsert = async (db: { get: DbGet; run: DbRun }): Promise<number> => {
-      // Dedup check inside transaction (atomic with the insert below)
       if (normalizedNationalId) {
         const tenantId = getCurrentTenantId();
         const dup = await db.get(
@@ -71,8 +69,9 @@ export class SqliteClientRepository implements IClientRepository {
           kra_pin, photo_url, id_document_url,
           next_of_kin_name, next_of_kin_phone, next_of_kin_relation,
           business_type, business_years, business_location, residential_address,
+          latitude, longitude, location_accuracy_meters, location_captured_at,
           is_active, deleted_at, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           d["tenant_id"] || tenantId,
           d["full_name"], d["phone"], d["national_id"], d["branch_id"],
@@ -81,10 +80,12 @@ export class SqliteClientRepository implements IClientRepository {
           d["kra_pin"], d["photo_url"], d["id_document_url"],
           d["next_of_kin_name"], d["next_of_kin_phone"], d["next_of_kin_relation"],
           d["business_type"], d["business_years"], d["business_location"], d["residential_address"],
+          d["latitude"], d["longitude"], d["location_accuracy_meters"], d["location_captured_at"],
           d["is_active"] ?? 1, d["deleted_at"] ?? null, d["created_at"], d["updated_at"],
         ],
       );
-      return Number((result as any).lastID ?? (result as any).lastId ?? 0);
+
+      return Number(result.lastID || 0);
     };
 
     if (this.deps.executeTransaction) {
@@ -92,57 +93,75 @@ export class SqliteClientRepository implements IClientRepository {
         (tx) => runInsert(tx as { get: DbGet; run: DbRun }),
       ) as number;
     }
+
     return runInsert(this.deps);
   }
+
   async save(client: Client): Promise<void> {
     const d = client.toPersistence();
-    const existing = await this.deps.get("SELECT id FROM clients WHERE id = ?", [d["id"]]);
-
-    if (existing) {
-      // UPDATE � build SET clause from all mutable columns
-      // Include tenant_id in the WHERE guard so a mis-routed request
-      // cannot silently update a row belonging to a different tenant.
-      await this.deps.run(
-        `UPDATE clients SET
-          full_name = ?, phone = ?, national_id = ?, branch_id = ?, officer_id = ?,
-          kyc_status = ?, onboarding_status = ?, fee_payment_status = ?, fees_paid_at = ?,
-          kra_pin = ?, photo_url = ?, id_document_url = ?,
-          next_of_kin_name = ?, next_of_kin_phone = ?, next_of_kin_relation = ?,
-          business_type = ?, business_years = ?, business_location = ?, residential_address = ?,
-          is_active = ?, deleted_at = ?, updated_at = ?
-        WHERE id = ? AND tenant_id = ?`,
-        [
-          d["full_name"], d["phone"], d["national_id"], d["branch_id"], d["officer_id"],
-          d["kyc_status"], d["onboarding_status"], d["fee_payment_status"], d["fees_paid_at"],
-          d["kra_pin"], d["photo_url"], d["id_document_url"],
-          d["next_of_kin_name"], d["next_of_kin_phone"], d["next_of_kin_relation"],
-          d["business_type"], d["business_years"], d["business_location"], d["residential_address"],
-          d["is_active"], d["deleted_at"], d["updated_at"],
-          d["id"], getCurrentTenantId(),
-        ],
+    const tenantId = getCurrentTenantId();
+    const persist = async (db: { get: DbGet; run: DbRun }) => {
+      const existing = await db.get(
+        "SELECT id FROM clients WHERE id = ? AND tenant_id = ?",
+        [d["id"], tenantId],
       );
-    } else {
-      // INSERT
-      await this.deps.run(
+
+      if (existing) {
+        await db.run(
+          `UPDATE clients SET
+            full_name = ?, phone = ?, national_id = ?, branch_id = ?, officer_id = ?,
+            kyc_status = ?, onboarding_status = ?, fee_payment_status = ?, fees_paid_at = ?,
+            kra_pin = ?, photo_url = ?, id_document_url = ?,
+            next_of_kin_name = ?, next_of_kin_phone = ?, next_of_kin_relation = ?,
+            business_type = ?, business_years = ?, business_location = ?, residential_address = ?,
+            latitude = ?, longitude = ?, location_accuracy_meters = ?, location_captured_at = ?,
+            is_active = ?, deleted_at = ?, updated_at = ?
+          WHERE id = ? AND tenant_id = ?`,
+          [
+            d["full_name"], d["phone"], d["national_id"], d["branch_id"], d["officer_id"],
+            d["kyc_status"], d["onboarding_status"], d["fee_payment_status"], d["fees_paid_at"],
+            d["kra_pin"], d["photo_url"], d["id_document_url"],
+            d["next_of_kin_name"], d["next_of_kin_phone"], d["next_of_kin_relation"],
+            d["business_type"], d["business_years"], d["business_location"], d["residential_address"],
+            d["latitude"], d["longitude"], d["location_accuracy_meters"], d["location_captured_at"],
+            d["is_active"], d["deleted_at"], d["updated_at"],
+            d["id"], tenantId,
+          ],
+        );
+        return;
+      }
+
+      await db.run(
         `INSERT INTO clients (
+          tenant_id,
           id, full_name, phone, national_id, branch_id, officer_id, created_by_user_id,
           kyc_status, onboarding_status, fee_payment_status, fees_paid_at,
           kra_pin, photo_url, id_document_url,
           next_of_kin_name, next_of_kin_phone, next_of_kin_relation,
           business_type, business_years, business_location, residential_address,
+          latitude, longitude, location_accuracy_meters, location_captured_at,
           is_active, deleted_at, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
+          d["tenant_id"] || tenantId,
           d["id"], d["full_name"], d["phone"], d["national_id"], d["branch_id"],
           d["officer_id"], d["created_by_user_id"],
           d["kyc_status"], d["onboarding_status"], d["fee_payment_status"], d["fees_paid_at"],
           d["kra_pin"], d["photo_url"], d["id_document_url"],
           d["next_of_kin_name"], d["next_of_kin_phone"], d["next_of_kin_relation"],
           d["business_type"], d["business_years"], d["business_location"], d["residential_address"],
+          d["latitude"], d["longitude"], d["location_accuracy_meters"], d["location_captured_at"],
           d["is_active"], d["deleted_at"], d["created_at"], d["updated_at"],
         ],
       );
+    };
+
+    if (this.deps.executeTransaction) {
+      await this.deps.executeTransaction((tx) => persist(tx as { get: DbGet; run: DbRun }));
+      return;
     }
+
+    await persist(this.deps);
   }
 
   async findById(id: ClientId): Promise<Client | null> {
@@ -228,6 +247,10 @@ export class SqliteClientRepository implements IClientRepository {
       businessYears:        row["business_years"] != null ? Number(row["business_years"]) : null,
       businessLocation:     row["business_location"] ? String(row["business_location"]) : null,
       residentialAddress:   row["residential_address"] ? String(row["residential_address"]) : null,
+      latitude:             row["latitude"] != null ? Number(row["latitude"]) : null,
+      longitude:            row["longitude"] != null ? Number(row["longitude"]) : null,
+      locationAccuracyMeters: row["location_accuracy_meters"] != null ? Number(row["location_accuracy_meters"]) : null,
+      locationCapturedAt:   safeDate(row["location_captured_at"]),
       isActive:             Number(row["is_active"] ?? 1) === 1,
       deletedAt:            safeDate(row["deleted_at"]),
       createdAt:            safeDate(row["created_at"]) ?? new Date(),

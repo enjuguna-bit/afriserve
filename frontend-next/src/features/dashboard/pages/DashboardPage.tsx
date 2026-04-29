@@ -3,9 +3,11 @@ import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { AsyncState } from '../../../components/common/AsyncState'
 import { useAuth } from '../../../hooks/useAuth'
+import { queryKeys } from '../../../services/queryKeys'
 import { queryPolicies } from '../../../services/queryPolicies'
 import { useDashboardStore } from '../../../store/dashboardStore'
 import { useClients } from '../../clients/hooks/useClients'
+import { resolveDashboardBranchIdFilter } from '../dashboardScope'
 import {
   getArrearsReport,
   getClientSummaryReport,
@@ -16,9 +18,13 @@ import {
   getPortfolioReport,
   getReportFilterOptions,
 } from '../../../services/reportService'
+import { listPendingApprovalLoans } from '../../../services/loanService'
 import styles from './DashboardPage.module.css'
+import { DashboardMetricCard, type DashboardFilterParams } from '../components/DashboardMetricCard'
 
-const DashboardDeepDivePanels = lazy(() => import('../components/DashboardDeepDivePanels').then((module) => ({ default: module.DashboardDeepDivePanels })))
+const DashboardScaffoldPanels = lazy(() => import('../components/DashboardScaffoldPanels').then((module) => ({ default: module.DashboardScaffoldPanels })))
+const BUSINESS_TIME_ZONE = 'Africa/Nairobi'
+const BUSINESS_TIME_ZONE_OFFSET_MS = 3 * 60 * 60 * 1000
 
 type SummaryPayload = Record<string, unknown>
 type DashboardFilterOptionsPayload = {
@@ -54,85 +60,89 @@ function formatPercent(value: number) {
   return `${(Number(value || 0) * 100).toFixed(2)}%`
 }
 
+function formatBusinessDateInputValue(value: Date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: BUSINESS_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value)
+
+  const year = parts.find((part) => part.type === 'year')?.value
+  const month = parts.find((part) => part.type === 'month')?.value
+  const day = parts.find((part) => part.type === 'day')?.value
+
+  if (!year || !month || !day) {
+    return ''
+  }
+
+  return `${year}-${month}-${day}`
+}
+
+function buildDashboardReportFilterParams({
+  reportId,
+  categoryId,
+  datePreset,
+  customDateFrom,
+  customDateTo,
+  dateFrom,
+  dateTo,
+  officeId,
+  officerId,
+  extraParams,
+}: {
+  reportId: string
+  categoryId: string
+  datePreset?: string
+  customDateFrom?: string
+  customDateTo?: string
+  dateFrom?: string
+  dateTo?: string
+  officeId?: number | null
+  officerId?: number | null
+  extraParams?: DashboardFilterParams
+}): DashboardFilterParams {
+  return {
+    reportId,
+    categoryId,
+    autoload: '1',
+    ...(datePreset ? { datePreset } : {}),
+    ...(customDateFrom ? { customDateFrom } : {}),
+    ...(customDateTo ? { customDateTo } : {}),
+    ...(dateFrom ? { dateFrom } : {}),
+    ...(dateTo ? { dateTo } : {}),
+    ...(typeof officeId === 'number' && officeId > 0 ? { officeId } : {}),
+    ...(typeof officerId === 'number' && officerId > 0 ? { officerIds: officerId } : {}),
+    ...(extraParams || {}),
+  }
+}
+
+function buildDashboardListFilterParams({
+  branchId,
+  officerId,
+  extraParams,
+}: {
+  branchId?: number | null
+  officerId?: number | null
+  extraParams?: DashboardFilterParams
+}): DashboardFilterParams {
+  return {
+    ...(typeof branchId === 'number' && branchId > 0 ? { branchId } : {}),
+    ...(typeof officerId === 'number' && officerId > 0 ? { officerId } : {}),
+    ...(extraParams || {}),
+  }
+}
 function startOfDayIso(now: Date) {
-  const value = new Date(now)
-  value.setHours(0, 0, 0, 0)
-  return value.toISOString()
+  const businessDate = new Date(now.getTime() + BUSINESS_TIME_ZONE_OFFSET_MS)
+  businessDate.setUTCHours(0, 0, 0, 0)
+  return new Date(businessDate.getTime() - BUSINESS_TIME_ZONE_OFFSET_MS).toISOString()
 }
 
 function startOfMonthIso(now: Date) {
-  const value = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0)
-  return value.toISOString()
-}
-
-function firstName(name: string | undefined) {
-  return String(name || '').trim().split(/\s+/)[0] || 'Manager'
-}
-
-function getTimeOfDay() {
-  const hour = new Date().getHours()
-  if (hour < 12) return 'morning'
-  if (hour < 17) return 'afternoon'
-  return 'evening'
-}
-
-type ContextualNotice = {
-  variant: 'danger' | 'warning' | 'success'
-  title: string
-  text: string
-  ctaLabel: string | null
-  ctaTo: string | null
-}
-
-function getContextualNotice(
-  pendingApprovalsCount: number,
-  parRatio: number,
-  unpaidDue: number,
-  dueNow: number,
-  arrearsBacklog: number,
-  branchLabel: string,
-  activeAgentName: string | null,
-  welcomeName: string,
-): ContextualNotice {
-  const scope = activeAgentName ? `${activeAgentName}'s` : `${branchLabel}`
-
-  if (pendingApprovalsCount > 0) {
-    return {
-      variant: 'warning',
-      title: 'Approvals pending',
-      text: `${pendingApprovalsCount} loan application${pendingApprovalsCount > 1 ? 's are' : ' is'} waiting for review.`,
-      ctaLabel: 'Review now',
-      ctaTo: '/approvals',
-    }
-  }
-
-  if (parRatio > 0.1) {
-    return {
-      variant: 'danger',
-      title: 'Portfolio health alert',
-      text: `${scope} PAR ratio is elevated. Review overdue accounts to prevent further deterioration.`,
-      ctaLabel: 'View arrears',
-      ctaTo: '/reports',
-    }
-  }
-
-  if (arrearsBacklog > 0 && dueNow > 0 && unpaidDue / dueNow > 0.3) {
-    return {
-      variant: 'warning',
-      title: 'Collections incomplete',
-      text: `More than 30% of today's dues for ${scope} are still uncollected.`,
-      ctaLabel: 'See overdue list',
-      ctaTo: '/collections',
-    }
-  }
-
-  return {
-    variant: 'success',
-    title: `Good ${getTimeOfDay()}, ${welcomeName}`,
-    text: `${scope} portfolio is on track. Collections are within normal range.`,
-    ctaLabel: null,
-    ctaTo: null,
-  }
+  const businessDate = new Date(now.getTime() + BUSINESS_TIME_ZONE_OFFSET_MS)
+  businessDate.setUTCDate(1)
+  businessDate.setUTCHours(0, 0, 0, 0)
+  return new Date(businessDate.getTime() - BUSINESS_TIME_ZONE_OFFSET_MS).toISOString()
 }
 
 function toPositiveNumber(value: number | string | null | undefined) {
@@ -180,7 +190,7 @@ export function DashboardPage() {
   }, [])
 
   const dashboardFilterOptionsQuery = useQuery({
-    queryKey: ['dashboard', 'filter-options', 'loan_officer'],
+    queryKey: queryKeys.reports.filterOptions({ agentRole: 'loan_officer' }),
     queryFn: () => getReportFilterOptions({ agentRole: 'loan_officer' }),
     enabled: isBranchManager,
     ...queryPolicies.report,
@@ -258,9 +268,14 @@ export function DashboardPage() {
   const effectiveDraftOfficerId = draftOfficerId && draftAvailableAgents.some((entry) => String(entry.id) === String(draftOfficerId))
     ? draftOfficerId
     : ''
-
+  const selectedOfficeScopeType = String(selectedOffice?.scopeType || '').trim().toLowerCase()
+  const isOverallOfficeScope = selectedOfficeScopeType === 'overall'
   const branchIdFilter = isBranchManager
-    ? (toPositiveNumber(selectedOffice?.id) ?? toPositiveNumber(user?.branch_id))
+    ? resolveDashboardBranchIdFilter({
+      normalizedRole,
+      selectedOffice,
+      userBranchId: user?.branch_id,
+    })
     : undefined
   const officerIdFilter = toPositiveNumber(effectiveSelectedOfficerId) ?? undefined
   const reportParams = useMemo(() => ({
@@ -273,13 +288,19 @@ export function DashboardPage() {
     [availableAgents, effectiveSelectedOfficerId],
   )
   const canFilterDashboard = isBranchManager && agents.length > 0
-  const dashboardModeLabel = activeAgent ? `${activeAgent.name} dashboard` : 'Branch dashboard'
+  const dashboardModeLabel = activeAgent
+    ? `${activeAgent.name} dashboard`
+    : (isOverallOfficeScope ? 'Portfolio dashboard' : 'Branch dashboard')
   const loadingText = activeAgent
     ? 'Loading officer dashboard...'
-    : (isBranchManager ? 'Loading branch dashboard...' : 'Loading dashboard...')
+    : (isBranchManager
+      ? (isOverallOfficeScope ? 'Loading portfolio dashboard...' : 'Loading branch dashboard...')
+      : 'Loading dashboard...')
   const errorText = activeAgent
     ? 'Unable to load officer dashboard.'
-    : (isBranchManager ? 'Unable to load branch dashboard.' : 'Unable to load dashboard.')
+    : (isBranchManager
+      ? (isOverallOfficeScope ? 'Unable to load portfolio dashboard.' : 'Unable to load branch dashboard.')
+      : 'Unable to load dashboard.')
 
   const clientsQuery = useClients({
     limit: 1,
@@ -289,28 +310,24 @@ export function DashboardPage() {
     ...(branchIdFilter ? { branchId: branchIdFilter } : {}),
     ...(officerIdFilter ? { officerId: officerIdFilter } : {}),
   })
-  const activeClientsQuery = useClients({
-    limit: 1,
-    offset: 0,
-    sortBy: 'id',
-    sortOrder: 'desc',
-    isActive: true,
-    ...(branchIdFilter ? { branchId: branchIdFilter } : {}),
-    ...(officerIdFilter ? { officerId: officerIdFilter } : {}),
-  })
   const portfolioQuery = useQuery({
     queryKey: ['dashboard', 'portfolio', reportParams],
     queryFn: () => getPortfolioReport(reportParams),
     ...queryPolicies.report,
   })
-  const clientSummaryQuery = useQuery({
+  const monthlyClientSummaryQuery = useQuery({
     queryKey: ['dashboard', 'clients-summary', monthStart, nowIso, reportParams],
     queryFn: () => getClientSummaryReport({ dateFrom: monthStart, dateTo: nowIso, ...reportParams }),
     ...queryPolicies.report,
   })
-  const disbursementsQuery = useQuery({
-    queryKey: ['dashboard', 'disbursements', monthStart, nowIso, reportParams],
+  const monthlyDisbursementsQuery = useQuery({
+    queryKey: ['dashboard', 'disbursements', 'month', monthStart, nowIso, reportParams],
     queryFn: () => getDisbursementsReport({ dateFrom: monthStart, dateTo: nowIso, ...reportParams }),
+    ...queryPolicies.report,
+  })
+  const dailyDisbursementsQuery = useQuery({
+    queryKey: ['dashboard', 'disbursements', 'today', todayStart, nowIso, reportParams],
+    queryFn: () => getDisbursementsReport({ dateFrom: todayStart, dateTo: nowIso, ...reportParams }),
     ...queryPolicies.report,
   })
   const collectionsSummaryQuery = useQuery({
@@ -335,17 +352,20 @@ export function DashboardPage() {
   })
   const pendingApprovalsQuery = useQuery({
     queryKey: ['dashboard', 'pending-approvals', branchIdFilter],
-    queryFn: () => fetch('/api/loans?status=pending_approval&limit=1' + (branchIdFilter ? `&branchId=${branchIdFilter}` : '')).then(res => res.json()),
+    queryFn: () => listPendingApprovalLoans({
+      limit: 1,
+      ...(branchIdFilter ? { branchId: branchIdFilter } : {}),
+    }),
     enabled: isBranchManager || normalizedRole === 'admin',
     ...queryPolicies.report,
   })
 
   const isLoading = (
     clientsQuery.isLoading
-    || activeClientsQuery.isLoading
     || portfolioQuery.isLoading
-    || clientSummaryQuery.isLoading
-    || disbursementsQuery.isLoading
+    || monthlyClientSummaryQuery.isLoading
+    || monthlyDisbursementsQuery.isLoading
+    || dailyDisbursementsQuery.isLoading
     || collectionsSummaryQuery.isLoading
     || collectionsTodayQuery.isLoading
     || duesQuery.isLoading
@@ -353,10 +373,10 @@ export function DashboardPage() {
   )
   const isError = (
     clientsQuery.isError
-    || activeClientsQuery.isError
     || portfolioQuery.isError
-    || clientSummaryQuery.isError
-    || disbursementsQuery.isError
+    || monthlyClientSummaryQuery.isError
+    || monthlyDisbursementsQuery.isError
+    || dailyDisbursementsQuery.isError
     || collectionsSummaryQuery.isError
     || collectionsTodayQuery.isError
     || duesQuery.isError
@@ -364,8 +384,9 @@ export function DashboardPage() {
   )
 
   const portfolio = portfolioQuery.data
-  const clientSummary = (clientSummaryQuery.data as { summary?: SummaryPayload } | undefined)?.summary || {}
-  const disbursementSummary = (disbursementsQuery.data as { summary?: SummaryPayload } | undefined)?.summary || {}
+  const monthlyClientSummary = (monthlyClientSummaryQuery.data as { summary?: SummaryPayload } | undefined)?.summary || {}
+  const monthlyDisbursementsSummary = (monthlyDisbursementsQuery.data as { summary?: SummaryPayload } | undefined)?.summary || {}
+  const dailyDisbursementsSummary = (dailyDisbursementsQuery.data as { summary?: SummaryPayload } | undefined)?.summary || {}
   const collectionsSummary = (collectionsSummaryQuery.data as { summary?: SummaryPayload } | undefined)?.summary || {}
   const dailyCollections = (collectionsTodayQuery.data as { dailyCollections?: Array<Record<string, unknown>> } | undefined)?.dailyCollections || []
   const duesPayload = duesQuery.data as {
@@ -375,61 +396,438 @@ export function DashboardPage() {
   const arrearsSummary = (arrearsQuery.data as { summary?: SummaryPayload } | undefined)?.summary || {}
 
   const borrowerCount = Number(clientsQuery.data?.paging.total || 0)
-  const activeCustomerCount = Number(activeClientsQuery.data?.paging.total || 0)
   const activeLoans = Number(portfolio?.active_loans || 0)
   const outstandingBalance = Number(portfolio?.outstanding_balance || 0)
+  const monthlyNewCustomers = Number(monthlyClientSummary.new_clients_registered || 0)
+  const monthlyDeclinedLoans = Number(monthlyClientSummary.declined_loans || monthlyClientSummary.declined_loans_in_period || 0)
+  const monthlyDisbursedLoans = Number(monthlyDisbursementsSummary.total_loans || 0)
+  const monthlyNewDisbursements = Number(monthlyDisbursementsSummary.new_client_loans || 0)
+  const monthlyRepeatDisbursements = Number(monthlyDisbursementsSummary.repeat_client_loans || 0)
+  const dailyDisbursedLoans = Number(dailyDisbursementsSummary.total_loans || 0)
+  const dailyNewDisbursements = Number(dailyDisbursementsSummary.new_client_loans || 0)
+  const dailyRepeatDisbursements = Number(dailyDisbursementsSummary.repeat_client_loans || 0)
   const overdueAmount = Number(portfolio?.overdue_amount || 0)
   const writtenOffBalance = Number(portfolio?.written_off_balance || 0)
-  const parRatio = Number(portfolio?.parRatio || 0)
-  const dueNow = Number(duesPayload?.duesInPeriod?.expected_amount || 0)
-  const unpaidDue = Number(duesPayload?.duesInPeriod?.pending_amount || 0)
-  const arrearsBacklog = Number(duesPayload?.alreadyOverdueBeforePeriod?.overdue_amount || 0)
-  const collectionsToday = dailyCollections.reduce((sum, row) => sum + Number(row.total_collected || 0), 0)
-  const collectionCoverage = dueNow > 0 ? Math.min(1, collectionsToday / dueNow) : 0
-  const newClients = Number(clientSummary.new_clients_registered || 0)
-  const firstTimeBorrowers = Number(clientSummary.first_time_borrowers_in_period || 0)
-  const repeatBorrowers = Number(clientSummary.total_repeat_borrowers || 0)
-  const loansDisbursed = Number(disbursementSummary.total_loans || 0)
-  const totalDisbursedAmount = Number(disbursementSummary.total_disbursed_amount || 0)
-  const repaidLoanCount = Number(collectionsSummary.loans_with_repayments || 0)
-  const totalArrears = Number(arrearsSummary.total_arrears_amount || overdueAmount)
-  const preWriteoffMonitoredBalance = Number(arrearsSummary.par60_balance || 0)
-  const nplBalance = Number(arrearsSummary.par90_balance || 0)
-  const nplLoanCount = Number(arrearsSummary.par90_count || 0)
+  const scheduledDueToday = Number(
+    duesPayload?.duesInPeriod?.total_scheduled_amount
+    ?? duesPayload?.duesInPeriod?.expected_amount
+    ?? 0,
+  )
+  // Today's dues still unpaid = total scheduled for today - amount collected for today's dues.
+  // This ensures: Scheduled Due = Collected + Still Unpaid (clean accounting)
+  const collectionsToday = dailyCollections.reduce((sum, row) => sum + Number(row.current_due_collected || 0), 0)
+  const scheduledDueStillUnpaid = Math.max(0, scheduledDueToday - collectionsToday)
+  const arrearsCollectedToday = dailyCollections.reduce((sum, row) => sum + Number(row.arrears_collected || 0), 0)
+  const collectionCoverage = scheduledDueToday > 0 ? Math.min(1, collectionsToday / scheduledDueToday) : 0
+  const repaidLoanCount = Number(collectionsSummary.loans_with_repayments || collectionsSummary.unique_loans || 0)
+  const totalArrears = Number(arrearsSummary.pre_npl_arrears_amount || arrearsSummary.total_arrears_amount || overdueAmount)
+  const par30Balance = Number(arrearsSummary.par30_balance || arrearsSummary.par1_balance || 0)
+  const par60Balance = Number(arrearsSummary.par60_balance || 0)
+  const par90Balance = Number(arrearsSummary.par90_balance || 0)
+  const nplBalance = Number(arrearsSummary.npl_balance || 0)
+  const nplLoanCount = Number(arrearsSummary.npl_count || 0)
+  const portfolioAtRiskBalance = Number(arrearsSummary.at_risk_balance || (par30Balance + par60Balance + par90Balance + nplBalance))
+  const par30RatioFallback = outstandingBalance > 0 ? par30Balance / outstandingBalance : 0
+  const par60RatioFallback = outstandingBalance > 0 ? par60Balance / outstandingBalance : 0
+  const par90RatioFallback = outstandingBalance > 0 ? par90Balance / outstandingBalance : 0
+  const nplRatioFallback = outstandingBalance > 0 ? nplBalance / outstandingBalance : 0
+  const portfolioAtRiskRatioFallback = outstandingBalance > 0 ? portfolioAtRiskBalance / outstandingBalance : 0
+  const par30Ratio = Number(arrearsSummary.par30_ratio ?? par30RatioFallback)
+  const par60Ratio = Number(arrearsSummary.par60_ratio ?? par60RatioFallback)
+  const par90Ratio = Number(arrearsSummary.par90_ratio ?? par90RatioFallback)
+  const nplRatio = Number(arrearsSummary.npl_ratio ?? nplRatioFallback)
+  const portfolioAtRiskRatio = Number(arrearsSummary.at_risk_ratio ?? portfolioAtRiskRatioFallback)
   const writeOffOrNplTotal = nplBalance + writtenOffBalance
   const pendingApprovalsCount = Number(pendingApprovalsQuery.data?.paging?.total || 0)
-
-  // â”€â”€ Derived labels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const todayBusinessDate = useMemo(() => formatBusinessDateInputValue(now), [now])
+  const monthStartBusinessDate = useMemo(() => formatBusinessDateInputValue(new Date(monthStart)), [monthStart])
+  const dashboardListFilterParams = useMemo(() => (
+    buildDashboardListFilterParams({
+      branchId: branchIdFilter,
+      officerId: officerIdFilter,
+    })
+  ), [branchIdFilter, officerIdFilter])
+  const activePortfolioFilterParams = useMemo(() => (
+    buildDashboardListFilterParams({
+      branchId: branchIdFilter,
+      officerId: officerIdFilter,
+      extraParams: { statusGroup: 'active_portfolio' },
+    })
+  ), [branchIdFilter, officerIdFilter])
+  const rejectedLoansFilterParams = useMemo(() => (
+    buildDashboardListFilterParams({
+      branchId: branchIdFilter,
+      officerId: officerIdFilter,
+      extraParams: { status: 'rejected' },
+    })
+  ), [branchIdFilter, officerIdFilter])
+  const arrearsLoansFilterParams = useMemo(() => (
+    buildDashboardListFilterParams({
+      branchId: branchIdFilter,
+      officerId: officerIdFilter,
+      extraParams: { workflowStage: 'arrears' },
+    })
+  ), [branchIdFilter, officerIdFilter])
+  const collectionsDueTodayReportFilterParams = useMemo(() => (
+    buildDashboardReportFilterParams({
+      reportId: 'collections-dues',
+      categoryId: 'collections',
+      datePreset: 'custom_range',
+      customDateFrom: todayBusinessDate,
+      customDateTo: todayBusinessDate,
+      dateFrom: todayStart,
+      dateTo: nowIso,
+      officeId: branchIdFilter,
+      officerId: officerIdFilter,
+    })
+  ), [branchIdFilter, nowIso, officerIdFilter, todayBusinessDate, todayStart])
+  const collectionsTodayReportFilterParams = useMemo(() => (
+    buildDashboardReportFilterParams({
+      reportId: 'collections-summary',
+      categoryId: 'collections',
+      datePreset: 'custom_range',
+      customDateFrom: todayBusinessDate,
+      customDateTo: todayBusinessDate,
+      dateFrom: todayStart,
+      dateTo: nowIso,
+      officeId: branchIdFilter,
+      officerId: officerIdFilter,
+    })
+  ), [branchIdFilter, nowIso, officerIdFilter, todayBusinessDate, todayStart])
+  const monthlyCustomersReportFilterParams = useMemo(() => (
+    buildDashboardReportFilterParams({
+      reportId: 'operations-customers',
+      categoryId: 'operations',
+      datePreset: 'custom_range',
+      customDateFrom: monthStartBusinessDate,
+      customDateTo: todayBusinessDate,
+      dateFrom: monthStart,
+      dateTo: nowIso,
+      officeId: branchIdFilter,
+      officerId: officerIdFilter,
+    })
+  ), [branchIdFilter, monthStart, monthStartBusinessDate, nowIso, officerIdFilter, todayBusinessDate])
+  const portfolioReportFilterParams = useMemo(() => (
+    buildDashboardReportFilterParams({
+      reportId: 'operations-olb',
+      categoryId: 'operations',
+      officeId: branchIdFilter,
+      officerId: officerIdFilter,
+    })
+  ), [branchIdFilter, officerIdFilter])
+  const monthlyDisbursementsReportFilterParams = useMemo(() => (
+    buildDashboardReportFilterParams({
+      reportId: 'operations-disbursement',
+      categoryId: 'operations',
+      datePreset: 'custom_range',
+      customDateFrom: monthStartBusinessDate,
+      customDateTo: todayBusinessDate,
+      dateFrom: monthStart,
+      dateTo: nowIso,
+      officeId: branchIdFilter,
+      officerId: officerIdFilter,
+    })
+  ), [branchIdFilter, monthStart, monthStartBusinessDate, nowIso, officerIdFilter, todayBusinessDate])
+  const todayDisbursementsReportFilterParams = useMemo(() => (
+    buildDashboardReportFilterParams({
+      reportId: 'operations-disbursement',
+      categoryId: 'operations',
+      datePreset: 'custom_range',
+      customDateFrom: todayBusinessDate,
+      customDateTo: todayBusinessDate,
+      dateFrom: todayStart,
+      dateTo: nowIso,
+      officeId: branchIdFilter,
+      officerId: officerIdFilter,
+    })
+  ), [branchIdFilter, nowIso, officerIdFilter, todayBusinessDate, todayStart])
+  const arrearsCollectedTodayReportFilterParams = useMemo(() => (
+    buildDashboardReportFilterParams({
+      reportId: 'collections-summary',
+      categoryId: 'collections',
+      datePreset: 'custom_range',
+      customDateFrom: todayBusinessDate,
+      customDateTo: todayBusinessDate,
+      dateFrom: todayStart,
+      dateTo: nowIso,
+      officeId: branchIdFilter,
+      officerId: officerIdFilter,
+      extraParams: {
+        collectionFocus: 'arrears_only',
+      },
+    })
+  ), [branchIdFilter, nowIso, officerIdFilter, todayBusinessDate, todayStart])
+  const arrearsReportFilterParams = useMemo(() => (
+    buildDashboardReportFilterParams({
+      reportId: 'operations-red-flag',
+      categoryId: 'operations',
+      datePreset: 'custom_range',
+      customDateFrom: todayBusinessDate,
+      customDateTo: todayBusinessDate,
+      officeId: branchIdFilter,
+      officerId: officerIdFilter,
+    })
+  ), [branchIdFilter, officerIdFilter, todayBusinessDate])
+  const par30ArrearsReportFilterParams = useMemo(() => (
+    buildDashboardReportFilterParams({
+      reportId: 'operations-red-flag',
+      categoryId: 'operations',
+      datePreset: 'custom_range',
+      customDateFrom: todayBusinessDate,
+      customDateTo: todayBusinessDate,
+      officeId: branchIdFilter,
+      officerId: officerIdFilter,
+      extraParams: { agingBucket: '1_30' },
+    })
+  ), [branchIdFilter, officerIdFilter, todayBusinessDate])
+  const par60ArrearsReportFilterParams = useMemo(() => (
+    buildDashboardReportFilterParams({
+      reportId: 'operations-red-flag',
+      categoryId: 'operations',
+      datePreset: 'custom_range',
+      customDateFrom: todayBusinessDate,
+      customDateTo: todayBusinessDate,
+      officeId: branchIdFilter,
+      officerId: officerIdFilter,
+      extraParams: { agingBucket: '31_60' },
+    })
+  ), [branchIdFilter, officerIdFilter, todayBusinessDate])
+  const par90ArrearsReportFilterParams = useMemo(() => (
+    buildDashboardReportFilterParams({
+      reportId: 'operations-red-flag',
+      categoryId: 'operations',
+      datePreset: 'custom_range',
+      customDateFrom: todayBusinessDate,
+      customDateTo: todayBusinessDate,
+      officeId: branchIdFilter,
+      officerId: officerIdFilter,
+      extraParams: { agingBucket: '61_90' },
+    })
+  ), [branchIdFilter, officerIdFilter, todayBusinessDate])
+  const highRiskArrearsReportFilterParams = useMemo(() => (
+    buildDashboardReportFilterParams({
+      reportId: 'operations-red-flag',
+      categoryId: 'operations',
+      datePreset: 'custom_range',
+      customDateFrom: todayBusinessDate,
+      customDateTo: todayBusinessDate,
+      officeId: branchIdFilter,
+      officerId: officerIdFilter,
+      extraParams: { agingBucket: '91_plus' },
+    })
+  ), [branchIdFilter, officerIdFilter, todayBusinessDate])
+  const scaffoldShortcutTargets = useMemo(() => ({
+    par30: {
+      destinationRoute: '/reports',
+      filterParams: par30ArrearsReportFilterParams,
+      ariaLabel: 'Open Customer arrears Report for PAR 30 accounts in this dashboard scope',
+    },
+    par60: {
+      destinationRoute: '/reports',
+      filterParams: par60ArrearsReportFilterParams,
+      ariaLabel: 'Open Customer arrears Report for PAR 60 accounts in this dashboard scope',
+    },
+    par90: {
+      destinationRoute: '/reports',
+      filterParams: par90ArrearsReportFilterParams,
+      ariaLabel: 'Open Customer arrears Report for PAR 90 accounts in this dashboard scope',
+    },
+    npl: {
+      destinationRoute: '/reports',
+      filterParams: highRiskArrearsReportFilterParams,
+      ariaLabel: 'Open Customer arrears Report for NPL accounts in this dashboard scope',
+    },
+    totalArrears: {
+      destinationRoute: '/reports',
+      filterParams: arrearsReportFilterParams,
+      ariaLabel: 'Open Customer arrears Report for borrowers in arrears for this dashboard scope',
+    },
+    overdueInstallments: {
+      destinationRoute: '/loans',
+      filterParams: arrearsLoansFilterParams,
+      ariaLabel: 'Open loan facilities with overdue installments for this dashboard scope',
+    },
+    nplLoans: {
+      destinationRoute: '/reports',
+      filterParams: highRiskArrearsReportFilterParams,
+      ariaLabel: 'Open Customer arrears Report for non-performing loans in this dashboard scope',
+    },
+    nplAndWrittenOff: {
+      destinationRoute: '/reports',
+      filterParams: highRiskArrearsReportFilterParams,
+      ariaLabel: 'Open the highest-risk arrears report for this dashboard scope',
+    },
+    collectionsDueToday: {
+      destinationRoute: '/reports',
+      filterParams: collectionsDueTodayReportFilterParams,
+      ariaLabel: 'Open Loans Due Report for customers due today in this dashboard scope',
+    },
+    collectionsToday: {
+      destinationRoute: '/reports',
+      filterParams: collectionsTodayReportFilterParams,
+      ariaLabel: 'Open Collections Report for payments received today in this dashboard scope',
+    },
+    unpaidDues: {
+      destinationRoute: '/reports',
+      filterParams: collectionsDueTodayReportFilterParams,
+      ariaLabel: 'Open Loans Due Report for unpaid dues in this dashboard scope',
+    },
+    repayments: {
+      destinationRoute: '/reports',
+      filterParams: collectionsTodayReportFilterParams,
+      ariaLabel: "Open Collections Report for today's repayments in this dashboard scope",
+    },
+  }), [
+    arrearsLoansFilterParams,
+    arrearsReportFilterParams,
+    collectionsDueTodayReportFilterParams,
+    collectionsTodayReportFilterParams,
+    highRiskArrearsReportFilterParams,
+    par30ArrearsReportFilterParams,
+    par60ArrearsReportFilterParams,
+    par90ArrearsReportFilterParams,
+  ])
   const branchLabel = user?.branch_name || 'Assigned branch'
-  const welcomeName = firstName(user?.full_name)
-
-  const notice = getContextualNotice(
-    pendingApprovalsCount,
-    parRatio,
-    unpaidDue,
-    dueNow,
-    arrearsBacklog,
-    branchLabel,
-    activeAgent?.name ?? null,
-    welcomeName,
-  )
-
-  const heroHeadline = (() => {
-    if (pendingApprovalsCount > 0) {
-      return `${pendingApprovalsCount} loan${pendingApprovalsCount > 1 ? 's' : ''} waiting for your approval`
-    }
-    if (parRatio > 0.1) {
-      return `Portfolio at risk â€” PAR is ${formatPercent(parRatio)}`
-    }
-    if (activeAgent) {
-      return `${activeAgent.name} â€” officer dashboard`
-    }
-    return isBranchManager ? `${branchLabel}` : 'Dashboard'
-  })()
+  const heroHeadline = activeAgent
+    ? activeAgent.name
+    : (isOverallOfficeScope ? (selectedOffice?.name || 'Dashboard') : (isBranchManager ? branchLabel : 'Dashboard'))
 
   const heroSubtitle = activeAgent
-    ? `${branchLabel} Â· viewing metrics for ${activeAgent.name}`
-    : `${branchLabel} Â· branch performance`
+    ? `${branchLabel} - ${activeAgent.name}`
+    : dashboardModeLabel
+  const overdueInstallments = Number(portfolio?.overdue_installments || 0)
+  const parRatioClass = portfolioAtRiskRatio >= 0.1
+    ? styles.textRed
+    : portfolioAtRiskRatio >= 0.05
+      ? styles.textAmber
+      : styles.textGreen
+  const coverageClass = collectionCoverage >= 1
+    ? styles.textGreen
+    : collectionCoverage >= 0.6
+      ? styles.textAmber
+      : styles.textRed
+  const unpaidDuesClass = scheduledDueStillUnpaid > 0 ? styles.textAmber : styles.textGreen
+  const vitalSignCards = [
+    {
+      label: 'PAR ratio',
+      value: formatPercent(portfolioAtRiskRatio),
+      meta: `Ksh ${formatCurrency(portfolioAtRiskBalance)} at risk`,
+      destinationRoute: '/reports',
+      filterParams: arrearsReportFilterParams,
+      ariaLabel: 'Open the highest-priority arrears report for this dashboard scope',
+      toneClass: parRatioClass,
+    },
+    {
+      label: 'Coverage',
+      value: formatPercent(collectionCoverage),
+      meta: scheduledDueToday > 0
+        ? `Ksh ${formatCurrency(collectionsToday)} collected of Ksh ${formatCurrency(scheduledDueToday)} due`
+        : 'No scheduled dues today',
+      destinationRoute: '/reports',
+      filterParams: collectionsDueTodayReportFilterParams,
+      ariaLabel: 'Open the collections due report used for today coverage',
+      toneClass: coverageClass,
+    },
+    {
+      label: 'Unpaid dues',
+      value: `Ksh ${formatCurrency(scheduledDueStillUnpaid)}`,
+      meta: scheduledDueStillUnpaid > 0
+        ? `${repaidLoanCount} repayment${repaidLoanCount === 1 ? '' : 's'} posted today`
+        : 'All scheduled dues cleared',
+      destinationRoute: '/reports',
+      filterParams: collectionsDueTodayReportFilterParams,
+      ariaLabel: 'Open the loans due report for today unpaid dues',
+      toneClass: unpaidDuesClass,
+    },
+    {
+      label: 'Active loans',
+      value: String(activeLoans),
+      meta: `OLB Ksh ${formatCurrency(outstandingBalance)}`,
+      destinationRoute: '/loans',
+      filterParams: activePortfolioFilterParams,
+      ariaLabel: 'Open the active loan facilities for this dashboard scope',
+      toneClass: '',
+    },
+  ]
+  const todayActivityCards = [
+    {
+      label: 'Disbursed today',
+      value: String(dailyDisbursedLoans),
+      meta: dailyDisbursedLoans > 0
+        ? `New ${dailyNewDisbursements} / Repeat ${dailyRepeatDisbursements}`
+        : 'No loans disbursed yet today',
+      destinationRoute: '/reports',
+      filterParams: todayDisbursementsReportFilterParams,
+      ariaLabel: "Open today's disbursement report for this dashboard scope",
+      toneClass: dailyDisbursedLoans > 0 ? styles.textGreen : '',
+    },
+    {
+      label: 'New today',
+      value: String(dailyNewDisbursements),
+      meta: 'First-time customer disbursements today',
+      destinationRoute: '/reports',
+      filterParams: todayDisbursementsReportFilterParams,
+      ariaLabel: "Open today's new-customer disbursement report for this dashboard scope",
+      toneClass: dailyNewDisbursements > 0 ? styles.textGreen : '',
+    },
+    {
+      label: 'Repeat today',
+      value: String(dailyRepeatDisbursements),
+      meta: 'Repeat customer disbursements today',
+      destinationRoute: '/reports',
+      filterParams: todayDisbursementsReportFilterParams,
+      ariaLabel: "Open today's repeat-customer disbursement report for this dashboard scope",
+      toneClass: dailyRepeatDisbursements > 0 ? styles.textGreen : '',
+    },
+    {
+      label: 'Collected today',
+      value: `Ksh ${formatCurrency(collectionsToday)}`,
+      meta: 'Current dues collected in the selected scope',
+      destinationRoute: '/reports',
+      filterParams: collectionsTodayReportFilterParams,
+      ariaLabel: 'Open the collections report for payments received today in this dashboard scope',
+      toneClass: collectionsToday > 0 ? styles.textGreen : '',
+    },
+    {
+      label: 'Arrears recovered',
+      value: `Ksh ${formatCurrency(arrearsCollectedToday)}`,
+      meta: 'Older overdue recoveries collected today',
+      destinationRoute: '/reports',
+      filterParams: arrearsCollectedTodayReportFilterParams,
+      ariaLabel: 'Open the collections report for overdue recoveries collected today in this dashboard scope',
+      toneClass: arrearsCollectedToday > 0 ? styles.textGreen : '',
+    },
+  ]
+  const monthToDateCards = [
+    {
+      label: 'New customers',
+      value: String(monthlyNewCustomers),
+      meta: `Registered from ${monthStartBusinessDate} to ${todayBusinessDate}`,
+      destinationRoute: '/reports',
+      filterParams: monthlyCustomersReportFilterParams,
+      ariaLabel: 'Open the customers report for this dashboard month',
+      toneClass: monthlyNewCustomers > 0 ? styles.textGreen : '',
+    },
+    {
+      label: 'Disbursed this month',
+      value: String(monthlyDisbursedLoans),
+      meta: `New ${monthlyNewDisbursements} / Repeat ${monthlyRepeatDisbursements}`,
+      destinationRoute: '/reports',
+      filterParams: monthlyDisbursementsReportFilterParams,
+      ariaLabel: 'Open the disbursement report for this dashboard month',
+      toneClass: monthlyDisbursedLoans > 0 ? styles.textGreen : '',
+    },
+    {
+      label: 'Declined loans',
+      value: String(monthlyDeclinedLoans),
+      meta: 'Applications declined this month',
+      destinationRoute: '/loans',
+      filterParams: rejectedLoansFilterParams,
+      ariaLabel: 'Open rejected loans for this dashboard scope',
+      toneClass: monthlyDeclinedLoans > 0 ? styles.textAmber : '',
+    },
+  ]
+
 
   function openFilterModal() {
     setDraftOfficeId(effectiveSelectedOfficeId)
@@ -535,7 +933,7 @@ export function DashboardPage() {
       <section className={styles.hero}>
         <div>
           <p className={styles.eyebrow}>
-            {activeAgent ? `Officer view Â· ${branchLabel}` : 'Dashboard'}
+            {activeAgent ? 'Officer view - ' + branchLabel : 'Dashboard'}
           </p>
           <h1 className={styles.heroHeadline}>{heroHeadline}</h1>
           <p className={styles.subtitle}>{heroSubtitle}</p>
@@ -544,7 +942,7 @@ export function DashboardPage() {
           {/* Primary CTA â€” surfaced only when there's an actionable state */}
           {isBranchManager && pendingApprovalsCount > 0 && !isLoading && (
             <Link className={styles.ctaPrimary} to="/approvals">
-              Review {pendingApprovalsCount} pending approval{pendingApprovalsCount > 1 ? 's' : ''}
+              Open approvals queue
             </Link>
           )}
           {canFilterDashboard && (
@@ -582,10 +980,10 @@ export function DashboardPage() {
         onRetry={() => {
           void Promise.all([
             clientsQuery.refetch(),
-            activeClientsQuery.refetch(),
             portfolioQuery.refetch(),
-            clientSummaryQuery.refetch(),
-            disbursementsQuery.refetch(),
+            monthlyClientSummaryQuery.refetch(),
+            monthlyDisbursementsQuery.refetch(),
+            dailyDisbursementsQuery.refetch(),
             collectionsSummaryQuery.refetch(),
             collectionsTodayQuery.refetch(),
             duesQuery.refetch(),
@@ -596,138 +994,408 @@ export function DashboardPage() {
 
       {!isLoading && !isError ? (
         <>
-          {/* â”€â”€ Zone 0: Contextual notice â€” at the TOP where it gets seen â”€â”€â”€â”€ */}
-          <section className={`${styles.notice} ${styles[`notice_${notice.variant}`]}`}>
-            <div className={styles.noticeBody}>
-              <span className={styles.noticeTitle}>{notice.title}</span>
-              <span className={styles.noticeText}>{notice.text}</span>
-            </div>
-            {notice.ctaLabel && notice.ctaTo && (
-              <Link className={styles.noticeCta} to={notice.ctaTo}>
-                {notice.ctaLabel}
-              </Link>
-            )}
+          <section className={styles.vitalStrip} aria-label="Portfolio vital signs">
+            {vitalSignCards.map((card) => (
+              <DashboardMetricCard
+                key={card.label}
+                className={`${styles.priorityCard} ${styles.priorityCardInteractive}`}
+                destinationRoute={card.destinationRoute}
+                filterParams={card.filterParams}
+                ariaLabel={card.ariaLabel}
+              >
+                <div className={styles.priorityCardLabel}>{card.label}</div>
+                <div className={`${styles.priorityCardValue} ${card.toneClass}`.trim()}>{card.value}</div>
+                <div className={styles.priorityCardMeta}>{card.meta}</div>
+              </DashboardMetricCard>
+            ))}
           </section>
 
+          <section className={styles.zoneLead}>
+            <div className={styles.zoneHeader}>
+              <div>
+                <p className={styles.zoneEyebrow}>Alerts</p>
+                <h2>Needs attention first</h2>
+              </div>
+              <p className={styles.zoneIntro}>
+                PAR buckets, overdue workload, and today&apos;s dues health stay above everything else so the branch health is visible before any drill-down.
+              </p>
+            </div>
+          </section>
+          {/* â”€â”€ Zone 0: Contextual notice â€” at the TOP where it gets seen â”€â”€â”€â”€ */}
           {/* â”€â”€ Zone 1: Today's urgency â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-          <section className={styles.kpiStripToday}>
-            <div className={styles.kpiStripLabel}>Today</div>
-            <div className={styles.kpiGrid}>
-              <article className={styles.kpiCard} style={{ '--ring-color': 'var(--neon-red)' } as React.CSSProperties}>
-                <div className={styles.kpiRing}></div>
-                <div className={styles.kpiGlow}></div>
-                <div className={styles.kpiLabel}>Risk at Exposure</div>
-                <div className={styles.kpiValue}>Ksh {formatCurrency(dueNow)}</div>
-                <div className={styles.kpiMeta}>
-                  <span className={unpaidDue === 0 && dueNow > 0 ? styles.textGreen : (unpaidDue > 0 ? styles.textAmber : '')}>
-                    {unpaidDue > 0 ? `Ksh ${formatCurrency(unpaidDue)} unpaid` : (dueNow > 0 ? 'Fully collected' : 'No dues today')}
-                  </span>
+          <div className={`${styles.middleSectionGrid} ${styles.legacyDashboardSections}`}>
+            <section className={`${styles.panel} ${styles.scaffoldSection}`}>
+              <div className={styles.scaffoldHeader}>
+                <h2>Today</h2>
+                <div className={styles.panelBadge}>
+                  <span>{scheduledDueToday > 0 ? `Ksh ${formatCurrency(scheduledDueToday)}` : 'Ksh 0.00'}</span>
+                  <small>due today</small>
                 </div>
-              </article>
+              </div>
 
-              <article className={styles.kpiCard}>
-                <div className={styles.kpiLabel}>Collected today</div>
-                <div className={styles.kpiValue}>Ksh {formatCurrency(collectionsToday)}</div>
-                <div className={styles.kpiMeta}>
-                  <span className={collectionCoverage >= 1 ? styles.textGreen : (collectionCoverage > 0.6 ? styles.trendNeutral : styles.textAmber)}>
-                    {dueNow > 0 ? `${(collectionCoverage * 100).toFixed(0)}% coverage` : 'No dues today'}
-                  </span>
-                </div>
-              </article>
+              <div className={styles.kpiGrid}>
+                <DashboardMetricCard
+                  className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                  destinationRoute="/reports"
+                  filterParams={collectionsDueTodayReportFilterParams}
+                  ariaLabel="Open Loans Due Report for customers due today in this dashboard scope"
+                >
+                  <div className={styles.kpiLabel}>Collections due today</div>
+                  <div className={styles.kpiValue}>Ksh {formatCurrency(scheduledDueToday)}</div>
+                  <div className={styles.kpiMeta}>
+                    <span className={styles.kpiLink}>Open Loans Due Report</span>
+                  </div>
+                </DashboardMetricCard>
 
-              {(isBranchManager || normalizedRole === 'admin') && (
-                <article className={`${styles.kpiCard} ${pendingApprovalsCount > 0 ? styles.kpiCardUrgent : ''}`}>
-                  <div className={styles.kpiLabel}>Pending approvals</div>
-                  <div className={`${styles.kpiValue} ${pendingApprovalsCount > 0 ? styles.textAmber : styles.textGreen}`}>
-                    {pendingApprovalsCount}
+                <DashboardMetricCard
+                  className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                  destinationRoute="/reports"
+                  filterParams={collectionsTodayReportFilterParams}
+                  ariaLabel="Open Collections Report for payments received today in this dashboard scope"
+                >
+                  <div className={styles.kpiLabel}>Collected today</div>
+                  <div className={styles.kpiValue}>Ksh {formatCurrency(collectionsToday)}</div>
+                  <div className={styles.kpiMeta}>
+                    <span className={styles.kpiLink}>Open Collections Report</span>
+                  </div>
+                </DashboardMetricCard>
+
+                <DashboardMetricCard
+                  className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                  destinationRoute="/reports"
+                  filterParams={arrearsCollectedTodayReportFilterParams}
+                  ariaLabel="Open Collections Report for overdue recoveries collected today in this dashboard scope"
+                >
+                  <div className={styles.kpiLabel}>Arrears collected</div>
+                  <div className={`${styles.kpiValue} ${arrearsCollectedToday > 0 ? styles.textGreen : ''}`}>
+                    Ksh {formatCurrency(arrearsCollectedToday)}
                   </div>
                   <div className={styles.kpiMeta}>
-                    {pendingApprovalsCount > 0
-                      ? <Link to="/approvals" className={styles.kpiLink}>Review now</Link>
-                      : <span>None pending</span>}
+                    <span>Resets midnight</span>
+                    <span className={styles.kpiLink}>Open Collections Report</span>
                   </div>
-                </article>
-              )}
+                </DashboardMetricCard>
 
-              <article className={styles.kpiCard}>
-                <div className={styles.kpiLabel}>Arrears backlog</div>
-                <div className={`${styles.kpiValue} ${arrearsBacklog > 0 ? styles.textRed : styles.textGreen}`}>
-                  Ksh {formatCurrency(arrearsBacklog)}
-                </div>
-                <div className={styles.kpiMeta}>From prior periods</div>
-              </article>
-            </div>
-          </section>
+                <DashboardMetricCard
+                  className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                  destinationRoute="/reports"
+                  filterParams={collectionsDueTodayReportFilterParams}
+                  ariaLabel="Open Customer Dues Report for today's unpaid dues"
+                >
+                  <div className={styles.kpiLabel}>Unpaid dues</div>
+                  <div className={`${styles.kpiValue} ${scheduledDueStillUnpaid > 0 ? styles.textAmber : styles.textGreen}`}>
+                    Ksh {formatCurrency(scheduledDueStillUnpaid)}
+                  </div>
+                  <div className={styles.kpiMeta}>
+                    <span className={styles.kpiLink}>Open Customer Dues Report</span>
+                  </div>
+                </DashboardMetricCard>
+
+                <DashboardMetricCard
+                  className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                  destinationRoute="/reports"
+                  filterParams={collectionsDueTodayReportFilterParams}
+                  ariaLabel="Open Loans Due Report used for today's coverage calculation"
+                >
+                  <div className={styles.kpiLabel}>Coverage</div>
+                  <div className={`${styles.kpiValue} ${collectionCoverage >= 1 ? styles.textGreen : (collectionCoverage >= 0.6 ? styles.textAmber : styles.textRed)}`}>
+                    {formatPercent(collectionCoverage)}
+                  </div>
+                  <div className={styles.kpiMeta}>
+                    <span className={styles.kpiLink}>Open Loans Due Report</span>
+                  </div>
+                </DashboardMetricCard>
+              </div>
+              <div className={styles.muted}>
+                Coverage compares today's scheduled dues against repayments applied to today's dues. Older overdue recoveries are tracked separately in Arrears collected and reset at midnight.
+              </div>
+            </section>
 
           {/* â”€â”€ Zone 2: Portfolio â€” ambient health metrics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-          <section className={styles.kpiStripPortfolio}>
-            <div className={styles.kpiStripLabel}>Portfolio</div>
-            <div className={styles.kpiGrid}>
-              <article className={styles.kpiCard} style={{ '--ring-color': 'var(--neon-blue)' } as React.CSSProperties}>
-                <div className={styles.kpiRing}></div>
-                <div className={styles.kpiGlow}></div>
-                <div className={styles.kpiLabel}>Total Disbursed</div>
-                <div className={styles.kpiValue}>{borrowerCount}</div>
-                <div className={styles.kpiMeta}>
-                  <span className={newClients > 0 ? styles.trendUp : styles.trendNeutral}>
-                    ↑ {newClients}
-                  </span>
-                  <span> this month</span>
+            <section className={`${styles.panel} ${styles.scaffoldSection}`}>
+              <div className={styles.scaffoldHeader}>
+                <h2>Portfolio &amp; Disbursement</h2>
+                <div className={styles.panelBadge}>
+                  <span>{monthlyDisbursedLoans}</span>
+                  <small>MTD disbursed</small>
                 </div>
-              </article>
+              </div>
 
-              <article className={styles.kpiCard} style={{ '--ring-color': 'var(--neon-emerald)' } as React.CSSProperties}>
-                <div className={styles.kpiRing}></div>
-                <div className={styles.kpiGlow}></div>
-                <div className={styles.kpiLabel}>Net Active Portfolio</div>
-                <div className={styles.kpiValue}>{activeLoans}</div>
-                <div className={styles.kpiMeta}>
-                  <span className={loansDisbursed > 0 ? styles.trendUp : styles.trendNeutral}>
-                    ↑ {loansDisbursed}
-                  </span>
-                  <span> disbursed MTD</span>
+              <div className={styles.metricGroup}>
+                <div className={styles.metricGroupHeader}>
+                  <div>
+                    <h3>Total</h3>
+                    <p>Does not reset</p>
+                  </div>
                 </div>
-              </article>
 
-              <article className={styles.kpiCard}>
-                <div className={styles.kpiLabel}>Outstanding balance</div>
-                <div className={styles.kpiValue}>Ksh {formatCurrency(outstandingBalance)}</div>
-                <div className={styles.kpiMeta}>{activeCustomerCount} active customers</div>
-              </article>
+                <div className={styles.kpiGrid}>
+                  <DashboardMetricCard
+                    className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                    destinationRoute="/clients"
+                    filterParams={dashboardListFilterParams}
+                    ariaLabel="Open the customer register for this dashboard scope"
+                  >
+                    <div className={styles.kpiLabel}>Customers</div>
+                    <div className={styles.kpiValue}>{borrowerCount}</div>
+                    <div className={styles.kpiMeta}>
+                      <span className={styles.kpiLink}>Open customer register</span>
+                    </div>
+                  </DashboardMetricCard>
 
-              <article className={styles.kpiCard}>
-                <div className={styles.kpiLabel}>PAR ratio</div>
-                <div className={`${styles.kpiValue} ${parRatio < 0.05 ? styles.textGreen : (parRatio < 0.1 ? styles.textAmber : styles.textRed)}`}>
-                  {formatPercent(parRatio)}
+                  <DashboardMetricCard
+                    className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                    destinationRoute="/loans"
+                    filterParams={activePortfolioFilterParams}
+                    ariaLabel="Open the active loan facilities for this dashboard scope"
+                  >
+                    <div className={styles.kpiLabel}>Active loans</div>
+                    <div className={styles.kpiValue}>{activeLoans}</div>
+                    <div className={styles.kpiMeta}>
+                      <span className={styles.kpiLink}>Open loan facilities</span>
+                    </div>
+                  </DashboardMetricCard>
+
+                  <DashboardMetricCard
+                    className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                    destinationRoute="/reports"
+                    filterParams={portfolioReportFilterParams}
+                    ariaLabel="Open the portfolio OLB report for this dashboard scope"
+                  >
+                    <div className={styles.kpiLabel}>OLB</div>
+                    <div className={styles.kpiValue}>Ksh {formatCurrency(outstandingBalance)}</div>
+                    <div className={styles.kpiMeta}>
+                      <span className={styles.kpiLink}>Open portfolio report</span>
+                    </div>
+                  </DashboardMetricCard>
                 </div>
-                <div className={styles.kpiMeta}>Portfolio at risk</div>
-              </article>
-            </div>
-          </section>
+              </div>
+
+              <div className={styles.metricGroup}>
+                <div className={styles.metricGroupHeader}>
+                  <div>
+                    <h3>This Month</h3>
+                    <p>Renews monthly</p>
+                  </div>
+                </div>
+
+                <div className={styles.kpiGrid}>
+                  <DashboardMetricCard
+                    className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                    destinationRoute="/reports"
+                    filterParams={monthlyCustomersReportFilterParams}
+                    ariaLabel="Open the customers report for this dashboard month"
+                  >
+                    <div className={styles.kpiLabel}>New customers</div>
+                    <div className={`${styles.kpiValue} ${monthlyNewCustomers > 0 ? styles.textGreen : ''}`}>{monthlyNewCustomers}</div>
+                    <div className={styles.kpiMeta}>
+                      <span>Resets monthly</span>
+                      <span className={styles.kpiLink}>Open customers report</span>
+                    </div>
+                  </DashboardMetricCard>
+
+                  <DashboardMetricCard
+                    className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                    destinationRoute="/reports"
+                    filterParams={monthlyDisbursementsReportFilterParams}
+                    ariaLabel="Open the disbursement report for this dashboard month"
+                  >
+                    <div className={styles.kpiLabel}>Disbursed loans</div>
+                    <div className={`${styles.kpiValue} ${monthlyDisbursedLoans > 0 ? styles.textGreen : ''}`}>{monthlyDisbursedLoans}</div>
+                    <div className={styles.kpiMeta}>
+                      <span>New {monthlyNewDisbursements} / Repeat {monthlyRepeatDisbursements}</span>
+                      <span className={styles.kpiLink}>Open disbursement report</span>
+                    </div>
+                  </DashboardMetricCard>
+
+                  <DashboardMetricCard
+                    className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                    destinationRoute="/loans"
+                    filterParams={rejectedLoansFilterParams}
+                    ariaLabel="Open rejected loans for this dashboard scope"
+                  >
+                    <div className={styles.kpiLabel}>Declined loans</div>
+                    <div className={`${styles.kpiValue} ${monthlyDeclinedLoans > 0 ? styles.textAmber : ''}`}>{monthlyDeclinedLoans}</div>
+                    <div className={styles.kpiMeta}>
+                      <span>Resets monthly</span>
+                      <span className={styles.kpiLink}>Open rejected loans</span>
+                    </div>
+                  </DashboardMetricCard>
+                </div>
+              </div>
+
+              <div className={styles.metricGroup}>
+                <div className={styles.metricGroupHeader}>
+                  <div>
+                    <h3>Today</h3>
+                    <p>Renews daily</p>
+                  </div>
+                </div>
+
+                <div className={styles.kpiGrid}>
+                  <DashboardMetricCard
+                    className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                    destinationRoute="/reports"
+                    filterParams={todayDisbursementsReportFilterParams}
+                    ariaLabel="Open today's disbursement report for this dashboard scope"
+                  >
+                    <div className={styles.kpiLabel}>Disbursed today</div>
+                    <div className={`${styles.kpiValue} ${dailyDisbursedLoans > 0 ? styles.textGreen : ''}`}>{dailyDisbursedLoans}</div>
+                    <div className={styles.kpiMeta}>
+                      <span>Resets daily</span>
+                      <span className={styles.kpiLink}>Open disbursement report</span>
+                    </div>
+                  </DashboardMetricCard>
+
+                  <DashboardMetricCard
+                    className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                    destinationRoute="/reports"
+                    filterParams={todayDisbursementsReportFilterParams}
+                    ariaLabel="Open today's new-customer disbursements for this dashboard scope"
+                  >
+                    <div className={styles.kpiLabel}>New today</div>
+                    <div className={`${styles.kpiValue} ${dailyNewDisbursements > 0 ? styles.textGreen : ''}`}>{dailyNewDisbursements}</div>
+                    <div className={styles.kpiMeta}>
+                      <span>New customer disbursements</span>
+                      <span className={styles.kpiLink}>Open disbursement report</span>
+                    </div>
+                  </DashboardMetricCard>
+
+                  <DashboardMetricCard
+                    className={`${styles.kpiCard} ${styles.kpiCardInteractive}`}
+                    destinationRoute="/reports"
+                    filterParams={todayDisbursementsReportFilterParams}
+                    ariaLabel="Open today's repeat-customer disbursements for this dashboard scope"
+                  >
+                    <div className={styles.kpiLabel}>Repeat today</div>
+                    <div className={`${styles.kpiValue} ${dailyRepeatDisbursements > 0 ? styles.textGreen : ''}`}>{dailyRepeatDisbursements}</div>
+                    <div className={styles.kpiMeta}>
+                      <span>Repeat customer disbursements</span>
+                      <span className={styles.kpiLink}>Open disbursement report</span>
+                    </div>
+                  </DashboardMetricCard>
+                </div>
+              </div>
+            </section>
+          </div>
 
           {/* â”€â”€ Zone 3: Deep-dive analytics panels (lazy) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-          <Suspense fallback={<section className={styles.panel}><p className={styles.muted}>Loading analytics panels...</p></section>}>
-            <DashboardDeepDivePanels
-              outstandingBalance={outstandingBalance}
+          <Suspense fallback={<section className={`${styles.panel} ${styles.scaffoldSection}`}><div className={styles.scaffoldHeader}><h2>Portfolio Risk</h2></div></section>}>
+            <DashboardScaffoldPanels
               totalArrears={totalArrears}
-              preWriteoffMonitoredBalance={preWriteoffMonitoredBalance}
+              par30Balance={par30Balance}
+              par30Ratio={par30Ratio}
+              par60Balance={par60Balance}
+              par60Ratio={par60Ratio}
+              par90Balance={par90Balance}
+              par90Ratio={par90Ratio}
+              portfolioAtRiskRatio={portfolioAtRiskRatio}
               writeOffOrNplTotal={writeOffOrNplTotal}
               nplBalance={nplBalance}
+              nplRatio={nplRatio}
               nplLoanCount={nplLoanCount}
+              collectionsToday={collectionsToday}
+              scheduledDueToday={scheduledDueToday}
               collectionCoverage={collectionCoverage}
-              unpaidDue={unpaidDue}
+              scheduledDueStillUnpaid={scheduledDueStillUnpaid}
               repaidLoanCount={repaidLoanCount}
-              overdueAmount={overdueAmount}
               writtenOffBalance={writtenOffBalance}
-              overdueInstallments={Number(portfolio?.overdue_installments || 0)}
-              restructuredLoans={Number(portfolio?.restructured_loans || 0)}
-              newClients={newClients}
-              firstTimeBorrowers={firstTimeBorrowers}
-              repeatBorrowers={repeatBorrowers}
-              loansDisbursed={loansDisbursed}
-              totalDisbursedAmount={totalDisbursedAmount}
+              overdueInstallments={overdueInstallments}
+              shortcutTargets={scaffoldShortcutTargets}
             />
           </Suspense>
+
+          <div className={styles.zoneGrid}>
+            <section className={`${styles.panel} ${styles.zonePanel}`}>
+              <div className={styles.zoneHeaderCompact}>
+                <div>
+                  <p className={styles.zoneEyebrow}>Today&apos;s activity</p>
+                  <h2>What moved today</h2>
+                </div>
+                <p className={styles.zoneIntroCompact}>
+                  Daily lending and recovery signals stay together so the team can see throughput, borrower mix, and recoveries in one pass.
+                </p>
+              </div>
+
+              <div className={styles.activityGrid}>
+                {todayActivityCards.map((card) => (
+                  <DashboardMetricCard
+                    key={card.label}
+                    className={`${styles.activityCard} ${styles.activityCardInteractive}`}
+                    destinationRoute={card.destinationRoute}
+                    filterParams={card.filterParams}
+                    ariaLabel={card.ariaLabel}
+                  >
+                    <div className={styles.activityCardLabel}>{card.label}</div>
+                    <div className={`${styles.activityCardValue} ${card.toneClass}`.trim()}>{card.value}</div>
+                    <div className={styles.activityCardMeta}>{card.meta}</div>
+                  </DashboardMetricCard>
+                ))}
+              </div>
+            </section>
+
+            <section className={`${styles.panel} ${styles.zonePanel}`}>
+              <div className={styles.zoneHeaderCompact}>
+                <div>
+                  <p className={styles.zoneEyebrow}>Month-to-date</p>
+                  <h2>Portfolio scale and lending pace</h2>
+                </div>
+                <p className={styles.zoneIntroCompact}>
+                  Current book size stays visible while monthly acquisition, disbursement pace, and declines remain available without competing with the alerts zone.
+                </p>
+              </div>
+
+              <div className={styles.monthGrid}>
+                <DashboardMetricCard
+                  className={`${styles.featureCard} ${styles.featureCardInteractive}`}
+                  destinationRoute="/reports"
+                  filterParams={portfolioReportFilterParams}
+                  ariaLabel="Open the portfolio OLB report for this dashboard scope"
+                >
+                  <div className={styles.featureCardLabel}>Current book</div>
+                  <div className={styles.featureCardValue}>Ksh {formatCurrency(outstandingBalance)}</div>
+                  <p className={styles.featureCardCopy}>Outstanding loan balance across the selected dashboard scope.</p>
+                  <div className={styles.featureStats}>
+                    <div className={styles.featureStat}>
+                      <span>Customers</span>
+                      <strong>{borrowerCount}</strong>
+                    </div>
+                    <div className={styles.featureStat}>
+                      <span>Active loans</span>
+                      <strong>{activeLoans}</strong>
+                    </div>
+                  </div>
+                </DashboardMetricCard>
+
+                <div className={styles.monthCards}>
+                  {monthToDateCards.map((card) => (
+                    <DashboardMetricCard
+                      key={card.label}
+                      className={`${styles.compactCard} ${styles.compactCardInteractive}`}
+                      destinationRoute={card.destinationRoute}
+                      filterParams={card.filterParams}
+                      ariaLabel={card.ariaLabel}
+                    >
+                      <div className={styles.compactCardLabel}>{card.label}</div>
+                      <div className={`${styles.compactCardValue} ${card.toneClass}`.trim()}>{card.value}</div>
+                      <div className={styles.compactCardMeta}>{card.meta}</div>
+                    </DashboardMetricCard>
+                  ))}
+
+                  <DashboardMetricCard
+                    className={`${styles.compactCard} ${styles.compactCardInteractive}`}
+                    destinationRoute="/clients"
+                    filterParams={dashboardListFilterParams}
+                    ariaLabel="Open the customer register for this dashboard scope"
+                  >
+                    <div className={styles.compactCardLabel}>Customers</div>
+                    <div className={styles.compactCardValue}>{borrowerCount}</div>
+                    <div className={styles.compactCardMeta}>Borrowers currently in the selected scope</div>
+                  </DashboardMetricCard>
+                </div>
+              </div>
+            </section>
+          </div>
         </>
       ) : null}
 
@@ -796,3 +1464,6 @@ export function DashboardPage() {
     </div>
   )
 }
+
+
+

@@ -30,34 +30,56 @@ import { RecordClientFeePaymentHandler } from "../application/client/handlers/Re
 import { DeactivateClientHandler, ReactivateClientHandler } from "../application/client/handlers/ClientStatusHandlers.js";
 import { GetClientDetailsHandler }      from "../application/client/handlers/GetClientDetailsHandler.js";
 import { LoanDisbursementSaga } from "../application/loan/sagas/LoanDisbursementSaga.js";
-// Gap 11: ClientOnboardingSaga wired to the event bus at bootstrap so all
-// onboarding-relevant domain events automatically trigger syncOnboardingStatus.
+import { LoanOnboardingLinkSaga } from "../application/loan/sagas/LoanOnboardingLinkSaga.js";
+import { LoanContractVersionSaga } from "../application/loan/sagas/LoanContractVersionSaga.js";
+import { LoanUnderwritingRefreshSaga } from "../application/loan/sagas/LoanUnderwritingRefreshSaga.js";
+// ClientOnboardingSaga is wired on the shared event bus here so every route
+// and background entry point observes the same onboarding sync side effects.
 import { ClientOnboardingSaga } from "../application/client/sagas/ClientOnboardingSaga.js";
 import type { FeatureFlags } from "../config/featureFlags.js";
 import { DEFAULT_FEATURE_FLAGS } from "../config/featureFlags.js";
+import type { HierarchyScope } from "../types/dataLayer.js";
+import type { LoggerLike, MetricsLike } from "../types/runtime.js";
+import type {
+  AuditLogWriter,
+  DbAll,
+  DbExecuteTransaction,
+  DbGet,
+  DbRun,
+  DomainEventPublisher,
+  HierarchyServiceLike,
+  MobileMoneyProviderLike,
+  ReportCacheLike,
+} from "../types/serviceContracts.js";
+
+type ReportCacheUserLike = {
+  sub?: number | string | null;
+  role?: string | null;
+};
+
+type ScopeCacheInput = {
+  level?: unknown;
+  role?: unknown;
+  branchId?: unknown;
+  regionId?: unknown;
+  branchIds?: unknown[];
+} | HierarchyScope | null | undefined;
 
 type CreateAppServiceRegistryOptions = {
-  get: (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
-  all: (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
-  readGet?: (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
-  readAll?: (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
-  run: (sql: string, params?: unknown[]) => Promise<any>;
-  executeTransaction: (callback: (tx: any) => any) => Promise<any>;
-  hierarchyService: any;
+  get: DbGet;
+  all: DbAll;
+  readGet?: DbGet;
+  readAll?: DbAll;
+  run: DbRun;
+  executeTransaction: DbExecuteTransaction;
+  hierarchyService: HierarchyServiceLike;
   calculateExpectedTotal: (principal: number, interestRate: number, termWeeks: number) => number;
   addWeeksIso: (isoDate: string, weeksToAdd: number) => string;
-  writeAuditLog: (payload: {
-    userId?: number | null;
-    action: string;
-    targetType?: string | null;
-    targetId?: number | null;
-    details?: string | null;
-    ipAddress?: string | null;
-  }) => Promise<void> | void;
+  writeAuditLog: AuditLogWriter;
   invalidateReportCaches: () => Promise<void>;
   requireVerifiedClientKycForLoanApproval: boolean;
   allowConcurrentLoans: boolean;
-  mobileMoneyProvider?: any;
+  mobileMoneyProvider?: MobileMoneyProviderLike | null;
   mobileMoneyC2BEnabled?: boolean;
   mobileMoneyB2CEnabled?: boolean;
   mobileMoneyStkEnabled?: boolean;
@@ -65,23 +87,10 @@ type CreateAppServiceRegistryOptions = {
   mobileMoneyProviderTimeoutMs?: number;
   mobileMoneyCircuitFailureThreshold?: number;
   mobileMoneyCircuitResetTimeoutMs?: number;
-  reportCache?: {
-    enabled?: boolean;
-    buildKey: (namespace: string, payload?: Record<string, unknown>) => string;
-    getOrSet: <T = any>(options: { key: string; compute: () => Promise<T> }) => Promise<{ value: T }>;
-    invalidatePrefix: (prefix: string) => Promise<void>;
-  } | null;
-  logger?: any;
-  metrics?: any;
-  publishDomainEvent?: (payload: {
-    eventType: string;
-    aggregateType: string;
-    aggregateId: number | null | undefined;
-    tenantId?: string | null | undefined;
-    payload?: Record<string, unknown> | null | undefined;
-    metadata?: Record<string, unknown> | null | undefined;
-    occurredAt?: string | null | undefined;
-  }) => Promise<number>;
+  reportCache?: ReportCacheLike | null;
+  logger?: LoggerLike | null;
+  metrics?: MetricsLike | null;
+  publishDomainEvent?: DomainEventPublisher;
   loanProductCatalogService: LoanProductCatalogService;
   featureFlags?: Partial<FeatureFlags>;
 };
@@ -125,9 +134,9 @@ type AppServiceRegistry = {
     };
   };
   report: {
-    resolveCachedReport: <T = any>(options: {
+    resolveCachedReport: <T = unknown>(options: {
       namespace: string;
-      user: Record<string, any> | undefined;
+      user: ReportCacheUserLike | undefined;
       scope: unknown;
       keyPayload?: Record<string, unknown>;
       compute: () => Promise<T>;
@@ -174,13 +183,15 @@ function createAppServiceRegistry(options: CreateAppServiceRegistryOptions): App
 
   const featureFlags: FeatureFlags = { ...DEFAULT_FEATURE_FLAGS, ...featureFlagsInput };
 
-  function toScopeCachePayload(scope: any) {
+  function toScopeCachePayload(scope: ScopeCacheInput) {
     const rawBranchIds = Array.isArray(scope?.branchIds) ? scope.branchIds : [];
+    const branchId = Number(scope?.branchId);
+    const regionId = Number(scope?.regionId);
     return {
       level: scope?.level || null,
       role: scope?.role || null,
-      branchId: Number.isInteger(Number(scope?.branchId)) ? Number(scope.branchId) : null,
-      regionId: Number.isInteger(Number(scope?.regionId)) ? Number(scope.regionId) : null,
+      branchId: Number.isInteger(branchId) ? branchId : null,
+      regionId: Number.isInteger(regionId) ? regionId : null,
       branchIds: rawBranchIds
         .map((value: unknown) => Number(value))
         .filter((value: number) => Number.isInteger(value) && value > 0)
@@ -188,7 +199,7 @@ function createAppServiceRegistry(options: CreateAppServiceRegistryOptions): App
     };
   }
 
-  async function resolveCachedReport<T = any>({
+  async function resolveCachedReport<T = unknown>({
     namespace,
     user,
     scope,
@@ -196,7 +207,7 @@ function createAppServiceRegistry(options: CreateAppServiceRegistryOptions): App
     compute,
   }: {
     namespace: string;
-    user: Record<string, any> | undefined;
+    user: ReportCacheUserLike | undefined;
     scope: unknown;
     keyPayload?: Record<string, unknown>;
     compute: () => Promise<T>;
@@ -210,7 +221,7 @@ function createAppServiceRegistry(options: CreateAppServiceRegistryOptions): App
         tenantId: getCurrentTenantId(),
         userId: user?.sub || null,
         role: user?.role || null,
-        scope: toScopeCachePayload(scope),
+        scope: toScopeCachePayload(scope as ScopeCacheInput),
         ...keyPayload,
       }),
       compute,
@@ -224,8 +235,18 @@ function createAppServiceRegistry(options: CreateAppServiceRegistryOptions): App
     get,
     run,
   });
+  const loanOnboardingLinkSaga = new LoanOnboardingLinkSaga({
+    executeTransaction,
+  });
+  const loanContractVersionSaga = new LoanContractVersionSaga({
+    executeTransaction,
+  });
+  const loanUnderwritingRefreshSaga = new LoanUnderwritingRefreshSaga({
+    loanUnderwritingService,
+  });
   const loanService = createLoanService({
     get,
+    all,
     run,
     executeTransaction,
     hierarchyService,
@@ -234,7 +255,11 @@ function createAppServiceRegistry(options: CreateAppServiceRegistryOptions): App
     writeAuditLog,
     invalidateReportCaches,
     allowConcurrentLoans,
+    publishDomainEvent,
     loanUnderwritingService,
+    loanOnboardingLinkSaga,
+    loanContractVersionSaga,
+    loanUnderwritingRefreshSaga,
   });
   const repaymentService = createRepaymentService({
     executeTransaction,
@@ -310,16 +335,20 @@ function createAppServiceRegistry(options: CreateAppServiceRegistryOptions): App
     hierarchyService,
   });
 
-  // Loan domain repository -- wired to the loan aggregate port
-  const loanRepository: ILoanRepository = new SqliteLoanRepository({ get, all, run });
+  // Loan domain repository -- still used by the non-creation CQRS handlers.
+  const loanRepository: ILoanRepository = new SqliteLoanRepository({ get, all, run, executeTransaction });
 
-  // Client repository (needed by CreateLoanApplicationHandler for eligibility check)
-  const clientRepository = new SqliteClientRepository({ get, all, run });
+  // Client repository -- used by client CQRS handlers.
+  const clientRepository = new SqliteClientRepository({ get, all, run, executeTransaction });
 
   // Event bus — OutboxEventBus writes every event to the domain_events outbox table
   // for guaranteed at-least-once delivery. The domainEventDispatch job forwards to
   // any configured external broker. In-process subscribers are still called immediately.
-  const eventBus: IEventBus = new OutboxEventBus(publishDomainEvent);
+  const eventBus: IEventBus = new OutboxEventBus(publishDomainEvent, logger);
+
+  loanOnboardingLinkSaga.register(eventBus);
+  loanContractVersionSaga.register(eventBus);
+  loanUnderwritingRefreshSaga.register(eventBus);
 
   // LoanDisbursementSaga — event-driven disbursement with compensation on failure.
   // Wired to 'loan.approved' so loans approved via the CQRS handler auto-disburse.
@@ -328,15 +357,14 @@ function createAppServiceRegistry(options: CreateAppServiceRegistryOptions): App
     mobileMoneyService,
     publishDomainEvent,
     systemUserId: 0,        // system actor — no real user for saga actions
+    autoDisburseOnApproval: featureFlags.sagaAutoDisburse,
     autoMobileMoney: featureFlags.sagaAutoDisburse,
   });
   loanDisbursementSaga.register(eventBus);
 
-  // ClientOnboardingSaga (Gap 11) — subscribes to all domain events that can
-  // change onboarding eligibility and automatically re-syncs onboarding_status.
-  // This replaces the 9 manual syncClientOnboardingStatus() calls scattered
-  // across clientRouteService.ts (those calls remain and are idempotent; they
-  // will be cleaned up as routes are migrated to CQRS handlers).
+  // ClientOnboardingSaga subscribes to all domain events that can change
+  // onboarding eligibility and keeps onboarding_status in sync from the
+  // shared event bus instead of per-route manual triggers.
   const clientOnboardingSaga = new ClientOnboardingSaga(get, run);
   clientOnboardingSaga.register(eventBus);
 
@@ -350,7 +378,7 @@ function createAppServiceRegistry(options: CreateAppServiceRegistryOptions): App
   });
 
   // Command handlers
-  const createLoanApplication = new CreateLoanApplicationHandler(loanRepository, clientRepository, eventBus);
+  const createLoanApplication = new CreateLoanApplicationHandler(loanService);
   const approveLoan            = new ApproveLoanHandler(loanRepository, eventBus);
   const rejectLoan             = new RejectLoanHandler(loanRepository, eventBus);
   const disburseLoan           = new DisburseLoanHandler(loanRepository, eventBus);

@@ -1,5 +1,6 @@
 import { Decimal } from "decimal.js";
 import { prisma } from "../../../db/prismaClient.js";
+import type { PrismaTransactionClient } from "../../../db/prismaClient.js";
 import {
   ForbiddenScopeError,
   LoanNotFoundError,
@@ -11,9 +12,11 @@ import {
   resolveDisbursementRequest,
 } from "../../loanLifecycleDisbursementSupport.js";
 import {
+  getScheduleMaturityIso,
   nowIso,
   moneyToNumber,
   normalizeInterestAccrualMethod,
+  resolveLoanRepaymentCadence,
 } from "../shared/helpers.js";
 import {
   sumDisbursedPrincipalTx,
@@ -49,7 +52,7 @@ export async function disburseLoan(
     });
   }
 
-  const disbursementSummary = await prisma.$transaction(async (tx: any) => {
+  const disbursementSummary = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
     const loanForDisbursement = await tx.loans.findUnique({ where: { id: loanId } });
     if (!loanForDisbursement) throw new LoanNotFoundError();
     if (loanForDisbursement.status !== "approved") {
@@ -66,7 +69,7 @@ export async function disburseLoan(
     }
 
     const now = nowIso();
-    const disbursedSoFar = await sumDisbursedPrincipalTx(tx as any, loanId);
+    const disbursedSoFar = await sumDisbursedPrincipalTx(tx, loanId);
     const approvedPrincipal = moneyToNumber(loanForDisbursement.principal || 0);
     const remainingPrincipal = moneyToNumber(new Decimal(approvedPrincipal).minus(disbursedSoFar));
     if (remainingPrincipal <= 0) {
@@ -83,7 +86,7 @@ export async function disburseLoan(
     const { requestedAmount, isFinalDisbursement } = disbursementRequest;
 
     const nextTrancheNumber = await appendDisbursementTrancheTx({
-      tx: tx as any, loanId, amount: requestedAmount,
+      tx, loanId, amount: requestedAmount,
       disbursedAt: now, disbursedByUserId: user.sub,
       note: payload.notes || null, isFinal: isFinalDisbursement,
     });
@@ -100,7 +103,7 @@ export async function disburseLoan(
     });
 
     await generalLedgerService.postJournal({
-      tx: tx as any,
+      tx,
       referenceType: isFinalDisbursement ? "loan_disbursement" : "loan_disbursement_tranche",
       referenceId: Number(disbursementTx.id || 0),
       loanId: loanForDisbursement.id, clientId: loanForDisbursement.client_id,
@@ -117,12 +120,12 @@ export async function disburseLoan(
 
     if (!isFinalDisbursement) {
       const updatedLoan = await tx.loans.findUnique({ where: { id: loanId } });
-      const contractSnapshot = await buildLoanContractSnapshotTx(tx as any, loanId, {
+      const contractSnapshot = await buildLoanContractSnapshotTx(tx, loanId, {
         previousLoan: loanForDisbursement,
         tranche: { trancheNumber: nextTrancheNumber, amount: requestedAmount, finalDisbursement: false },
         transactionId: Number(disbursementTx.id || 0),
       });
-      await recordLoanContractVersionTx(tx as any, {
+      await recordLoanContractVersionTx(tx, {
         loanId, eventType: "disbursement_tranche",
         note: payload.notes || "Loan tranche disbursed", createdByUserId: user.sub,
         snapshotJson: contractSnapshot,
@@ -134,7 +137,7 @@ export async function disburseLoan(
         balance: Number(updatedLoan?.balance || loanForDisbursement.balance || 0),
       });
       const remainingAfterTranche = moneyToNumber(new Decimal(remainingPrincipal).minus(requestedAmount));
-      await publishDomainEvent({ eventType: "loan.tranche_disbursed", aggregateType: "loan", aggregateId: loanId, payload: { loanId, disbursedByUserId: user.sub, notes: payload.notes || null, trancheNumber: nextTrancheNumber, trancheAmount: requestedAmount, remainingPrincipal: remainingAfterTranche, finalDisbursement: false, loanStatus: updatedLoan?.status || null, branchId: Number(updatedLoan?.branch_id || 0) || null, clientId: Number(updatedLoan?.client_id || 0) || null, disbursedAt: updatedLoan?.disbursed_at || now }, metadata: { source: "disburseLoan" } }, tx as any);
+      await publishDomainEvent({ eventType: "loan.tranche_disbursed", aggregateType: "loan", aggregateId: loanId, payload: { loanId, disbursedByUserId: user.sub, notes: payload.notes || null, trancheNumber: nextTrancheNumber, trancheAmount: requestedAmount, remainingPrincipal: remainingAfterTranche, finalDisbursement: false, loanStatus: updatedLoan?.status || null, branchId: Number(updatedLoan?.branch_id || 0) || null, clientId: Number(updatedLoan?.client_id || 0) || null, disbursedAt: updatedLoan?.disbursed_at || now }, metadata: { source: "disburseLoan" } }, tx);
       return { isFinalDisbursement: false, trancheNumber: nextTrancheNumber, disbursedAmount: requestedAmount, remainingPrincipal: remainingAfterTranche, updatedLoan };
     }
 
@@ -161,7 +164,7 @@ export async function disburseLoan(
       await tx.transactions.create({ data: { loan_id: loanId, client_id: loanForDisbursement.client_id, branch_id: loanForDisbursement.branch_id, tx_type: "processing_fee", amount: processingFee, note: "Recurring loan processing fee", occurred_at: nowIso() } });
     }
 
-    const productConfig = await getLoanProductConfigTx(tx as any, Number(loanForDisbursement.product_id || 0));
+    const productConfig = await getLoanProductConfigTx(tx, Number(loanForDisbursement.product_id || 0));
     const accrualMethod = normalizeInterestAccrualMethod(productConfig.interest_accrual_method);
     const interestAccountCode = accrualMethod === "daily_eod"
       ? generalLedgerService.ACCOUNT_CODES.UNEARNED_INTEREST
@@ -177,17 +180,30 @@ export async function disburseLoan(
         finalizationLines.push({ accountCode: generalLedgerService.ACCOUNT_CODES.CASH ?? "", side: "debit", amount: feeIncome, memo: "Recognize upfront registration and processing fees collected" });
         finalizationLines.push({ accountCode: generalLedgerService.ACCOUNT_CODES.FEE_INCOME ?? "", side: "credit", amount: feeIncome, memo: "Recognize registration and processing fee income paid upfront" });
       }
-      await generalLedgerService.postJournal({ tx: tx as any, referenceType: "loan_disbursement_finalize", referenceId: loanId, loanId: loanForDisbursement.id, clientId: loanForDisbursement.client_id, branchId: loanForDisbursement.branch_id, description: "Final loan disbursement interest and upfront fee recognition posted", note: payload.notes || null, postedByUserId: user.sub, lines: finalizationLines });
+      await generalLedgerService.postJournal({ tx, referenceType: "loan_disbursement_finalize", referenceId: loanId, loanId: loanForDisbursement.id, clientId: loanForDisbursement.client_id, branchId: loanForDisbursement.branch_id, description: "Final loan disbursement interest and upfront fee recognition posted", note: payload.notes || null, postedByUserId: user.sub, lines: finalizationLines });
     }
 
     const disbursedAt = new Date().toISOString();
-    await regeneratePendingInstallmentsTx(tx as any, addWeeksIso, { loanId, expectedTotal: Number(loanForDisbursement.expected_total || 0), termWeeks, scheduleStartDateIso: disbursedAt, repaidTotal: 0, penaltyConfig: productConfig });
-    await upsertInterestProfileTx(tx as any, { loanId, accrualMethod, accrualBasis: "flat", accrualStartAt: disbursedAt, maturityAt: addWeeksIso(disbursedAt, termWeeks), totalContractualInterest: interestAmount, accruedInterest: accrualMethod === "daily_eod" ? 0 : interestAmount });
+    await regeneratePendingInstallmentsTx(tx, addWeeksIso, { loanId, expectedTotal: Number(loanForDisbursement.expected_total || 0), termWeeks, scheduleStartDateIso: disbursedAt, repaidTotal: 0, penaltyConfig: productConfig });
+    await upsertInterestProfileTx(tx, {
+      loanId,
+      accrualMethod,
+      accrualBasis: "flat",
+      accrualStartAt: disbursedAt,
+      maturityAt: getScheduleMaturityIso({
+        startIso: disbursedAt,
+        termWeeks,
+        cadence: resolveLoanRepaymentCadence(productConfig.interest_accrual_method),
+        addWeeksIso,
+      }),
+      totalContractualInterest: interestAmount,
+      accruedInterest: accrualMethod === "daily_eod" ? 0 : interestAmount,
+    });
 
     const updatedLoan = await tx.loans.findUnique({ where: { id: loanId } });
-    const contractSnapshot = await buildLoanContractSnapshotTx(tx as any, loanId, { previousLoan: loanForDisbursement, disbursement: { trancheNumber: nextTrancheNumber, amount: requestedAmount, finalDisbursement: true, totalDisbursedPrincipal: approvedPrincipal, interestAccrualMethod: accrualMethod }, transactionId: Number(disbursementTx.id || 0) });
-    await recordLoanContractVersionTx(tx as any, { loanId, eventType: "disbursement", note: payload.notes || null, createdByUserId: user.sub, snapshotJson: contractSnapshot, principal: Number(updatedLoan?.principal || loanForDisbursement.principal || 0), interestRate: Number(updatedLoan?.interest_rate || loanForDisbursement.interest_rate || 0), termWeeks: Number(updatedLoan?.term_weeks || termWeeks), expectedTotal: Number(updatedLoan?.expected_total || loanForDisbursement.expected_total || 0), repaidTotal: Number(updatedLoan?.repaid_total || loanForDisbursement.repaid_total || 0), balance: Number(updatedLoan?.balance || loanForDisbursement.balance || 0) });
-    await publishDomainEvent({ eventType: "loan.disbursed", aggregateType: "loan", aggregateId: loanId, payload: { loanId, disbursedByUserId: user.sub, notes: payload.notes || null, trancheNumber: nextTrancheNumber, trancheAmount: requestedAmount, remainingPrincipal: 0, finalDisbursement: true, loanStatus: updatedLoan?.status || null, branchId: Number(updatedLoan?.branch_id || 0) || null, clientId: Number(updatedLoan?.client_id || 0) || null, disbursedAt: updatedLoan?.disbursed_at || disbursedAt }, metadata: { source: "disburseLoan" } }, tx as any);
+    const contractSnapshot = await buildLoanContractSnapshotTx(tx, loanId, { previousLoan: loanForDisbursement, disbursement: { trancheNumber: nextTrancheNumber, amount: requestedAmount, finalDisbursement: true, totalDisbursedPrincipal: approvedPrincipal, interestAccrualMethod: accrualMethod }, transactionId: Number(disbursementTx.id || 0) });
+    await recordLoanContractVersionTx(tx, { loanId, eventType: "disbursement", note: payload.notes || null, createdByUserId: user.sub, snapshotJson: contractSnapshot, principal: Number(updatedLoan?.principal || loanForDisbursement.principal || 0), interestRate: Number(updatedLoan?.interest_rate || loanForDisbursement.interest_rate || 0), termWeeks: Number(updatedLoan?.term_weeks || termWeeks), expectedTotal: Number(updatedLoan?.expected_total || loanForDisbursement.expected_total || 0), repaidTotal: Number(updatedLoan?.repaid_total || loanForDisbursement.repaid_total || 0), balance: Number(updatedLoan?.balance || loanForDisbursement.balance || 0) });
+    await publishDomainEvent({ eventType: "loan.disbursed", aggregateType: "loan", aggregateId: loanId, payload: { loanId, disbursedByUserId: user.sub, notes: payload.notes || null, trancheNumber: nextTrancheNumber, trancheAmount: requestedAmount, remainingPrincipal: 0, finalDisbursement: true, loanStatus: updatedLoan?.status || null, branchId: Number(updatedLoan?.branch_id || 0) || null, clientId: Number(updatedLoan?.client_id || 0) || null, disbursedAt: updatedLoan?.disbursed_at || disbursedAt }, metadata: { source: "disburseLoan" } }, tx);
 
     return { isFinalDisbursement: true, trancheNumber: nextTrancheNumber, disbursedAmount: requestedAmount, remainingPrincipal: 0, updatedLoan };
   }, { maxWait: 10000, timeout: 20000 });

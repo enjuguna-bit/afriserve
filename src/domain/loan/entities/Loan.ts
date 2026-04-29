@@ -11,12 +11,14 @@ import { LoanRejected } from "../events/LoanRejected.js";
 import { LoanMarkedOverdue } from "../events/LoanMarkedOverdue.js";
 import { LoanFullyRepaid } from "../events/LoanFullyRepaid.js";
 import { RepaymentRecorded } from "../events/RepaymentRecorded.js";
+import { DomainValidationError, InvalidLoanStatusError } from "../../errors.js";
 
 export interface LoanProps {
   id: LoanId;
   clientId: number;
   productId: number | null;
   branchId: number | null;
+  purpose?: string | null;
   createdByUserId: number | null;
   officerId: number | null;
   principal: Money;
@@ -56,6 +58,7 @@ export class Loan {
     clientId: number;
     productId?: number | null;
     branchId?: number | null;
+    purpose?: string | null;
     createdByUserId: number;
     officerId?: number | null;
     principal: Money;
@@ -72,6 +75,7 @@ export class Loan {
       clientId: params.clientId,
       productId: params.productId ?? null,
       branchId: params.branchId ?? null,
+      purpose: params.purpose ?? null,
       createdByUserId: params.createdByUserId,
       officerId: params.officerId ?? null,
       principal: params.principal,
@@ -110,6 +114,8 @@ export class Loan {
   get id(): LoanId                 { return this._props.id; }
   get clientId(): number           { return this._props.clientId; }
   get branchId(): number | null    { return this._props.branchId; }
+  get purpose(): string | null     { return this._props.purpose ?? null; }
+  get createdByUserId(): number | null { return this._props.createdByUserId; }
   get principal(): Money           { return this._props.principal; }
   get interestRate(): InterestRate { return this._props.interestRate; }
   get term(): LoanTerm             { return this._props.term; }
@@ -147,9 +153,21 @@ export class Loan {
   // Business methods
   // ------------------------------------------------------------------
 
+  private _invalidStatusError(action: string, allowedStatuses: string[]): InvalidLoanStatusError {
+    return new InvalidLoanStatusError(
+      `Cannot ${action} loan ${this._props.id.value} in status: ${this._props.status.value}`,
+      {
+        loanId: this._props.id.value,
+        action,
+        currentStatus: this._props.status.value,
+        allowedStatuses,
+      },
+    );
+  }
+
   approve(approvedByUserId: number): void {
     if (!this.canBeApproved()) {
-      throw new Error(`Cannot approve loan ${this._props.id.value} in status: ${this._props.status.value}`);
+      throw this._invalidStatusError("approve", ["pending_approval"]);
     }
     const now = new Date();
     this._props.status = LoanStatus.approved();
@@ -166,7 +184,7 @@ export class Loan {
 
   reject(rejectedByUserId: number, reason: string): void {
     if (!this.canBeRejected()) {
-      throw new Error(`Cannot reject loan ${this._props.id.value} in status: ${this._props.status.value}`);
+      throw this._invalidStatusError("reject", ["pending_approval"]);
     }
     const now = new Date();
     this._props.status = LoanStatus.rejected();
@@ -190,7 +208,7 @@ export class Loan {
     externalReference?: string | null;
   }): void {
     if (!this.canBeDisbursed()) {
-      throw new Error(`Cannot disburse loan ${this._props.id.value} in status: ${this._props.status.value}`);
+      throw this._invalidStatusError("disburse", ["approved"]);
     }
     const now = params.disbursedAt ?? new Date();
     this._props.status = LoanStatus.active();
@@ -223,7 +241,7 @@ export class Loan {
     note?: string | null;
   }): void {
     if (!this.canBeDisbursed()) {
-      throw new Error(`Cannot disburse tranche for loan ${this._props.id.value} in status: ${this._props.status.value}`);
+      throw this._invalidStatusError("disburse tranche for", ["approved"]);
     }
     const now = params.disbursedAt ?? new Date();
     if (params.isFinal) {
@@ -252,10 +270,13 @@ export class Loan {
     occurredAt?: Date;
   }): void {
     if (!this.canAcceptRepayment()) {
-      throw new Error(`Cannot record repayment for loan ${this._props.id.value} in status: ${this._props.status.value}`);
+      throw this._invalidStatusError("record repayment for", ["active", "overdue", "restructured"]);
     }
     if (params.amount.isZero()) {
-      throw new Error("Repayment amount must be positive");
+      throw new DomainValidationError("Repayment amount must be positive", {
+        loanId: this._props.id.value,
+        action: "repayment",
+      });
     }
     const now = params.occurredAt ?? new Date();
 
@@ -317,8 +338,14 @@ export class Loan {
     }
 
     if (!this.canBeMarkedOverdue()) {
-      throw new Error(
+      throw new InvalidLoanStatusError(
         `Cannot mark loan ${this._props.id.value} as overdue from status: ${this._props.status.value}`,
+        {
+          loanId: this._props.id.value,
+          action: "mark_overdue",
+          currentStatus: this._props.status.value,
+          allowedStatuses: ["active", "restructured"],
+        },
       );
     }
 
@@ -355,6 +382,7 @@ export class Loan {
       client_id: p.clientId,
       product_id: p.productId,
       branch_id: p.branchId,
+      purpose: p.purpose ?? null,
       created_by_user_id: p.createdByUserId,
       officer_id: p.officerId,
       principal: p.principal.amount,

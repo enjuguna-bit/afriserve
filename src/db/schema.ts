@@ -22,7 +22,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createSeedApi } from "./seed.js";
-import { run, get, all, dbClient, dbPath, db } from "./connection.js";
+import { run, get, all, dbClient, db } from "./connection.js";
 import type { RunMigrationsOptions, RunMigrationsResult } from "../types/dataLayer.js";
 import migration20260225_0001_baseline from "../migrations/20260225_0001_baseline.js";
 import migration20260225_0002_audit_log_indexes from "../migrations/20260225_0002_audit_log_indexes.js";
@@ -40,6 +40,14 @@ import migration20260308_0013_external_reference_indexes from "../migrations/202
 import migration20260316_0014_client_national_id_unique_index from "../migrations/20260316_0014_client_national_id_unique_index.js";
 import migration20260317_0015_tenant_id_columns from "../migrations/20260317_0015_tenant_id_columns.js";
 import migration20260318_0016_tenant_id_guarantors_collateral from "../migrations/20260318_0016_tenant_id_guarantors_collateral.js";
+import migration20260323_0017_b2c_core_pending_status from "../migrations/20260323_0017_b2c_core_pending_status.js";
+import migration20260328_0018_client_profile_refresh_versioning from "../migrations/20260328_0018_client_profile_refresh_versioning.js";
+import migration20260328_0019_users_role_scope_tenant_unique from "../migrations/20260328_0019_users_role_scope_tenant_unique.js";
+import migration20260329_0020_collateral_status_trigger from "../migrations/20260329_0020_collateral_status_trigger.js";
+import migration20260401_0021_mobile_money_tenant_id from "../migrations/20260401_0021_mobile_money_tenant_id.js";
+import migration20260404_0022_tenant_id_transactions_installments_approvals from "../migrations/20260404_0022_tenant_id_transactions_installments_approvals.js";
+import { findSqliteRootedPostgresMigrationNames } from "./prismaMigrationHistoryDialect.js";
+import { summarizeFailedPrismaMigrationRows } from "./prismaMigrationDiagnostics.js";
 import { resolveRepoRoot } from "../utils/projectPaths.js";
 
 const execFileAsync = promisify(execFile);
@@ -48,6 +56,7 @@ const { seedHierarchyData, seedDefaultAdmin, seedDefaultLoanProduct } = createSe
 const repoRoot = resolveRepoRoot(currentDir);
 const sqlitePrismaSchemaPath = path.join(repoRoot, "prisma", "schema.prisma");
 const postgresPrismaSchemaPath = path.join(repoRoot, "prisma", "postgres", "schema.prisma");
+const postgresPrismaMigrationsPath = path.join(repoRoot, "prisma", "postgres", "migrations");
 const sqliteBootstrapSqlPath = path.join(repoRoot, "generated", "prisma", "sqlite-bootstrap.sql");
 let cachedPrismaDateTimeFieldNames: Set<string> | null = null;
 const runtimeMigrations = [
@@ -67,31 +76,77 @@ const runtimeMigrations = [
   migration20260316_0014_client_national_id_unique_index,
   migration20260317_0015_tenant_id_columns,
   migration20260318_0016_tenant_id_guarantors_collateral,
+  migration20260323_0017_b2c_core_pending_status,
+  migration20260328_0018_client_profile_refresh_versioning,
+  migration20260328_0019_users_role_scope_tenant_unique,
+  migration20260329_0020_collateral_status_trigger,
+  migration20260401_0021_mobile_money_tenant_id,
+  migration20260404_0022_tenant_id_transactions_installments_approvals,
 ];
+type RuntimeMigrationContext = {
+  run: typeof run;
+  get: typeof get;
+  all: typeof all;
+};
 
 function getNpxCommand(): string {
   return process.platform === "win32" ? "npx.cmd" : "npx";
 }
 
-function resolvePrismaSchemaPath(): string {
-  return dbClient === "postgres" ? postgresPrismaSchemaPath : sqlitePrismaSchemaPath;
+function getPrismaCommandFailureOutput(error: unknown): string {
+  if (!error || typeof error !== "object") {
+    return String(error || "");
+  }
+
+  const commandError = error as Error & { stdout?: string; stderr?: string };
+  return `${commandError.stdout || ""}${commandError.stderr || ""}${commandError.message || ""}`.trim();
 }
 
-async function executePrismaMigrateDeploy(): Promise<string> {
+function isPostgresMigrationProviderMismatch(error: unknown): boolean {
+  const details = getPrismaCommandFailureOutput(error);
+  return details.includes("P3019") && details.includes("migration_lock.toml");
+}
+
+function isPostgresFailedMigrationState(error: unknown): boolean {
+  const details = getPrismaCommandFailureOutput(error);
+  return details.includes("P3009") && details.includes("failed migrations in the target database");
+}
+
+function isEnvVarFalse(value: unknown): boolean {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase() === "false";
+}
+
+async function getFailedPostgresMigrationSummary(): Promise<Array<Record<string, unknown>>> {
+  if (dbClient !== "postgres") {
+    return [];
+  }
+
+  try {
+    const rows = await all(
+      `SELECT migration_name, started_at, applied_steps_count, logs
+       FROM "_prisma_migrations"
+       WHERE finished_at IS NULL AND rolled_back_at IS NULL
+       ORDER BY started_at ASC`,
+    );
+    return summarizeFailedPrismaMigrationRows(rows as Array<Record<string, unknown>>);
+  } catch {
+    return [];
+  }
+}
+
+async function runPrismaCommand(args: string[]): Promise<string> {
   const effectiveEnv: NodeJS.ProcessEnv = {
     ...process.env,
   };
 
   try {
-    const { stdout, stderr } = await execFileAsync(
-      getNpxCommand(),
-      ["prisma", "migrate", "deploy", "--schema", postgresPrismaSchemaPath],
-      {
-        cwd: repoRoot,
-        env: effectiveEnv,
-        windowsHide: true,
-      },
-    );
+    const { stdout, stderr } = await execFileAsync(getNpxCommand(), ["prisma", ...args], {
+      cwd: repoRoot,
+      env: effectiveEnv,
+      windowsHide: true,
+    });
 
     return `${stdout || ""}${stderr || ""}`;
   } catch {
@@ -101,25 +156,82 @@ async function executePrismaMigrateDeploy(): Promise<string> {
       throw new Error("Unable to run Prisma migrations: Prisma CLI binary was not found.");
     }
 
-    const { stdout, stderr } = await execFileAsync(
-      process.execPath,
-      [prismaCliPath, "migrate", "deploy", "--schema", postgresPrismaSchemaPath],
-      {
-        cwd: repoRoot,
-        env: effectiveEnv,
-        windowsHide: true,
-      },
-    );
+    const { stdout, stderr } = await execFileAsync(process.execPath, [prismaCliPath, ...args], {
+      cwd: repoRoot,
+      env: effectiveEnv,
+      windowsHide: true,
+    });
 
     return `${stdout || ""}${stderr || ""}`;
   }
 }
 
-async function sqliteTableExists(tableName: string): Promise<boolean> {
-  const row = await get(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
-    [tableName],
+async function executePrismaMigrateDeploy(): Promise<string> {
+  const sqliteRootedPostgresMigrations = await findSqliteRootedPostgresMigrationNames(
+    postgresPrismaMigrationsPath,
   );
+  if (sqliteRootedPostgresMigrations.length > 0) {
+    const fallbackOutput = await runPrismaCommand([
+      "db",
+      "push",
+      "--accept-data-loss",
+      "--skip-generate",
+      "--schema",
+      postgresPrismaSchemaPath,
+    ]);
+    return [
+      "[prisma] Falling back to `prisma db push --skip-generate` because the checked-in Postgres migration history still contains SQLite-specific SQL.",
+      `[prisma] SQLite-rooted Postgres migration samples: ${sqliteRootedPostgresMigrations.slice(0, 5).join(", ")}`,
+      fallbackOutput,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  try {
+    return await runPrismaCommand(["migrate", "deploy", "--schema", postgresPrismaSchemaPath]);
+  } catch (error) {
+    if (isPostgresMigrationProviderMismatch(error)) {
+      const fallbackOutput = await runPrismaCommand([
+        "db",
+        "push",
+        "--accept-data-loss",
+        "--skip-generate",
+        "--schema",
+        postgresPrismaSchemaPath,
+      ]);
+      return [
+        getPrismaCommandFailureOutput(error),
+        "[prisma] Falling back to `prisma db push --skip-generate` because the checked-in migration history is SQLite-rooted.",
+        fallbackOutput,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    if (isPostgresFailedMigrationState(error)) {
+      const details = getPrismaCommandFailureOutput(error);
+      const failedMigrations = await getFailedPostgresMigrationSummary();
+      console.warn(
+        "[prisma] `prisma migrate deploy` is blocked by an existing failed migration record in the target database. " +
+          "Continuing startup without applying new Prisma migrations because the live database is already provisioned.",
+      );
+      if (failedMigrations.length > 0) {
+        console.warn(`[prisma] unresolved failed migration records: ${JSON.stringify(failedMigrations)}`);
+      }
+      return details;
+    }
+
+    {
+      throw error;
+    }
+  }
+}
+
+async function sqliteTableExists(tableName: string): Promise<boolean> {
+  const row = await get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1", [
+    tableName,
+  ]);
   return Boolean(row?.name);
 }
 
@@ -129,10 +241,9 @@ async function sqliteColumnExists(tableName: string, columnName: string): Promis
 }
 
 async function sqliteTableDefinitionSql(tableName: string): Promise<string> {
-  const row = await get(
-    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
-    [tableName],
-  );
+  const row = await get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1", [
+    tableName,
+  ]);
   return String(row?.sql || "");
 }
 
@@ -141,9 +252,7 @@ async function sqliteTriggerNames(tableName: string): Promise<string[]> {
     "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ? ORDER BY name ASC",
     [tableName],
   );
-  return rows
-    .map((row) => String(row.name || "").trim())
-    .filter(Boolean);
+  return rows.map((row) => String(row.name || "").trim()).filter(Boolean);
 }
 
 function toMoneyNumber(value: unknown): number {
@@ -160,9 +269,7 @@ function normalizeEpochLikeDateTimeValue(value: unknown): string | null {
     return null;
   }
 
-  const normalizedMs = raw.length <= 10
-    ? Number(raw) * 1000
-    : Number(raw.slice(0, 13));
+  const normalizedMs = raw.length <= 10 ? Number(raw) * 1000 : Number(raw.slice(0, 13));
   const normalizedDate = new Date(normalizedMs);
   if (!Number.isFinite(normalizedMs) || Number.isNaN(normalizedDate.getTime())) {
     return null;
@@ -189,9 +296,7 @@ function normalizeLegacySqliteDateTimeString(value: unknown): string | null {
   const sqliteDateTimeMatch = raw.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(\.\d+)?$/);
   if (sqliteDateTimeMatch) {
     const [, datePart, timePart, fractionalPart = ""] = sqliteDateTimeMatch;
-    const milliseconds = fractionalPart
-      ? `${fractionalPart}000`.slice(0, 4)
-      : ".000";
+    const milliseconds = fractionalPart ? `${fractionalPart}000`.slice(0, 4) : ".000";
     return `${datePart}T${timePart}${milliseconds}Z`;
   }
 
@@ -238,13 +343,21 @@ async function loadPrismaDateTimeFieldNames(): Promise<Set<string>> {
   return fieldNames;
 }
 
-async function normalizeSqliteLegacyDateTimeColumns(tableName: string, skipColumns: string[] = []): Promise<void> {
+async function normalizeSqliteLegacyDateTimeColumns(
+  tableName: string,
+  skipColumns: string[] = [],
+): Promise<void> {
   const prismaDateTimeFieldNames = await loadPrismaDateTimeFieldNames();
   const skipColumnSet = new Set(skipColumns.map((column) => column.toLowerCase()));
   const columns = await all(`PRAGMA table_info(${tableName})`);
   const candidateColumns = columns
     .map((column) => String(column.name || "").trim())
-    .filter((columnName) => columnName && prismaDateTimeFieldNames.has(columnName) && !skipColumnSet.has(columnName.toLowerCase()));
+    .filter(
+      (columnName) =>
+        columnName &&
+        prismaDateTimeFieldNames.has(columnName) &&
+        !skipColumnSet.has(columnName.toLowerCase()),
+    );
 
   if (candidateColumns.length === 0) {
     return;
@@ -265,16 +378,18 @@ async function normalizeSqliteLegacyDateTimeColumns(tableName: string, skipColum
         continue;
       }
 
-      await run(
-        `UPDATE ${tableName} SET ${columnName} = ? WHERE rowid = ?`,
-        [normalizedValue, Number(row.__rowid)],
-      );
+      await run(`UPDATE ${tableName} SET ${columnName} = ? WHERE rowid = ?`, [
+        normalizedValue,
+        Number(row.__rowid),
+      ]);
     }
   }
 }
 
 function getSqliteLegacyDateTimeSkipColumns(tableName: string): string[] {
-  const normalizedTableName = String(tableName || "").trim().toLowerCase();
+  const normalizedTableName = String(tableName || "")
+    .trim()
+    .toLowerCase();
 
   // These accounting fields represent business dates. Converting YYYY-MM-DD values
   // into midnight UTC timestamps can collide with already-normalized rows.
@@ -284,7 +399,10 @@ function getSqliteLegacyDateTimeSkipColumns(tableName: string): string[] {
   if (normalizedTableName === "gl_period_locks") {
     return ["lock_date"];
   }
-  if (normalizedTableName === "gl_balance_snapshots" || normalizedTableName === "gl_trial_balance_snapshots") {
+  if (
+    normalizedTableName === "gl_balance_snapshots" ||
+    normalizedTableName === "gl_trial_balance_snapshots"
+  ) {
     return ["snapshot_date"];
   }
 
@@ -337,7 +455,9 @@ async function bootstrapSqliteSchemaFromPrismaSchema(): Promise<void> {
 
   const sqliteDb = db as { exec?: (sql: string) => unknown } | null;
   if (!sqliteDb || typeof sqliteDb.exec !== "function") {
-    throw new Error("Unable to bootstrap SQLite schema: database connection does not support script execution.");
+    throw new Error(
+      "Unable to bootstrap SQLite schema: database connection does not support script execution.",
+    );
   }
 
   const bootstrapSql = existsSync(sqliteBootstrapSqlPath)
@@ -355,6 +475,18 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     return;
   }
 
+  async function ensureSqliteTenantColumn(tableName: string): Promise<void> {
+    if (!(await sqliteTableExists(tableName))) {
+      return;
+    }
+
+    if (!(await sqliteColumnExists(tableName, "tenant_id"))) {
+      await run(`ALTER TABLE ${tableName} ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`);
+    }
+
+    await run(`UPDATE ${tableName} SET tenant_id = 'default' WHERE tenant_id IS NULL`);
+  }
+
   const hasAuditLogsTable = await sqliteTableExists("audit_logs");
   if (hasAuditLogsTable) {
     const auditLogTriggerNames = await sqliteTriggerNames("audit_logs");
@@ -362,7 +494,10 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
       await run(`DROP TRIGGER IF EXISTS ${triggerName}`);
     }
 
-    await normalizeSqliteLegacyDateTimeColumns("audit_logs", getSqliteLegacyDateTimeSkipColumns("audit_logs"));
+    await normalizeSqliteLegacyDateTimeColumns(
+      "audit_logs",
+      getSqliteLegacyDateTimeSkipColumns("audit_logs"),
+    );
 
     await run(`
       CREATE TRIGGER IF NOT EXISTS trg_audit_logs_append_only_update
@@ -380,7 +515,24 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     `);
   }
 
-  const tables = await all("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
+  for (const tenantScopedTable of [
+    "users",
+    "clients",
+    "loans",
+    "repayments",
+    "gl_journals",
+    "audit_logs",
+    "guarantors",
+    "collateral_assets",
+    "loan_guarantors",
+    "loan_collaterals",
+  ]) {
+    await ensureSqliteTenantColumn(tenantScopedTable);
+  }
+
+  const tables = await all(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+  );
   for (const tableRow of tables) {
     const tableName = String(tableRow.name || "").trim();
     if (!tableName || tableName === "audit_logs") {
@@ -467,15 +619,23 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     }
     const hasCreatedAt = await sqliteColumnExists("repayment_idempotency_keys", "created_at");
     if (!hasCreatedAt) {
-      await run("ALTER TABLE repayment_idempotency_keys ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))");
+      await run(
+        "ALTER TABLE repayment_idempotency_keys ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))",
+      );
     }
     const hasUpdatedAt = await sqliteColumnExists("repayment_idempotency_keys", "updated_at");
     if (!hasUpdatedAt) {
-      await run("ALTER TABLE repayment_idempotency_keys ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))");
+      await run(
+        "ALTER TABLE repayment_idempotency_keys ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))",
+      );
     }
   }
-  await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_repayment_idempotency_unique ON repayment_idempotency_keys(loan_id, client_idempotency_key)");
-  await run("CREATE INDEX IF NOT EXISTS idx_repayment_idempotency_repayment_id ON repayment_idempotency_keys(repayment_id)");
+  await run(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_repayment_idempotency_unique ON repayment_idempotency_keys(loan_id, client_idempotency_key)",
+  );
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_repayment_idempotency_repayment_id ON repayment_idempotency_keys(repayment_id)",
+  );
 
   const hasLoanOverpaymentCreditsTable = await sqliteTableExists("loan_overpayment_credits");
   if (!hasLoanOverpaymentCreditsTable) {
@@ -520,16 +680,26 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     }
     const hasCreatedAt = await sqliteColumnExists("loan_overpayment_credits", "created_at");
     if (!hasCreatedAt) {
-      await run("ALTER TABLE loan_overpayment_credits ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))");
+      await run(
+        "ALTER TABLE loan_overpayment_credits ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))",
+      );
     }
     const hasUpdatedAt = await sqliteColumnExists("loan_overpayment_credits", "updated_at");
     if (!hasUpdatedAt) {
-      await run("ALTER TABLE loan_overpayment_credits ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))");
+      await run(
+        "ALTER TABLE loan_overpayment_credits ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))",
+      );
     }
   }
-  await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_overpayment_credit_repayment_id ON loan_overpayment_credits(repayment_id)");
-  await run("CREATE INDEX IF NOT EXISTS idx_loan_overpayment_credit_loan_id ON loan_overpayment_credits(loan_id)");
-  await run("CREATE INDEX IF NOT EXISTS idx_loan_overpayment_credit_client_id ON loan_overpayment_credits(client_id)");
+  await run(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_overpayment_credit_repayment_id ON loan_overpayment_credits(repayment_id)",
+  );
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_loan_overpayment_credit_loan_id ON loan_overpayment_credits(loan_id)",
+  );
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_loan_overpayment_credit_client_id ON loan_overpayment_credits(client_id)",
+  );
 
   const hasMobileMoneyC2BEventsTable = await sqliteTableExists("mobile_money_c2b_events");
   if (!hasMobileMoneyC2BEventsTable) {
@@ -576,7 +746,9 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     }
     const c2bHasPaidAt = await sqliteColumnExists("mobile_money_c2b_events", "paid_at");
     if (!c2bHasPaidAt) {
-      await run("ALTER TABLE mobile_money_c2b_events ADD COLUMN paid_at TEXT NOT NULL DEFAULT (datetime('now'))");
+      await run(
+        "ALTER TABLE mobile_money_c2b_events ADD COLUMN paid_at TEXT NOT NULL DEFAULT (datetime('now'))",
+      );
     }
     const c2bHasPayloadJson = await sqliteColumnExists("mobile_money_c2b_events", "payload_json");
     if (!c2bHasPayloadJson) {
@@ -594,7 +766,10 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     if (!c2bHasRepaymentId) {
       await run("ALTER TABLE mobile_money_c2b_events ADD COLUMN repayment_id INTEGER");
     }
-    const c2bHasReconciliationNote = await sqliteColumnExists("mobile_money_c2b_events", "reconciliation_note");
+    const c2bHasReconciliationNote = await sqliteColumnExists(
+      "mobile_money_c2b_events",
+      "reconciliation_note",
+    );
     if (!c2bHasReconciliationNote) {
       await run("ALTER TABLE mobile_money_c2b_events ADD COLUMN reconciliation_note TEXT");
     }
@@ -604,12 +779,18 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     }
     const c2bHasCreatedAt = await sqliteColumnExists("mobile_money_c2b_events", "created_at");
     if (!c2bHasCreatedAt) {
-      await run("ALTER TABLE mobile_money_c2b_events ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))");
+      await run(
+        "ALTER TABLE mobile_money_c2b_events ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))",
+      );
     }
   }
-  await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_mobile_money_c2b_external_receipt ON mobile_money_c2b_events(external_receipt)");
+  await run(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_mobile_money_c2b_external_receipt ON mobile_money_c2b_events(external_receipt)",
+  );
   await run("CREATE INDEX IF NOT EXISTS idx_mobile_money_c2b_loan_id ON mobile_money_c2b_events(loan_id)");
-  await run("CREATE INDEX IF NOT EXISTS idx_mobile_money_c2b_repayment_id ON mobile_money_c2b_events(repayment_id)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_mobile_money_c2b_repayment_id ON mobile_money_c2b_events(repayment_id)",
+  );
 
   const hasGlAccountsTable = await sqliteTableExists("gl_accounts");
   if (!hasGlAccountsTable) {
@@ -631,6 +812,7 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     await run(`
       CREATE TABLE IF NOT EXISTS approval_requests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id TEXT NOT NULL DEFAULT 'default',
         request_type TEXT NOT NULL,
         target_type TEXT NOT NULL DEFAULT 'loan',
         target_id INTEGER NOT NULL,
@@ -670,8 +852,12 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
   }
   await run("CREATE INDEX IF NOT EXISTS idx_approval_requests_loan_id ON approval_requests(loan_id)");
   await run("CREATE INDEX IF NOT EXISTS idx_approval_requests_branch_id ON approval_requests(branch_id)");
-  await run("CREATE INDEX IF NOT EXISTS idx_approval_requests_requested_by_user_id ON approval_requests(requested_by_user_id)");
-  await run("CREATE INDEX IF NOT EXISTS idx_approval_requests_checker_user_id ON approval_requests(checker_user_id)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_approval_requests_requested_by_user_id ON approval_requests(requested_by_user_id)",
+  );
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_approval_requests_checker_user_id ON approval_requests(checker_user_id)",
+  );
   await run("CREATE INDEX IF NOT EXISTS idx_approval_requests_expires_at ON approval_requests(expires_at)");
   await run(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_requests_pending_unique
@@ -702,7 +888,9 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
       )
     `);
   }
-  await run("CREATE INDEX IF NOT EXISTS idx_role_permissions_permission_id ON role_permissions(permission_id)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_role_permissions_permission_id ON role_permissions(permission_id)",
+  );
 
   const hasUserCustomPermissionsTable = await sqliteTableExists("user_custom_permissions");
   if (!hasUserCustomPermissionsTable) {
@@ -719,8 +907,12 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
       )
     `);
   }
-  await run("CREATE INDEX IF NOT EXISTS idx_user_custom_permissions_permission_id ON user_custom_permissions(permission_id)");
-  await run("CREATE INDEX IF NOT EXISTS idx_user_custom_permissions_granted_by_user_id ON user_custom_permissions(granted_by_user_id)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_user_custom_permissions_permission_id ON user_custom_permissions(permission_id)",
+  );
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_user_custom_permissions_granted_by_user_id ON user_custom_permissions(granted_by_user_id)",
+  );
 
   const hasLoanProductsTable = await sqliteTableExists("loan_products");
   if (!hasLoanProductsTable) {
@@ -753,17 +945,29 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
   } else {
     const hasInterestAccrualMethod = await sqliteColumnExists("loan_products", "interest_accrual_method");
     if (!hasInterestAccrualMethod) {
-      await run("ALTER TABLE loan_products ADD COLUMN interest_accrual_method TEXT NOT NULL DEFAULT 'upfront'");
+      await run(
+        "ALTER TABLE loan_products ADD COLUMN interest_accrual_method TEXT NOT NULL DEFAULT 'upfront'",
+      );
     }
-    const hasPenaltyCompoundingMethod = await sqliteColumnExists("loan_products", "penalty_compounding_method");
+    const hasPenaltyCompoundingMethod = await sqliteColumnExists(
+      "loan_products",
+      "penalty_compounding_method",
+    );
     if (!hasPenaltyCompoundingMethod) {
-      await run("ALTER TABLE loan_products ADD COLUMN penalty_compounding_method TEXT NOT NULL DEFAULT 'simple'");
+      await run(
+        "ALTER TABLE loan_products ADD COLUMN penalty_compounding_method TEXT NOT NULL DEFAULT 'simple'",
+      );
     }
     const hasPenaltyBaseAmount = await sqliteColumnExists("loan_products", "penalty_base_amount");
     if (!hasPenaltyBaseAmount) {
-      await run("ALTER TABLE loan_products ADD COLUMN penalty_base_amount TEXT NOT NULL DEFAULT 'installment_outstanding'");
+      await run(
+        "ALTER TABLE loan_products ADD COLUMN penalty_base_amount TEXT NOT NULL DEFAULT 'installment_outstanding'",
+      );
     }
-    const hasPenaltyCapPercentOutstanding = await sqliteColumnExists("loan_products", "penalty_cap_percent_of_outstanding");
+    const hasPenaltyCapPercentOutstanding = await sqliteColumnExists(
+      "loan_products",
+      "penalty_cap_percent_of_outstanding",
+    );
     if (!hasPenaltyCapPercentOutstanding) {
       await run("ALTER TABLE loan_products ADD COLUMN penalty_cap_percent_of_outstanding REAL");
     }
@@ -839,7 +1043,9 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
       await run("ALTER TABLE gl_journals ADD COLUMN external_reference_id TEXT");
     }
   }
-  await run("CREATE INDEX IF NOT EXISTS idx_gl_journals_external_reference_id ON gl_journals(external_reference_id)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_gl_journals_external_reference_id ON gl_journals(external_reference_id)",
+  );
 
   const hasGlAccountingBatchesTable = await sqliteTableExists("gl_accounting_batches");
   if (!hasGlAccountingBatchesTable) {
@@ -863,7 +1069,9 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     }
     const hasEffectiveDate = await sqliteColumnExists("gl_accounting_batches", "effective_date");
     if (!hasEffectiveDate) {
-      await run("ALTER TABLE gl_accounting_batches ADD COLUMN effective_date TEXT NOT NULL DEFAULT (date('now'))");
+      await run(
+        "ALTER TABLE gl_accounting_batches ADD COLUMN effective_date TEXT NOT NULL DEFAULT (date('now'))",
+      );
     }
     const hasStatus = await sqliteColumnExists("gl_accounting_batches", "status");
     if (!hasStatus) {
@@ -879,16 +1087,24 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     }
     const hasCreatedAt = await sqliteColumnExists("gl_accounting_batches", "created_at");
     if (!hasCreatedAt) {
-      await run("ALTER TABLE gl_accounting_batches ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))");
+      await run(
+        "ALTER TABLE gl_accounting_batches ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))",
+      );
     }
     const hasUpdatedAt = await sqliteColumnExists("gl_accounting_batches", "updated_at");
     if (!hasUpdatedAt) {
-      await run("ALTER TABLE gl_accounting_batches ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))");
+      await run(
+        "ALTER TABLE gl_accounting_batches ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))",
+      );
     }
   }
-  await run("CREATE INDEX IF NOT EXISTS idx_gl_accounting_batches_type_date ON gl_accounting_batches(batch_type, effective_date)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_gl_accounting_batches_type_date ON gl_accounting_batches(batch_type, effective_date)",
+  );
   await run("CREATE INDEX IF NOT EXISTS idx_gl_accounting_batches_status ON gl_accounting_batches(status)");
-  await run("CREATE INDEX IF NOT EXISTS idx_gl_accounting_batches_triggered_by ON gl_accounting_batches(triggered_by_user_id)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_gl_accounting_batches_triggered_by ON gl_accounting_batches(triggered_by_user_id)",
+  );
 
   const hasGlEntriesTable = await sqliteTableExists("gl_entries");
   if (!hasGlEntriesTable) {
@@ -909,122 +1125,7 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     await run("CREATE INDEX IF NOT EXISTS idx_gl_entries_account_id ON gl_entries(account_id)");
   }
 
-  await run(
-    `
-      INSERT INTO gl_accounts (code, name, account_type, is_contra, is_active, created_at)
-      SELECT ?, ?, ?, 0, 1, datetime('now')
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM gl_accounts
-        WHERE code = ?
-      )
-    `,
-    ["LOAN_RECEIVABLE", "Loan Receivable", "asset", "LOAN_RECEIVABLE"],
-  );
-
-  await run(
-    `
-      INSERT INTO gl_accounts (code, name, account_type, is_contra, is_active, created_at)
-      SELECT ?, ?, ?, 0, 1, datetime('now')
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM gl_accounts
-        WHERE code = ?
-      )
-    `,
-    ["CASH", "Cash", "asset", "CASH"],
-  );
-
-  await run(
-    `
-      INSERT INTO gl_accounts (code, name, account_type, is_contra, is_active, created_at)
-      SELECT ?, ?, ?, 0, 1, datetime('now')
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM gl_accounts
-        WHERE code = ?
-      )
-    `,
-    ["INTEREST_INCOME", "Interest Income", "revenue", "INTEREST_INCOME"],
-  );
-
-  await run(
-    `
-      INSERT INTO gl_accounts (code, name, account_type, is_contra, is_active, created_at)
-      SELECT ?, ?, ?, 0, 1, datetime('now')
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM gl_accounts
-        WHERE code = ?
-      )
-    `,
-    ["FEE_INCOME", "Fee Income", "revenue", "FEE_INCOME"],
-  );
-
-  await run(
-    `
-      INSERT INTO gl_accounts (code, name, account_type, is_contra, is_active, created_at)
-      SELECT ?, ?, ?, 0, 1, datetime('now')
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM gl_accounts
-        WHERE code = ?
-      )
-    `,
-    ["WRITE_OFF_EXPENSE", "Write-off Expense", "expense", "WRITE_OFF_EXPENSE"],
-  );
-
-  await run(
-    `
-      INSERT INTO gl_accounts (code, name, account_type, is_contra, is_active, created_at)
-      SELECT ?, ?, ?, 0, 1, datetime('now')
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM gl_accounts
-        WHERE code = ?
-      )
-    `,
-    ["PENALTY_INCOME", "Penalty Income", "revenue", "PENALTY_INCOME"],
-  );
-
-  await run(
-    `
-      INSERT INTO gl_accounts (code, name, account_type, is_contra, is_active, created_at)
-      SELECT ?, ?, ?, 0, 1, datetime('now')
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM gl_accounts
-        WHERE code = ?
-      )
-    `,
-    ["UNEARNED_INTEREST", "Unearned Interest", "liability", "UNEARNED_INTEREST"],
-  );
-
-  await run(
-    `
-      INSERT INTO gl_accounts (code, name, account_type, is_contra, is_active, created_at)
-      SELECT ?, ?, ?, 0, 1, datetime('now')
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM gl_accounts
-        WHERE code = ?
-      )
-    `,
-    ["SUSPENSE_FUNDS", "Suspense Funds", "liability", "SUSPENSE_FUNDS"],
-  );
-
-  await run(
-    `
-      INSERT INTO gl_accounts (code, name, account_type, is_contra, is_active, created_at)
-      SELECT ?, ?, ?, 0, 1, datetime('now')
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM gl_accounts
-        WHERE code = ?
-      )
-    `,
-    ["FX_GAIN_LOSS", "FX Gain/Loss", "revenue", "FX_GAIN_LOSS"],
-  );
+  await seedCoreGlAccounts();
 
   const hasLoansTable = await sqliteTableExists("loans");
   if (hasLoansTable) {
@@ -1042,6 +1143,12 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     if (!loansHasCreatedAt) {
       await run("ALTER TABLE loans ADD COLUMN created_at TEXT");
       await run("UPDATE loans SET created_at = datetime('now') WHERE created_at IS NULL");
+    }
+
+    const loansHasUpdatedAt = await sqliteColumnExists("loans", "updated_at");
+    if (!loansHasUpdatedAt) {
+      await run("ALTER TABLE loans ADD COLUMN updated_at TEXT");
+      await run("UPDATE loans SET updated_at = COALESCE(updated_at, created_at, datetime('now')) WHERE updated_at IS NULL");
     }
 
     const loansHasDisbursedAt = await sqliteColumnExists("loans", "disbursed_at");
@@ -1105,10 +1212,16 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
       await run("ALTER TABLE loans ADD COLUMN purpose TEXT");
     }
 
+    const loansHasWrittenOffAt = await sqliteColumnExists("loans", "written_off_at");
+    if (!loansHasWrittenOffAt) {
+      await run("ALTER TABLE loans ADD COLUMN written_off_at TEXT");
+    }
+
     const loansTableSql = await sqliteTableDefinitionSql("loans");
     const normalizedLoansTableSql = loansTableSql.toLowerCase().replace(/\s+/g, " ");
-    const loansStatusConstraintIsLegacy = normalizedLoansTableSql.includes("status")
-      && !normalizedLoansTableSql.includes("pending_approval");
+    const loansStatusConstraintIsLegacy =
+      normalizedLoansTableSql.includes("status")
+      && (!normalizedLoansTableSql.includes("pending_approval") || !normalizedLoansTableSql.includes("overdue"));
 
     if (loansStatusConstraintIsLegacy) {
       await run("PRAGMA foreign_keys = OFF");
@@ -1117,6 +1230,7 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
         await run(`
           CREATE TABLE loans__compat (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
             client_id INTEGER NOT NULL,
             product_id INTEGER,
             branch_id INTEGER,
@@ -1128,8 +1242,9 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
             registration_fee REAL NOT NULL DEFAULT 0,
             processing_fee REAL NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
+            updated_at TEXT,
             disbursed_at TEXT,
-            status TEXT NOT NULL DEFAULT 'pending_approval' CHECK (status IN ('pending_approval', 'approved', 'rejected', 'active', 'closed', 'written_off', 'restructured')),
+            status TEXT NOT NULL DEFAULT 'pending_approval' CHECK (status IN ('pending_approval', 'approved', 'rejected', 'active', 'overdue', 'closed', 'written_off', 'restructured')),
             officer_id INTEGER,
             disbursed_by_user_id INTEGER,
             disbursement_note TEXT,
@@ -1139,10 +1254,12 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
             rejected_at TEXT,
             rejection_reason TEXT,
             archived_at TEXT,
+            written_off_at TEXT,
             expected_total REAL NOT NULL,
             repaid_total REAL NOT NULL DEFAULT 0,
             balance REAL NOT NULL,
             external_reference TEXT,
+            purpose TEXT,
             FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE RESTRICT ON UPDATE CASCADE,
             FOREIGN KEY (product_id) REFERENCES loan_products(id) ON DELETE SET NULL ON UPDATE CASCADE,
             FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE SET NULL ON UPDATE CASCADE,
@@ -1156,6 +1273,7 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
         await run(`
           INSERT INTO loans__compat (
             id,
+            tenant_id,
             client_id,
             product_id,
             branch_id,
@@ -1167,6 +1285,7 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
             registration_fee,
             processing_fee,
             created_at,
+            updated_at,
             disbursed_at,
             status,
             officer_id,
@@ -1178,13 +1297,16 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
             rejected_at,
             rejection_reason,
             archived_at,
+            written_off_at,
             expected_total,
             repaid_total,
             balance,
-            external_reference
+            external_reference,
+            purpose
           )
           SELECT
             id,
+            COALESCE(tenant_id, 'default'),
             client_id,
             product_id,
             branch_id,
@@ -1196,9 +1318,10 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
             COALESCE(registration_fee, 0),
             COALESCE(processing_fee, 0),
             COALESCE(created_at, datetime('now')),
+            COALESCE(updated_at, created_at, datetime('now')),
             disbursed_at,
             CASE
-              WHEN status IN ('pending_approval', 'approved', 'rejected', 'active', 'closed', 'written_off', 'restructured') THEN status
+              WHEN status IN ('pending_approval', 'approved', 'rejected', 'active', 'overdue', 'closed', 'written_off', 'restructured') THEN status
               WHEN status IS NULL OR TRIM(status) = '' THEN 'active'
               ELSE 'active'
             END,
@@ -1211,10 +1334,12 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
             rejected_at,
             rejection_reason,
             archived_at,
+            written_off_at,
             expected_total,
             COALESCE(repaid_total, 0),
             balance,
-            external_reference
+            external_reference,
+            purpose
           FROM loans
         `);
         await run("DROP TABLE loans");
@@ -1234,21 +1359,43 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     const clientsHasKycStatus = await sqliteColumnExists("clients", "kyc_status");
     if (!clientsHasKycStatus) {
       await run("ALTER TABLE clients ADD COLUMN kyc_status TEXT NOT NULL DEFAULT 'pending'");
-      await run("UPDATE clients SET kyc_status = 'pending' WHERE kyc_status IS NULL OR TRIM(kyc_status) = ''");
+      await run(
+        "UPDATE clients SET kyc_status = 'pending' WHERE kyc_status IS NULL OR TRIM(kyc_status) = ''",
+      );
     }
     const clientsHasOnboardingStatus = await sqliteColumnExists("clients", "onboarding_status");
     if (!clientsHasOnboardingStatus) {
       await run("ALTER TABLE clients ADD COLUMN onboarding_status TEXT NOT NULL DEFAULT 'registered'");
-      await run("UPDATE clients SET onboarding_status = 'registered' WHERE onboarding_status IS NULL OR TRIM(onboarding_status) = ''");
+      await run(
+        "UPDATE clients SET onboarding_status = 'registered' WHERE onboarding_status IS NULL OR TRIM(onboarding_status) = ''",
+      );
     }
     const clientsHasFeePaymentStatus = await sqliteColumnExists("clients", "fee_payment_status");
     if (!clientsHasFeePaymentStatus) {
       await run("ALTER TABLE clients ADD COLUMN fee_payment_status TEXT NOT NULL DEFAULT 'unpaid'");
-      await run("UPDATE clients SET fee_payment_status = 'unpaid' WHERE fee_payment_status IS NULL OR TRIM(fee_payment_status) = ''");
+      await run(
+        "UPDATE clients SET fee_payment_status = 'unpaid' WHERE fee_payment_status IS NULL OR TRIM(fee_payment_status) = ''",
+      );
     }
     const clientsHasFeesPaidAt = await sqliteColumnExists("clients", "fees_paid_at");
     if (!clientsHasFeesPaidAt) {
       await run("ALTER TABLE clients ADD COLUMN fees_paid_at TEXT");
+    }
+    const clientsHasLatitude = await sqliteColumnExists("clients", "latitude");
+    if (!clientsHasLatitude) {
+      await run("ALTER TABLE clients ADD COLUMN latitude REAL");
+    }
+    const clientsHasLongitude = await sqliteColumnExists("clients", "longitude");
+    if (!clientsHasLongitude) {
+      await run("ALTER TABLE clients ADD COLUMN longitude REAL");
+    }
+    const clientsHasLocationAccuracyMeters = await sqliteColumnExists("clients", "location_accuracy_meters");
+    if (!clientsHasLocationAccuracyMeters) {
+      await run("ALTER TABLE clients ADD COLUMN location_accuracy_meters REAL");
+    }
+    const clientsHasLocationCapturedAt = await sqliteColumnExists("clients", "location_captured_at");
+    if (!clientsHasLocationCapturedAt) {
+      await run("ALTER TABLE clients ADD COLUMN location_captured_at TEXT");
     }
   }
 
@@ -1265,6 +1412,7 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
         employer_name TEXT,
         monthly_income REAL NOT NULL DEFAULT 0,
         guarantee_amount REAL NOT NULL DEFAULT 0,
+        id_document_url TEXT,
         is_active INTEGER NOT NULL DEFAULT 1,
         client_id INTEGER,
         branch_id INTEGER,
@@ -1289,6 +1437,10 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     if (!guarantorsHasGuaranteeAmount) {
       await run("ALTER TABLE guarantors ADD COLUMN guarantee_amount REAL NOT NULL DEFAULT 0");
     }
+    const guarantorsHasIdDocumentUrl = await sqliteColumnExists("guarantors", "id_document_url");
+    if (!guarantorsHasIdDocumentUrl) {
+      await run("ALTER TABLE guarantors ADD COLUMN id_document_url TEXT");
+    }
   }
   await run("CREATE INDEX IF NOT EXISTS idx_guarantors_client_id ON guarantors(client_id)");
 
@@ -1308,6 +1460,7 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
         title_number TEXT,
         location_details TEXT,
         valuation_date TEXT,
+        document_url TEXT,
         status TEXT NOT NULL DEFAULT 'active',
         client_id INTEGER,
         branch_id INTEGER,
@@ -1324,9 +1477,16 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     if (!collateralAssetsHasClientId) {
       await run("ALTER TABLE collateral_assets ADD COLUMN client_id INTEGER");
     }
-    const collateralAssetsHasCreatedByUserId = await sqliteColumnExists("collateral_assets", "created_by_user_id");
+    const collateralAssetsHasCreatedByUserId = await sqliteColumnExists(
+      "collateral_assets",
+      "created_by_user_id",
+    );
     if (!collateralAssetsHasCreatedByUserId) {
       await run("ALTER TABLE collateral_assets ADD COLUMN created_by_user_id INTEGER");
+    }
+    const collateralAssetsHasDocumentUrl = await sqliteColumnExists("collateral_assets", "document_url");
+    if (!collateralAssetsHasDocumentUrl) {
+      await run("ALTER TABLE collateral_assets ADD COLUMN document_url TEXT");
     }
   }
   await run("CREATE INDEX IF NOT EXISTS idx_collateral_assets_client_id ON collateral_assets(client_id)");
@@ -1354,7 +1514,10 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     if (!loanGuarantorsHasGuaranteeAmount) {
       await run("ALTER TABLE loan_guarantors ADD COLUMN guarantee_amount REAL NOT NULL DEFAULT 0");
     }
-    const loanGuarantorsHasRelationshipToClient = await sqliteColumnExists("loan_guarantors", "relationship_to_client");
+    const loanGuarantorsHasRelationshipToClient = await sqliteColumnExists(
+      "loan_guarantors",
+      "relationship_to_client",
+    );
     if (!loanGuarantorsHasRelationshipToClient) {
       await run("ALTER TABLE loan_guarantors ADD COLUMN relationship_to_client TEXT");
     }
@@ -1366,7 +1529,10 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     if (!loanGuarantorsHasNote) {
       await run("ALTER TABLE loan_guarantors ADD COLUMN note TEXT");
     }
-    const loanGuarantorsHasCreatedByUserId = await sqliteColumnExists("loan_guarantors", "created_by_user_id");
+    const loanGuarantorsHasCreatedByUserId = await sqliteColumnExists(
+      "loan_guarantors",
+      "created_by_user_id",
+    );
     if (!loanGuarantorsHasCreatedByUserId) {
       await run("ALTER TABLE loan_guarantors ADD COLUMN created_by_user_id INTEGER");
     }
@@ -1377,7 +1543,9 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
   }
   await run("CREATE INDEX IF NOT EXISTS idx_loan_guarantors_loan_id ON loan_guarantors(loan_id)");
   await run("CREATE INDEX IF NOT EXISTS idx_loan_guarantors_guarantor_id ON loan_guarantors(guarantor_id)");
-  await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_guarantors_unique_link ON loan_guarantors(loan_id, guarantor_id)");
+  await run(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_guarantors_unique_link ON loan_guarantors(loan_id, guarantor_id)",
+  );
 
   const hasLoanCollateralsTable = await sqliteTableExists("loan_collaterals");
   if (!hasLoanCollateralsTable) {
@@ -1397,7 +1565,10 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
       )
     `);
   } else {
-    const loanCollateralsHasForcedSaleValue = await sqliteColumnExists("loan_collaterals", "forced_sale_value");
+    const loanCollateralsHasForcedSaleValue = await sqliteColumnExists(
+      "loan_collaterals",
+      "forced_sale_value",
+    );
     if (!loanCollateralsHasForcedSaleValue) {
       await run("ALTER TABLE loan_collaterals ADD COLUMN forced_sale_value REAL");
     }
@@ -1409,7 +1580,10 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     if (!loanCollateralsHasNote) {
       await run("ALTER TABLE loan_collaterals ADD COLUMN note TEXT");
     }
-    const loanCollateralsHasCreatedByUserId = await sqliteColumnExists("loan_collaterals", "created_by_user_id");
+    const loanCollateralsHasCreatedByUserId = await sqliteColumnExists(
+      "loan_collaterals",
+      "created_by_user_id",
+    );
     if (!loanCollateralsHasCreatedByUserId) {
       await run("ALTER TABLE loan_collaterals ADD COLUMN created_by_user_id INTEGER");
     }
@@ -1417,18 +1591,27 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
     if (!loanCollateralsHasCreatedAt) {
       await run("ALTER TABLE loan_collaterals ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))");
     }
-    const loanCollateralsHasCollateralAssetId = await sqliteColumnExists("loan_collaterals", "collateral_asset_id");
+    const loanCollateralsHasCollateralAssetId = await sqliteColumnExists(
+      "loan_collaterals",
+      "collateral_asset_id",
+    );
     if (!loanCollateralsHasCollateralAssetId) {
       const loanCollateralsHasCollateralId = await sqliteColumnExists("loan_collaterals", "collateral_id");
       if (loanCollateralsHasCollateralId) {
         await run("ALTER TABLE loan_collaterals ADD COLUMN collateral_asset_id INTEGER");
-        await run("UPDATE loan_collaterals SET collateral_asset_id = collateral_id WHERE collateral_asset_id IS NULL");
+        await run(
+          "UPDATE loan_collaterals SET collateral_asset_id = collateral_id WHERE collateral_asset_id IS NULL",
+        );
       }
     }
   }
   await run("CREATE INDEX IF NOT EXISTS idx_loan_collaterals_loan_id ON loan_collaterals(loan_id)");
-  await run("CREATE INDEX IF NOT EXISTS idx_loan_collaterals_collateral_id ON loan_collaterals(collateral_asset_id)");
-  await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_collaterals_unique_link ON loan_collaterals(loan_id, collateral_asset_id)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_loan_collaterals_collateral_id ON loan_collaterals(collateral_asset_id)",
+  );
+  await run(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_collaterals_unique_link ON loan_collaterals(loan_id, collateral_asset_id)",
+  );
 
   const hasLoanInstallmentsTable = await sqliteTableExists("loan_installments");
   if (hasLoanInstallmentsTable) {
@@ -1462,7 +1645,10 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
       await run("ALTER TABLE loan_installments ADD COLUMN penalty_cap_amount REAL");
     }
 
-    const hasPenaltyCompoundingMethod = await sqliteColumnExists("loan_installments", "penalty_compounding_method");
+    const hasPenaltyCompoundingMethod = await sqliteColumnExists(
+      "loan_installments",
+      "penalty_compounding_method",
+    );
     if (!hasPenaltyCompoundingMethod) {
       await run("ALTER TABLE loan_installments ADD COLUMN penalty_compounding_method TEXT");
     }
@@ -1472,7 +1658,10 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
       await run("ALTER TABLE loan_installments ADD COLUMN penalty_base_amount TEXT");
     }
 
-    const hasPenaltyCapPercentOutstanding = await sqliteColumnExists("loan_installments", "penalty_cap_percent_of_outstanding");
+    const hasPenaltyCapPercentOutstanding = await sqliteColumnExists(
+      "loan_installments",
+      "penalty_cap_percent_of_outstanding",
+    );
     if (!hasPenaltyCapPercentOutstanding) {
       await run("ALTER TABLE loan_installments ADD COLUMN penalty_cap_percent_of_outstanding REAL");
     }
@@ -1493,8 +1682,12 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
       FOREIGN KEY (disbursed_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
     )
   `);
-  await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_disbursement_tranches_loan_tranche ON loan_disbursement_tranches(loan_id, tranche_number)");
-  await run("CREATE INDEX IF NOT EXISTS idx_loan_disbursement_tranches_loan_id ON loan_disbursement_tranches(loan_id)");
+  await run(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_disbursement_tranches_loan_tranche ON loan_disbursement_tranches(loan_id, tranche_number)",
+  );
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_loan_disbursement_tranches_loan_id ON loan_disbursement_tranches(loan_id)",
+  );
 
   await run(`
     CREATE TABLE IF NOT EXISTS loan_interest_profiles (
@@ -1524,7 +1717,9 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
       FOREIGN KEY (loan_id) REFERENCES loans(id) ON DELETE CASCADE ON UPDATE CASCADE
     )
   `);
-  await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_interest_accrual_events_unique ON loan_interest_accrual_events(loan_id, accrual_date)");
+  await run(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_interest_accrual_events_unique ON loan_interest_accrual_events(loan_id, accrual_date)",
+  );
 
   await run(`
     CREATE TABLE IF NOT EXISTS loan_contract_versions (
@@ -1546,7 +1741,9 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
       FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
     )
   `);
-  await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_contract_versions_loan_version ON loan_contract_versions(loan_id, version_number)");
+  await run(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_contract_versions_loan_version ON loan_contract_versions(loan_id, version_number)",
+  );
 
   await run(`
     CREATE TABLE IF NOT EXISTS loan_underwriting_assessments (
@@ -1580,8 +1777,12 @@ async function ensureSqliteRuntimeCompatibilitySchema(): Promise<void> {
       FOREIGN KEY (loan_id) REFERENCES loans(id) ON DELETE CASCADE ON UPDATE CASCADE
     )
   `);
-  await run("CREATE INDEX IF NOT EXISTS idx_loan_underwriting_assessments_client_id ON loan_underwriting_assessments(client_id)");
-  await run("CREATE INDEX IF NOT EXISTS idx_loan_underwriting_assessments_branch_id ON loan_underwriting_assessments(branch_id)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_loan_underwriting_assessments_client_id ON loan_underwriting_assessments(client_id)",
+  );
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_loan_underwriting_assessments_branch_id ON loan_underwriting_assessments(branch_id)",
+  );
 }
 
 async function ensureSqliteReportIndexes(): Promise<void> {
@@ -1594,7 +1795,9 @@ async function ensureSqliteReportIndexes(): Promise<void> {
   await run("CREATE INDEX IF NOT EXISTS idx_loans_status ON loans(status)");
   await run("CREATE INDEX IF NOT EXISTS idx_loans_branch_status ON loans(branch_id, status)");
   await run("CREATE INDEX IF NOT EXISTS idx_loans_branch_disbursed_at ON loans(branch_id, disbursed_at)");
-  await run("CREATE INDEX IF NOT EXISTS idx_loans_created_by_disbursed_at ON loans(created_by_user_id, disbursed_at)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_loans_created_by_disbursed_at ON loans(created_by_user_id, disbursed_at)",
+  );
   await run("CREATE INDEX IF NOT EXISTS idx_loans_created_at ON loans(created_at)");
   await run("CREATE INDEX IF NOT EXISTS idx_loans_officer_id ON loans(officer_id)");
   await run("CREATE INDEX IF NOT EXISTS idx_loans_external_reference ON loans(external_reference)");
@@ -1603,16 +1806,32 @@ async function ensureSqliteReportIndexes(): Promise<void> {
   await run("CREATE INDEX IF NOT EXISTS idx_clients_fee_payment_status ON clients(fee_payment_status)");
   await run("CREATE INDEX IF NOT EXISTS idx_repayments_paid_at ON repayments(paid_at)");
   await run("CREATE INDEX IF NOT EXISTS idx_repayments_loan_paid_at ON repayments(loan_id, paid_at)");
-  await run("CREATE INDEX IF NOT EXISTS idx_repayments_recorded_by_user_id ON repayments(recorded_by_user_id)");
-  await run("CREATE INDEX IF NOT EXISTS idx_repayments_recorded_by_paid_at ON repayments(recorded_by_user_id, paid_at)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_repayments_recorded_by_user_id ON repayments(recorded_by_user_id)",
+  );
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_repayments_recorded_by_paid_at ON repayments(recorded_by_user_id, paid_at)",
+  );
   await run("CREATE INDEX IF NOT EXISTS idx_repayments_external_reference ON repayments(external_reference)");
-  await run("CREATE INDEX IF NOT EXISTS idx_collection_actions_created_by_user_id ON collection_actions(created_by_user_id)");
-  await run("CREATE INDEX IF NOT EXISTS idx_collection_actions_status_follow_up_date ON collection_actions(action_status, next_follow_up_date)");
-  await run("CREATE INDEX IF NOT EXISTS idx_transactions_tx_type_occurred_at ON transactions(tx_type, occurred_at)");
-  await run("CREATE INDEX IF NOT EXISTS idx_gl_entries_account_created_at ON gl_entries(account_id, created_at)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_collection_actions_created_by_user_id ON collection_actions(created_by_user_id)",
+  );
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_collection_actions_status_follow_up_date ON collection_actions(action_status, next_follow_up_date)",
+  );
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_transactions_tx_type_occurred_at ON transactions(tx_type, occurred_at)",
+  );
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_gl_entries_account_created_at ON gl_entries(account_id, created_at)",
+  );
   await run("CREATE INDEX IF NOT EXISTS idx_mobile_money_c2b_status ON mobile_money_c2b_events(status)");
-  await run("CREATE INDEX IF NOT EXISTS idx_installments_loan_status_due_date ON loan_installments(loan_id, status, due_date)");
-  await run("CREATE INDEX IF NOT EXISTS idx_installments_due_status_loan_id ON loan_installments(due_date, status, loan_id)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_installments_loan_status_due_date ON loan_installments(loan_id, status, due_date)",
+  );
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_installments_due_status_loan_id ON loan_installments(due_date, status, loan_id)",
+  );
   await run("CREATE INDEX IF NOT EXISTS idx_clients_branch_created_at ON clients(branch_id, created_at)");
 }
 
@@ -1626,6 +1845,21 @@ async function ensureSqliteLoanContractVersionBackfill(): Promise<void> {
   if (!hasLoansTable || !hasLoanContractVersionsTable) {
     return;
   }
+
+  // Early exit: skip when all loans already have at least one contract version.
+  // This is the common case after the first run and avoids a full-table scan
+  // on every subsequent startup.
+  const pendingCount = await get(
+    `SELECT COUNT(*) AS cnt
+     FROM loans
+     WHERE id NOT IN (SELECT DISTINCT loan_id FROM loan_contract_versions)`,
+  );
+  if (!pendingCount || Number(pendingCount.cnt || 0) === 0) {
+    return;
+  }
+
+  // Cap per-restart cost — remaining rows are handled on the next restart.
+  const BACKFILL_BATCH_LIMIT = 500;
 
   const loans = await all(
     `
@@ -1649,13 +1883,13 @@ async function ensureSqliteLoanContractVersionBackfill(): Promise<void> {
         approved_at,
         rejected_at,
         rejection_reason,
-        disbursed_at,
-        disbursed_by_user_id,
-        disbursement_note,
         external_reference
       FROM loans
+      WHERE id NOT IN (SELECT DISTINCT loan_id FROM loan_contract_versions)
       ORDER BY id ASC
+      LIMIT ?
     `,
+    [BACKFILL_BATCH_LIMIT],
   );
 
   const backfillTimestamp = new Date().toISOString();
@@ -1775,9 +2009,9 @@ async function ensureSqliteLoanContractVersionBackfill(): Promise<void> {
         loan: {
           ...loan,
           status: isFinal ? "active" : "approved",
-          disbursed_at: isFinal ? (loan.disbursed_at || tranche.disbursed_at || null) : null,
-          disbursed_by_user_id: isFinal ? (Number(loan.disbursed_by_user_id || 0) || null) : null,
-          disbursement_note: isFinal ? (loan.disbursement_note || tranche.note || null) : null,
+          disbursed_at: isFinal ? loan.disbursed_at || tranche.disbursed_at || null : null,
+          disbursed_by_user_id: isFinal ? Number(loan.disbursed_by_user_id || 0) || null : null,
+          disbursement_note: isFinal ? loan.disbursement_note || tranche.note || null : null,
         },
         disbursementSummary: {
           totalDisbursed: cumulativeDisbursed,
@@ -1842,7 +2076,425 @@ async function ensureSqliteLoanContractVersionBackfill(): Promise<void> {
   }
 }
 
+const coreGlAccounts = [
+  { code: "LOAN_RECEIVABLE", name: "Loan Receivable", accountType: "asset", isContra: 0 },
+  { code: "CASH", name: "Cash", accountType: "asset", isContra: 0 },
+  { code: "INTEREST_INCOME", name: "Interest Income", accountType: "revenue", isContra: 0 },
+  { code: "FEE_INCOME", name: "Fee Income", accountType: "revenue", isContra: 0 },
+  { code: "WRITE_OFF_EXPENSE", name: "Write-off Expense", accountType: "expense", isContra: 0 },
+  { code: "PENALTY_INCOME", name: "Penalty Income", accountType: "revenue", isContra: 0 },
+  { code: "UNEARNED_INTEREST", name: "Unearned Interest", accountType: "liability", isContra: 0 },
+  { code: "SUSPENSE_FUNDS", name: "Suspense Funds", accountType: "liability", isContra: 0 },
+  { code: "FX_GAIN_LOSS", name: "FX Gain/Loss", accountType: "revenue", isContra: 0 },
+  {
+    code: "INTEREST_INCOME_5W",
+    name: "Interest Income - 5-Week Product",
+    accountType: "revenue",
+    isContra: 0,
+  },
+  {
+    code: "INTEREST_INCOME_7W",
+    name: "Interest Income - 7-Week Product",
+    accountType: "revenue",
+    isContra: 0,
+  },
+  {
+    code: "INTEREST_INCOME_10W",
+    name: "Interest Income - 10-Week Product",
+    accountType: "revenue",
+    isContra: 0,
+  },
+  { code: "CAPITAL_DEPOSIT", name: "Capital Deposit", accountType: "equity", isContra: 0 },
+  { code: "CAPITAL_WITHDRAWAL", name: "Capital Withdrawal", accountType: "equity", isContra: 1 },
+] as const;
+
+async function seedCoreGlAccounts(): Promise<void> {
+  for (const { code, name, accountType, isContra } of coreGlAccounts) {
+    await run(
+      `
+        INSERT INTO gl_accounts (code, name, account_type, is_contra, is_active, created_at)
+        SELECT ?, ?, ?, ?, 1, datetime('now')
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM gl_accounts
+          WHERE code = ?
+        )
+      `,
+      [code, name, accountType, isContra, code],
+    );
+  }
+}
+
+async function ensurePostgresDomainEventsTable(): Promise<void> {
+  if (dbClient !== "postgres") {
+    return;
+  }
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS domain_events (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      event_type TEXT NOT NULL,
+      aggregate_type TEXT NOT NULL,
+      aggregate_id BIGINT,
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      published_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await run("CREATE INDEX IF NOT EXISTS idx_domain_events_status_id ON domain_events(status, id)");
+  await run("CREATE INDEX IF NOT EXISTS idx_domain_events_tenant_status ON domain_events(tenant_id, status)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_domain_events_type_created_at ON domain_events(event_type, created_at)",
+  );
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS tenants (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await run(
+    `
+      INSERT INTO tenants (id, name, status, created_at, updated_at)
+      VALUES (?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT (id) DO NOTHING
+    `,
+    ["default", "Default Tenant"],
+  );
+}
+
+async function ensurePostgresAuditLogsTenantColumn(): Promise<void> {
+  if (dbClient !== "postgres") {
+    return;
+  }
+
+  const auditLogsTable = await get("SELECT to_regclass('public.audit_logs') AS table_name");
+  if (!auditLogsTable?.table_name) {
+    return;
+  }
+
+  await run("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS tenant_id TEXT");
+  await run("UPDATE audit_logs SET tenant_id = 'default' WHERE tenant_id IS NULL");
+  await run("ALTER TABLE audit_logs ALTER COLUMN tenant_id SET DEFAULT 'default'");
+  await run("ALTER TABLE audit_logs ALTER COLUMN tenant_id SET NOT NULL");
+  await run(
+    "CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_created_at ON audit_logs(tenant_id, created_at)",
+  );
+}
+
+async function ensurePostgresLoanRuntimeColumns(): Promise<void> {
+  if (dbClient !== "postgres") {
+    return;
+  }
+
+  const loansTable = await get("SELECT to_regclass('public.loans') AS table_name");
+  if (!loansTable?.table_name) {
+    return;
+  }
+
+  // Historical Postgres deployments were created before these nullable loan
+  // runtime columns were added to the Prisma model, so add them defensively.
+  await run("ALTER TABLE loans ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ(3)");
+  await run("ALTER TABLE loans ADD COLUMN IF NOT EXISTS written_off_at TIMESTAMPTZ(3)");
+  await run(
+    "UPDATE loans SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL",
+  );
+}
+
+async function ensurePostgresCoreTenantColumns(): Promise<void> {
+  if (dbClient !== "postgres") {
+    return;
+  }
+
+  async function tableExists(tableName: string): Promise<boolean> {
+    const row = await get("SELECT to_regclass(?) AS table_name", [`public.${tableName}`]);
+    return Boolean(row?.table_name);
+  }
+
+  async function ensureTenantColumn(tableName: string): Promise<void> {
+    if (!(await tableExists(tableName))) {
+      return;
+    }
+
+    await run(`ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS tenant_id TEXT`);
+    await run(`UPDATE ${tableName} SET tenant_id = 'default' WHERE tenant_id IS NULL`);
+    await run(`ALTER TABLE ${tableName} ALTER COLUMN tenant_id SET DEFAULT 'default'`);
+    await run(`ALTER TABLE ${tableName} ALTER COLUMN tenant_id SET NOT NULL`);
+  }
+
+  const tenantScopedTables = [
+    "users",
+    "branches",
+    "clients",
+    "loan_products",
+    "loans",
+    "repayments",
+    "loan_installments",
+    "transactions",
+    "gl_journals",
+    "password_resets",
+    "approval_requests",
+    "collection_actions",
+    "loan_underwriting_assessments",
+    "gl_entries",
+  ];
+
+  for (const tableName of tenantScopedTables) {
+    await ensureTenantColumn(tableName);
+  }
+
+  if (await tableExists("users")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_users_tenant_id ON users(tenant_id)");
+  }
+
+  if (await tableExists("branches")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_branches_tenant_id ON branches(tenant_id)");
+    await run("CREATE INDEX IF NOT EXISTS idx_branches_tenant_region_id ON branches(tenant_id, region_id)");
+  }
+
+  if (await tableExists("clients")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_clients_tenant_id ON clients(tenant_id)");
+    await run("CREATE INDEX IF NOT EXISTS idx_clients_tenant_branch_created_at ON clients(tenant_id, branch_id, created_at)");
+  }
+
+  if (await tableExists("loan_products")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_loan_products_tenant_id ON loan_products(tenant_id)");
+  }
+
+  if (await tableExists("loans")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_loans_tenant_id ON loans(tenant_id)");
+    await run("CREATE INDEX IF NOT EXISTS idx_loans_tenant_branch_status ON loans(tenant_id, branch_id, status)");
+  }
+
+  if (await tableExists("repayments")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_repayments_tenant_id ON repayments(tenant_id)");
+    await run("CREATE INDEX IF NOT EXISTS idx_repayments_tenant_loan_paid_at ON repayments(tenant_id, loan_id, paid_at)");
+  }
+
+  if (await tableExists("loan_installments")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_loan_installments_tenant_id ON loan_installments(tenant_id)");
+    await run("CREATE INDEX IF NOT EXISTS idx_loan_installments_tenant_loan ON loan_installments(tenant_id, loan_id)");
+  }
+
+  if (await tableExists("transactions")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_transactions_tenant_id ON transactions(tenant_id)");
+    await run("CREATE INDEX IF NOT EXISTS idx_transactions_tenant_loan ON transactions(tenant_id, loan_id)");
+  }
+
+  if (await tableExists("gl_journals")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_gl_journals_tenant_id ON gl_journals(tenant_id)");
+  }
+
+  if (await tableExists("password_resets")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_password_resets_tenant_id ON password_resets(tenant_id)");
+    await run("CREATE INDEX IF NOT EXISTS idx_password_resets_tenant_user_id ON password_resets(tenant_id, user_id)");
+  }
+
+  if (await tableExists("approval_requests")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_approval_requests_tenant_id ON approval_requests(tenant_id)");
+  }
+
+  if (await tableExists("collection_actions")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_collection_actions_tenant_id ON collection_actions(tenant_id)");
+  }
+
+  if (await tableExists("loan_underwriting_assessments")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_loan_underwriting_assessments_tenant_id ON loan_underwriting_assessments(tenant_id)");
+  }
+
+  if (await tableExists("gl_entries")) {
+    await run("CREATE INDEX IF NOT EXISTS idx_gl_entries_tenant_id ON gl_entries(tenant_id)");
+  }
+}
+
+async function ensurePostgresRiskTenantColumns(): Promise<void> {
+  if (dbClient !== "postgres") {
+    return;
+  }
+
+  async function tableExists(tableName: string): Promise<boolean> {
+    const row = await get("SELECT to_regclass(?) AS table_name", [`public.${tableName}`]);
+    return Boolean(row?.table_name);
+  }
+
+  async function ensureTenantColumn(tableName: string): Promise<void> {
+    if (!(await tableExists(tableName))) {
+      return;
+    }
+
+    await run(`ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS tenant_id TEXT`);
+    await run(`UPDATE ${tableName} SET tenant_id = 'default' WHERE tenant_id IS NULL`);
+    await run(`ALTER TABLE ${tableName} ALTER COLUMN tenant_id SET DEFAULT 'default'`);
+    await run(`ALTER TABLE ${tableName} ALTER COLUMN tenant_id SET NOT NULL`);
+  }
+
+  if (await tableExists("guarantors")) {
+    await ensureTenantColumn("guarantors");
+    await run("CREATE INDEX IF NOT EXISTS idx_guarantors_tenant_branch ON guarantors(tenant_id, branch_id)");
+    await run(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_guarantors_tenant_national_id
+      ON guarantors (tenant_id, LOWER(TRIM(COALESCE(national_id, ''))))
+      WHERE national_id IS NOT NULL AND national_id != ''
+    `);
+  }
+
+  if (await tableExists("collateral_assets")) {
+    await ensureTenantColumn("collateral_assets");
+    await run(
+      "CREATE INDEX IF NOT EXISTS idx_collateral_assets_tenant_branch ON collateral_assets(tenant_id, branch_id)",
+    );
+    await run(
+      "CREATE INDEX IF NOT EXISTS idx_collateral_assets_tenant_status ON collateral_assets(tenant_id, status)",
+    );
+    await run(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_collateral_assets_tenant_reg
+      ON collateral_assets (tenant_id, LOWER(TRIM(COALESCE(registration_number, ''))))
+      WHERE registration_number IS NOT NULL AND registration_number != ''
+    `);
+    await run(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_collateral_assets_tenant_logbook
+      ON collateral_assets (tenant_id, LOWER(TRIM(COALESCE(logbook_number, ''))))
+      WHERE logbook_number IS NOT NULL AND logbook_number != ''
+    `);
+    await run(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_collateral_assets_tenant_title
+      ON collateral_assets (tenant_id, LOWER(TRIM(COALESCE(title_number, ''))))
+      WHERE title_number IS NOT NULL AND title_number != ''
+    `);
+  }
+
+  if (await tableExists("loan_guarantors")) {
+    await ensureTenantColumn("loan_guarantors");
+    await run(
+      "CREATE INDEX IF NOT EXISTS idx_loan_guarantors_tenant_loan ON loan_guarantors(tenant_id, loan_id)",
+    );
+    await run(
+      "CREATE INDEX IF NOT EXISTS idx_loan_guarantors_tenant_guarantor ON loan_guarantors(tenant_id, guarantor_id)",
+    );
+  }
+
+  if (await tableExists("loan_collaterals")) {
+    await ensureTenantColumn("loan_collaterals");
+    await run(
+      "CREATE INDEX IF NOT EXISTS idx_loan_collaterals_tenant_loan ON loan_collaterals(tenant_id, loan_id)",
+    );
+    await run(
+      "CREATE INDEX IF NOT EXISTS idx_loan_collaterals_tenant_asset ON loan_collaterals(tenant_id, collateral_asset_id)",
+    );
+  }
+}
+
+async function ensurePostgresCoaTenantColumns(): Promise<void> {
+  if (dbClient !== "postgres") {
+    return;
+  }
+
+  async function tableExists(tableName: string): Promise<boolean> {
+    const row = await get("SELECT to_regclass(?) AS table_name", [`public.${tableName}`]);
+    return Boolean(row?.table_name);
+  }
+
+  async function ensureTenantColumn(tableName: string): Promise<void> {
+    if (!(await tableExists(tableName))) {
+      return;
+    }
+
+    await run(`ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS tenant_id TEXT`);
+    await run(`UPDATE ${tableName} SET tenant_id = 'default' WHERE tenant_id IS NULL`);
+    await run(`ALTER TABLE ${tableName} ALTER COLUMN tenant_id SET DEFAULT 'default'`);
+    await run(`ALTER TABLE ${tableName} ALTER COLUMN tenant_id SET NOT NULL`);
+  }
+
+  if (await tableExists("gl_coa_versions")) {
+    await ensureTenantColumn("gl_coa_versions");
+    await run("CREATE INDEX IF NOT EXISTS idx_gl_coa_versions_tenant_id ON gl_coa_versions(tenant_id)");
+  }
+
+  if (await tableExists("gl_coa_accounts")) {
+    await ensureTenantColumn("gl_coa_accounts");
+    await run("CREATE INDEX IF NOT EXISTS idx_gl_coa_accounts_tenant_id ON gl_coa_accounts(tenant_id)");
+    await run(
+      "CREATE INDEX IF NOT EXISTS idx_gl_coa_accounts_tenant_version ON gl_coa_accounts(tenant_id, coa_version_id)",
+    );
+  }
+}
+
+async function ensurePostgresCapitalTransactionsTable(): Promise<void> {
+  if (dbClient !== "postgres") {
+    return;
+  }
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS capital_transactions (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      transaction_type TEXT NOT NULL CHECK (transaction_type IN ('deposit', 'withdrawal')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+      amount DECIMAL(18, 4) NOT NULL CHECK (amount > 0),
+      currency TEXT NOT NULL DEFAULT 'KES',
+      submitted_by_user_id INTEGER NOT NULL,
+      submitted_by_role TEXT NOT NULL,
+      branch_id INTEGER,
+      approved_by_user_id INTEGER,
+      approved_at TIMESTAMPTZ,
+      rejected_by_user_id INTEGER,
+      rejected_at TIMESTAMPTZ,
+      rejection_reason TEXT,
+      cashflow_net_at_submission DECIMAL(18, 4),
+      cashflow_override_note TEXT,
+      gl_journal_id INTEGER,
+      reference TEXT,
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT capital_tx_submitted_by_fkey FOREIGN KEY (submitted_by_user_id) REFERENCES users(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+      CONSTRAINT capital_tx_approved_by_fkey FOREIGN KEY (approved_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE,
+      CONSTRAINT capital_tx_rejected_by_fkey FOREIGN KEY (rejected_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE,
+      CONSTRAINT capital_tx_branch_fkey FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE SET NULL ON UPDATE CASCADE,
+      CONSTRAINT capital_tx_gl_journal_fkey FOREIGN KEY (gl_journal_id) REFERENCES gl_journals(id) ON DELETE SET NULL ON UPDATE CASCADE
+    )
+  `);
+  await run("ALTER TABLE capital_transactions ADD COLUMN IF NOT EXISTS tenant_id TEXT");
+  await run("UPDATE capital_transactions SET tenant_id = 'default' WHERE tenant_id IS NULL");
+  await run("ALTER TABLE capital_transactions ALTER COLUMN tenant_id SET DEFAULT 'default'");
+  await run("ALTER TABLE capital_transactions ALTER COLUMN tenant_id SET NOT NULL");
+  await run("CREATE INDEX IF NOT EXISTS capital_tx_tenant_id_idx ON capital_transactions(tenant_id)");
+  await run(
+    "CREATE INDEX IF NOT EXISTS capital_tx_submitted_by_idx ON capital_transactions(submitted_by_user_id)",
+  );
+  await run("CREATE INDEX IF NOT EXISTS capital_tx_branch_id_idx ON capital_transactions(branch_id)");
+  await run("CREATE INDEX IF NOT EXISTS capital_tx_status_idx ON capital_transactions(status)");
+  await run("CREATE INDEX IF NOT EXISTS capital_tx_type_idx ON capital_transactions(transaction_type)");
+  await run("CREATE INDEX IF NOT EXISTS capital_tx_created_at_idx ON capital_transactions(created_at)");
+}
+
+async function ensurePostgresRuntimeCompatibilitySchema(): Promise<void> {
+  if (dbClient !== "postgres") {
+    return;
+  }
+
+  await ensurePostgresDomainEventsTable();
+  await ensurePostgresAuditLogsTenantColumn();
+  await ensurePostgresLoanRuntimeColumns();
+  await ensurePostgresCoreTenantColumns();
+  await ensurePostgresRiskTenantColumns();
+  await ensurePostgresCoaTenantColumns();
+  await ensurePostgresCapitalTransactionsTable();
+  await seedCoreGlAccounts();
+}
+
 async function runLegacyRuntimeMigrations(): Promise<string[]> {
+  const migrationContext: RuntimeMigrationContext = { run, get, all };
   await run(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,
@@ -1855,9 +2507,7 @@ async function runLegacyRuntimeMigrations(): Promise<string[]> {
   const hasNameColumn = migrationColumns.some((column) => String(column.name || "").toLowerCase() === "name");
   const appliedMigrationRows = await all("SELECT * FROM schema_migrations");
   const appliedMigrationIds = new Set(
-    appliedMigrationRows
-      .map((row) => String(row.id || row.name || "").trim())
-      .filter(Boolean),
+    appliedMigrationRows.map((row) => String(row.id || row.name || "").trim()).filter(Boolean),
   );
   const appliedNow: string[] = [];
 
@@ -1867,22 +2517,18 @@ async function runLegacyRuntimeMigrations(): Promise<string[]> {
       continue;
     }
 
-    await migration.up({ run, get, all } as any);
+    await migration.up(migrationContext);
     if (hasIdColumn && hasNameColumn) {
-      await run(
-        "INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, datetime('now'))",
-        [migrationId, migrationId],
-      );
+      await run("INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, datetime('now'))", [
+        migrationId,
+        migrationId,
+      ]);
     } else if (hasNameColumn) {
-      await run(
-        "INSERT INTO schema_migrations (name, applied_at) VALUES (?, datetime('now'))",
-        [migrationId],
-      );
+      await run("INSERT INTO schema_migrations (name, applied_at) VALUES (?, datetime('now'))", [
+        migrationId,
+      ]);
     } else {
-      await run(
-        "INSERT INTO schema_migrations (id, applied_at) VALUES (?, datetime('now'))",
-        [migrationId],
-      );
+      await run("INSERT INTO schema_migrations (id, applied_at) VALUES (?, datetime('now'))", [migrationId]);
     }
     appliedMigrationIds.add(migrationId);
     appliedNow.push(migrationId);
@@ -1924,8 +2570,19 @@ async function runMigrations(options: RunMigrationsOptions = {}): Promise<RunMig
   const skipped: string[] = [];
 
   if (dbClient === "postgres") {
-    await executePrismaMigrateDeploy();
-    applied.push("prisma_migrate_deploy");
+    const shouldRunPrismaMigrateOnStartup = !isEnvVarFalse(process.env.PRISMA_MIGRATE_ON_STARTUP);
+
+    if (shouldRunPrismaMigrateOnStartup) {
+      await executePrismaMigrateDeploy();
+      applied.push("prisma_migrate_deploy");
+    } else {
+      console.warn(
+        "[prisma] Skipping Prisma schema sync on startup because PRISMA_MIGRATE_ON_STARTUP=false.",
+      );
+      skipped.push("prisma_migrate_deploy_disabled_by_env");
+    }
+
+    await ensurePostgresRuntimeCompatibilitySchema();
   }
 
   await seedHierarchyData();
@@ -1939,13 +2596,4 @@ async function runMigrations(options: RunMigrationsOptions = {}): Promise<RunMig
   };
 }
 
-export {
-  initSchema,
-  runMigrations,
-};
-
-
-
-
-
-
+export { initSchema, runMigrations };

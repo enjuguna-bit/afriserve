@@ -34,6 +34,17 @@ function normalizeBatchType(value: unknown): BatchType {
   return "eod";
 }
 
+function normalizeBatchStatus(value: unknown): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  const message = String(error instanceof Error ? error.message : error || "").toLowerCase();
+  return message.includes("unique")
+    || message.includes("duplicate key")
+    || message.includes("constraint failed");
+}
+
 function getMonthStart(dateOnly: string): string {
   const parsed = new Date(`${dateOnly}T00:00:00.000Z`);
   return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), 1)).toISOString().slice(0, 10);
@@ -300,8 +311,8 @@ function createAccountingBatchService(options: AccountingBatchServiceOptions) {
     const effectiveDateOnly = effectiveDate;
     const note = payload.note ? String(payload.note).trim() : null;
 
-    const batchId = await executeTransaction(async (tx) => {
-      const existing = await tx.get(
+    const batchReservation = await executeTransaction(async (tx) => {
+      const findExistingBatch = async () => tx.get(
         `
           SELECT id, status
           FROM gl_accounting_batches
@@ -312,68 +323,109 @@ function createAccountingBatchService(options: AccountingBatchServiceOptions) {
         [normalizedBatchType, effectiveDateOnly],
       );
 
-      if (existing) {
-        const existingStatus = String(existing.status || "").trim().toLowerCase();
-        if (["pending", "processing", "completed"].includes(existingStatus)) {
-          return null;
+      const reserveExistingBatch = async (existingBatch: Record<string, any>) => {
+        const existingBatchId = Number(existingBatch.id || 0);
+        const existingStatus = normalizeBatchStatus(existingBatch.status);
+
+        if (!existingBatchId) {
+          return { batchId: null, status: existingStatus || "unknown" };
         }
+        if (existingStatus === "completed") {
+          return { batchId: null, status: "completed" };
+        }
+        if (existingStatus === "pending" || existingStatus === "processing") {
+          return { batchId: null, status: existingStatus };
+        }
+
+        await tx.run(
+          `
+            UPDATE gl_accounting_batches
+            SET
+              status = 'processing',
+              note = COALESCE(?, note),
+              updated_at = ?
+            WHERE id = ?
+          `,
+          [note, nowIso, existingBatchId],
+        );
+
+        return { batchId: existingBatchId, status: "processing" };
+      };
+
+      const existing = await findExistingBatch();
+      if (existing) {
+        return reserveExistingBatch(existing);
       }
 
-      const inserted = await tx.run(
+      try {
+        const inserted = await tx.run(
+          `
+            INSERT INTO gl_accounting_batches (
+              batch_type,
+              effective_date,
+              status,
+              triggered_by_user_id,
+              note,
+              created_at,
+              updated_at
+            )
+            VALUES (?, ?, 'processing', ?, ?, ?, ?)
+          `,
+          [normalizedBatchType, effectiveDateOnly, triggeredByUserId, note, nowIso, nowIso],
+        );
+
+        return {
+          batchId: Number(inserted.lastID || 0),
+          status: "processing",
+        };
+      } catch (error) {
+        if (!isUniqueConstraintError(error)) {
+          throw error;
+        }
+
+        const racedExisting = await findExistingBatch();
+        if (racedExisting) {
+          return reserveExistingBatch(racedExisting);
+        }
+
+        throw error;
+      }
+    }) as { batchId?: number | null; status?: string | null };
+
+    const batchId = Number(batchReservation?.batchId || 0);
+    if (!batchId) {
+      const skippedStatus = normalizeBatchStatus(batchReservation?.status);
+      return {
+        skipped: true,
+        reason: skippedStatus ? `batch_already_${skippedStatus}` : "batch_already_exists_or_completed",
+      };
+    }
+
+    let batchRunId = 0;
+
+    try {
+      const insertBatch = await run(
         `
-          INSERT INTO gl_accounting_batches (
+          INSERT INTO gl_batch_runs (
             batch_type,
             effective_date,
             status,
+            started_at,
+            completed_at,
             triggered_by_user_id,
-            note,
-            created_at,
-            updated_at
+            summary_json,
+            error_message,
+            created_at
           )
-          VALUES (?, ?, 'pending', ?, ?, ?, ?)
+          VALUES (?, ?, 'running', ?, NULL, ?, NULL, NULL, ?)
         `,
-        [normalizedBatchType, effectiveDateOnly, triggeredByUserId, note, nowIso, nowIso],
+        [batchType, effectiveDateIso, nowIso, triggeredByUserId, nowIso],
       );
-      return Number(inserted.lastID || 0);
-    });
+      batchRunId = Number(insertBatch.lastID || 0);
+      if (!batchRunId) {
+        throw new Error("Failed to start GL batch run");
+      }
 
-    if (!batchId) {
-      const existingStatusQuery = await get(
-        `
-          SELECT status
-          FROM gl_accounting_batches
-          WHERE LOWER(TRIM(COALESCE(batch_type, ''))) = ?
-            AND date(effective_date) = date(?)
-          LIMIT 1
-        `,
-        [normalizedBatchType, effectiveDateOnly],
-      );
-       return { skipped: true, reason: existingStatusQuery?.status ? `batch_already_${existingStatusQuery.status}` : "batch_already_exists_or_completed" };
-    }
-
-    const insertBatch = await run(
-      `
-        INSERT INTO gl_batch_runs (
-          batch_type,
-          effective_date,
-          status,
-          started_at,
-          completed_at,
-          triggered_by_user_id,
-          summary_json,
-          error_message,
-          created_at
-        )
-        VALUES (?, ?, 'running', ?, NULL, ?, NULL, NULL, ?)
-      `,
-      [batchType, effectiveDateIso, nowIso, triggeredByUserId, nowIso],
-    );
-    const batchRunId = Number(insertBatch.lastID || 0);
-    if (!batchRunId) {
-      throw new Error("Failed to start GL batch run");
-    }
-
-    try {
       const periodFrom = batchType === "eom"
         ? getMonthStart(effectiveDate)
         : batchType === "eoy"
@@ -453,18 +505,31 @@ function createAccountingBatchService(options: AccountingBatchServiceOptions) {
         trial: snapshotSummary,
       };
 
-      await run(
-        `
-          UPDATE gl_batch_runs
-          SET
-            status = 'completed',
-            completed_at = ?,
-            summary_json = ?,
-            error_message = NULL
-          WHERE id = ?
-        `,
-        [new Date().toISOString(), JSON.stringify(summary), batchRunId],
-      );
+      const completedAtIso = new Date().toISOString();
+      await executeTransaction(async (tx) => {
+        await tx.run(
+          `
+            UPDATE gl_batch_runs
+            SET
+              status = 'completed',
+              completed_at = ?,
+              summary_json = ?,
+              error_message = NULL
+            WHERE id = ?
+          `,
+          [completedAtIso, JSON.stringify(summary), batchRunId],
+        );
+        await tx.run(
+          `
+            UPDATE gl_accounting_batches
+            SET
+              status = 'completed',
+              updated_at = ?
+            WHERE id = ?
+          `,
+          [completedAtIso, batchId],
+        );
+      });
 
       if (metrics && typeof metrics.observeBackgroundTask === "function") {
         metrics.observeBackgroundTask(`gl_batch_${batchType}`, {
@@ -483,21 +548,48 @@ function createAccountingBatchService(options: AccountingBatchServiceOptions) {
         summary,
       };
     } catch (error) {
-      await run(
-        `
-          UPDATE gl_batch_runs
-          SET
-            status = 'failed',
-            completed_at = ?,
-            error_message = ?
-          WHERE id = ?
-        `,
-        [
-          new Date().toISOString(),
-          error instanceof Error ? error.message : String(error || "Batch failed"),
-          batchRunId,
-        ],
-      );
+      const failedAtIso = new Date().toISOString();
+      try {
+        await executeTransaction(async (tx) => {
+          if (batchRunId) {
+            await tx.run(
+              `
+                UPDATE gl_batch_runs
+                SET
+                  status = 'failed',
+                  completed_at = ?,
+                  error_message = ?
+                WHERE id = ?
+              `,
+              [
+                failedAtIso,
+                error instanceof Error ? error.message : String(error || "Batch failed"),
+                batchRunId,
+              ],
+            );
+          }
+          await tx.run(
+            `
+              UPDATE gl_accounting_batches
+              SET
+                status = 'failed',
+                updated_at = ?
+              WHERE id = ?
+            `,
+            [failedAtIso, batchId],
+          );
+        });
+      } catch (statusUpdateError) {
+        if (logger && typeof logger.error === "function") {
+          logger.error("accounting.batch.status_update_failed", {
+            error: statusUpdateError,
+            batchType,
+            batchId,
+            batchRunId,
+            effectiveDate,
+          });
+        }
+      }
 
       if (metrics && typeof metrics.observeBackgroundTask === "function") {
         metrics.observeBackgroundTask(`gl_batch_${batchType}`, {

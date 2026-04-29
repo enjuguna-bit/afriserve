@@ -44,14 +44,32 @@ export function ReportExportActions({ endpoint, params, label }: ReportExportAct
 
   return (
     <div className={styles.exportGroup}>
-      <button title="Export to CSV" type="button" disabled={exportingFormat !== null} onClick={() => void handleExport('csv')}>
-        CSV
+      <button
+        title="Export to CSV"
+        type="button"
+        disabled={exportingFormat !== null}
+        aria-busy={exportingFormat === 'csv'}
+        onClick={() => void handleExport('csv')}
+      >
+        {exportingFormat === 'csv' ? '…' : 'CSV'}
       </button>
-      <button title="Export for Excel" type="button" disabled={exportingFormat !== null} onClick={() => void handleExport('xlsx')}>
-        XLSX
+      <button
+        title="Export for Excel"
+        type="button"
+        disabled={exportingFormat !== null}
+        aria-busy={exportingFormat === 'xlsx'}
+        onClick={() => void handleExport('xlsx')}
+      >
+        {exportingFormat === 'xlsx' ? '…' : 'XLSX'}
       </button>
-      <button title="Export to Document" type="button" disabled={exportingFormat !== null} onClick={() => void handleExport('pdf')}>
-        PDF
+      <button
+        title="Export to Document"
+        type="button"
+        disabled={exportingFormat !== null}
+        aria-busy={exportingFormat === 'pdf'}
+        onClick={() => void handleExport('pdf')}
+      >
+        {exportingFormat === 'pdf' ? '…' : 'PDF'}
       </button>
     </div>
   )

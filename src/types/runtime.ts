@@ -28,6 +28,11 @@ export interface MetricsLike {
   observeBackgroundTask?: (taskName: string, payload?: Record<string, unknown>) => void;
   observeDbQuery?: (payload: { category: string; durationMs: number }) => void;
   observeReportCache?: (payload: ReportCacheMetricsPayload) => void;
+  /**
+   * Record a payment-layer failure (e.g. B2C core_failed, B2C callback_failed).
+   * The reason string is used as a label in Prometheus output.
+   */
+  observePaymentFailure?: (reason: string) => void;
 }
 
 export interface ExpressLikeApp {
@@ -52,6 +57,8 @@ export interface RequestLike {
   originalUrl?: string;
   ip?: string;
   requestId?: string | null;
+  traceId?: string | null;
+  tenantId?: string | null;
   route?: RequestRouteLike | null;
   headers?: Record<string, string | string[] | undefined>;
   [key: string]: unknown;

@@ -5,6 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { startServer, api, loginAsAdmin } from "./integration-helpers.js";
+import {
+  changePasswordSchema,
+  createLoanSchema,
+  createUserSchema,
+  disburseLoanSchema,
+  loginSchema,
+} from "../src/validators.js";
 /**
  * @param {unknown} issues
  * @param {string} fieldName
@@ -16,6 +23,58 @@ function hasValidationIssueForField(issues, fieldName) {
   }
   return issues.some((issue) => Array.isArray(issue?.path) && issue.path.includes(fieldName));
 }
+
+test("loan creation schema rejects principal values above the hard input ceiling", () => {
+  const result = createLoanSchema.safeParse({
+    clientId: 1,
+    principal: 1_000_000_001,
+    termWeeks: 12,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(hasValidationIssueForField(result.error?.issues, "principal"), true);
+});
+
+test("loan disbursement schema rejects amount values above the hard input ceiling", () => {
+  const result = disburseLoanSchema.safeParse({
+    amount: 1_000_000_001,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(hasValidationIssueForField(result.error?.issues, "amount"), true);
+});
+
+test("login accepts legacy six-character passwords while user creation keeps the 12-character policy", () => {
+  const legacyLogin = loginSchema.safeParse({
+    email: "legacy@example.com",
+    password: "legacy",
+  });
+  assert.equal(legacyLogin.success, true);
+
+  const weakCreate = createUserSchema.safeParse({
+    fullName: "Weak Password User",
+    email: "weak@example.com",
+    password: "legacy",
+    role: "admin",
+  });
+  assert.equal(weakCreate.success, false);
+  assert.equal(hasValidationIssueForField(weakCreate.error?.issues, "password"), true);
+});
+
+test("change password accepts legacy current passwords but enforces strong replacement passwords", () => {
+  const weakReplacement = changePasswordSchema.safeParse({
+    currentPassword: "legacy",
+    newPassword: "legacy",
+  });
+  assert.equal(weakReplacement.success, false);
+  assert.equal(hasValidationIssueForField(weakReplacement.error?.issues, "newPassword"), true);
+
+  const strongReplacement = changePasswordSchema.safeParse({
+    currentPassword: "legacy",
+    newPassword: "Stronger!Pass123",
+  });
+  assert.equal(strongReplacement.success, true);
+});
 
 test("loan creation rejects principal values below 1", async () => {
   const { baseUrl, stop } = await startServer();
@@ -122,7 +181,12 @@ test("client collateral failures return exact error text and requestId in non-pr
 
     const db = new Database(dbPath);
     try {
-      db.exec("DROP TABLE collateral_assets");
+      db.exec(`
+        PRAGMA foreign_keys = OFF;
+        DROP TABLE IF EXISTS loan_collaterals;
+        DROP TABLE collateral_assets;
+        PRAGMA foreign_keys = ON;
+      `);
     } finally {
       db.close();
     }
@@ -148,4 +212,3 @@ test("client collateral failures return exact error text and requestId in non-pr
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
-

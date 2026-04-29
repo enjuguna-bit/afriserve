@@ -10,7 +10,7 @@
  * live in loanLifecycleService.ts — they will be extracted in a later pass
  * without any public-API change.
  */
-import { prisma } from "../../../db/prismaClient.js";
+import { prisma, type PrismaTransactionClient } from "../../../db/prismaClient.js";
 import {
   DomainConflictError,
   DomainValidationError,
@@ -81,7 +81,7 @@ export async function reviewHighRiskApprovalRequest(
 
   const requestPayload = parseApprovalRequestPayload(request.request_payload);
 
-  const executionResult = await prisma.$transaction(async (tx: any) => {
+  const executionResult = await prisma.$transaction(async (tx: PrismaTransactionClient) => {
     await finalizeApprovedRequestTx({
       tx: tx as any,
       requestId: parsedRequestId,

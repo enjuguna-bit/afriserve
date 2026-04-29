@@ -105,14 +105,9 @@ function createSystemReadRepository(deps: SystemReadRepositoryDeps) {
   async function listTransactions(filters: TransactionFilters) {
     const where = createSqlWhereBuilder();
 
-    // Scope transactions to the current tenant via the joined loan/client tables.
-    // The transactions table itself has no tenant_id column; tenant isolation is
-    // achieved by filtering on the tenant-scoped loan or client the transaction
-    // belongs to. COALESCE handles the edge case where one join is null.
-    where.addClause(
-      "COALESCE(l.tenant_id, c.tenant_id) = ?",
-      [getCurrentTenantId()],
-    );
+    // Scope transactions directly on the table now that tenant_id is part of
+    // the physical schema as well as the query layer.
+    where.addEquals("t.tenant_id", getCurrentTenantId());
 
     if (filters.txType) {
       where.addEquals("t.tx_type", filters.txType);
@@ -156,6 +151,8 @@ function createSystemReadRepository(deps: SystemReadRepositoryDeps) {
       `
         SELECT COUNT(*) AS total
         FROM transactions t
+        LEFT JOIN clients c ON c.id = t.client_id
+        LEFT JOIN loans l ON l.id = t.loan_id
         ${whereSql}
       `,
       queryParams,

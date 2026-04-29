@@ -1,17 +1,19 @@
-import type { DbTransactionContext, HierarchyScope, HierarchyServiceOptions } from "../types/dataLayer.js";
+import type { HierarchyScope, HierarchyServiceOptions } from "../types/dataLayer.js";
 import { ForbiddenScopeError } from "../domain/errors.js";
-import { prisma } from "../db/prismaClient.js";
+import { prisma, type PrismaTransactionClient } from "../db/prismaClient.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
+import { resolveAssignedRoles, selectMostRestrictiveRole } from "./userRoleService.js";
 
-function createHierarchyService({ get, all, executeTransaction }: HierarchyServiceOptions) {
+function createHierarchyService({ get: _get, all: _all, executeTransaction: _executeTransaction }: HierarchyServiceOptions) {
   const cacheTtlMs = Number(process.env.HIERARCHY_CACHE_TTL_MS || 30000);
   const staticCache: {
     regions: { value: Array<Record<string, any>> | null; expiresAt: number };
-    activeBranches: { value: Array<Record<string, any>> | null; expiresAt: number };
-    allBranches: { value: Array<Record<string, any>> | null; expiresAt: number };
+    activeBranchesByTenant: Map<string, { value: Array<Record<string, any>> | null; expiresAt: number }>;
+    allBranchesByTenant: Map<string, { value: Array<Record<string, any>> | null; expiresAt: number }>;
   } = {
     regions: { value: null, expiresAt: 0 },
-    activeBranches: { value: null, expiresAt: 0 },
-    allBranches: { value: null, expiresAt: 0 },
+    activeBranchesByTenant: new Map(),
+    allBranchesByTenant: new Map(),
   };
   const userScopeCache = new Map<string, { value: HierarchyScope | null; expiresAt: number }>();
   const hqRoles = new Set(["admin", "ceo", "finance", "it"]);
@@ -40,12 +42,13 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
    * @param {HierarchyScope | null | undefined} scope
    * @returns {void}
    */
-  function cacheScope(userId: number | string | null | undefined, role: string | null | undefined, scope: HierarchyScope | null | undefined): void {
-    if (!userId || !role) {
+  function cacheScope(userId: number | string | null | undefined, roleKey: string | null | undefined, scope: HierarchyScope | null | undefined): void {
+    if (!userId || !roleKey) {
       return;
     }
 
-    userScopeCache.set(`${userId}:${role}`, {
+    const tenantId = getCurrentTenantId();
+    userScopeCache.set(`${tenantId}:${userId}:${roleKey}`, {
       value: cloneScope(scope),
       expiresAt: now() + cacheTtlMs,
     });
@@ -56,12 +59,13 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
    * @param {string | null | undefined} role
    * @returns {HierarchyScope | null}
    */
-  function readCachedScope(userId: number | string | null | undefined, role: string | null | undefined): HierarchyScope | null {
-    if (!userId || !role) {
+  function readCachedScope(userId: number | string | null | undefined, roleKey: string | null | undefined): HierarchyScope | null {
+    if (!userId || !roleKey) {
       return null;
     }
 
-    const key = `${userId}:${role}`;
+    const tenantId = getCurrentTenantId();
+    const key = `${tenantId}:${userId}:${roleKey}`;
     const entry = userScopeCache.get(key);
     if (!entry) {
       return null;
@@ -94,12 +98,12 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
    */
   function invalidateHierarchyCaches({ userId = null }: { userId?: number | null } = {}): void {
     staticCache.regions.expiresAt = 0;
-    staticCache.activeBranches.expiresAt = 0;
-    staticCache.allBranches.expiresAt = 0;
+    staticCache.activeBranchesByTenant.clear();
+    staticCache.allBranchesByTenant.clear();
 
     if (userId) {
       userScopeCache.forEach((_value, key) => {
-        if (key.startsWith(`${userId}:`)) {
+        if (key.includes(`:${userId}:`)) {
           userScopeCache.delete(key);
         }
       });
@@ -180,10 +184,11 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
   async function getBranches(
     { includeInactive = false, regionId = null }: { includeInactive?: boolean; regionId?: number | null } = {},
   ): Promise<Array<Record<string, any>>> {
+    const tenantId = getCurrentTenantId();
     const hasRegionFilter = Number.isInteger(Number(regionId)) && Number(regionId) > 0;
-    const cacheRef = includeInactive ? staticCache.allBranches : staticCache.activeBranches;
+    const cacheRef = includeInactive ? staticCache.allBranchesByTenant : staticCache.activeBranchesByTenant;
     if (!hasRegionFilter) {
-      const cached = fromCache(cacheRef);
+      const cached = fromCache(cacheRef.get(tenantId));
       if (cached) {
         return cached;
       }
@@ -191,6 +196,7 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
 
     const branches = await prisma.branches.findMany({
       where: {
+        tenant_id: tenantId,
         ...(includeInactive ? {} : { is_active: 1 }),
         ...(hasRegionFilter ? { region_id: Number(regionId) } : {}),
       },
@@ -221,7 +227,9 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
     });
 
     if (!hasRegionFilter) {
-      toCache(cacheRef, rows);
+      const tenantCache = cacheRef.get(tenantId) || { value: null, expiresAt: 0 };
+      toCache(tenantCache, rows);
+      cacheRef.set(tenantId, tenantCache);
     }
 
     return rows;
@@ -241,7 +249,12 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
       return null;
     }
 
-    const branch = await prisma.branches.findUnique({ where: { id: parsedBranchId } });
+    const branch = await prisma.branches.findFirst({
+      where: {
+        id: parsedBranchId,
+        tenant_id: getCurrentTenantId(),
+      },
+    });
 
     if (!branch) {
       return null;
@@ -279,6 +292,7 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
     const branches = await prisma.branches.findMany({
       where: {
         id: { in: normalizedIds },
+        tenant_id: getCurrentTenantId(),
         ...(requireActive ? { is_active: 1 } : {}),
       },
       orderBy: { id: "asc" },
@@ -307,7 +321,14 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
    */
   async function getAreaManagerBranchIds(userId: number): Promise<number[]> {
     const rows = await prisma.area_manager_branch_assignments.findMany({
-      where: { user_id: userId },
+      where: {
+        user_id: userId,
+        branch: {
+          is: {
+            tenant_id: getCurrentTenantId(),
+          },
+        },
+      },
       select: { branch_id: true },
       orderBy: { branch_id: "asc" },
     });
@@ -321,11 +342,27 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
    */
   async function replaceAreaManagerAssignments(userId: number, branchIds: unknown[]): Promise<number[]> {
     const normalizedIds = normalizeIds(branchIds);
-    await prisma.$transaction(async (tx: any) => {
+    const tenantId = getCurrentTenantId();
+    const tenantBranchIds = normalizedIds.length > 0
+      ? (
+        await prisma.branches.findMany({
+          where: {
+            id: { in: normalizedIds },
+            tenant_id: tenantId,
+          },
+          select: { id: true },
+          orderBy: { id: "asc" },
+        })
+      ).map((row: any) => Number(row.id)).filter((id: number) => Number.isInteger(id) && id > 0)
+      : [];
+    if (tenantBranchIds.length !== normalizedIds.length) {
+      throw new ForbiddenScopeError("Assigned branches must belong to the current tenant");
+    }
+    await prisma.$transaction(async (tx: PrismaTransactionClient) => {
       await tx.area_manager_branch_assignments.deleteMany({ where: { user_id: userId } });
-      if (normalizedIds.length > 0) {
+      if (tenantBranchIds.length > 0) {
         await tx.area_manager_branch_assignments.createMany({
-          data: normalizedIds.map((branchId) => ({
+          data: tenantBranchIds.map((branchId: number) => ({
             user_id: userId,
             branch_id: branchId,
             created_at: new Date().toISOString(),
@@ -334,15 +371,17 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
       }
     });
     invalidateHierarchyCaches({ userId });
-    return normalizedIds;
+    return tenantBranchIds;
   }
 
   /**
    * @param {Record<string, any> | null | undefined} user
    * @returns {Promise<HierarchyScope>}
    */
-  async function resolveHierarchyScope(user: Record<string, any> | null | undefined): Promise<HierarchyScope> {
-    if (!user || !Number.isInteger(Number(user.sub))) {
+  async function resolveHierarchyScope(user: unknown): Promise<HierarchyScope> {
+    const scopedUser = user && typeof user === "object" ? user as Record<string, any> : null;
+
+    if (!scopedUser || !Number.isInteger(Number(scopedUser.sub))) {
       return {
         level: "hq",
         role: "anonymous",
@@ -352,12 +391,20 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
       };
     }
 
-    const cached = readCachedScope(user.sub, user.role);
+    const resolvedRoles = resolveAssignedRoles({
+      role: scopedUser.role,
+      roles: scopedUser.roles,
+      fallbackRole: scopedUser.role,
+    });
+    const roleKey = [...resolvedRoles].sort((left, right) => left.localeCompare(right)).join("|")
+      || String(scopedUser.role || "").trim().toLowerCase();
+    const cached = readCachedScope(scopedUser.sub, roleKey);
     if (cached) {
       return cached;
     }
 
-    const role = String(user.role || "").trim().toLowerCase();
+    const tenantId = getCurrentTenantId();
+    const role = selectMostRestrictiveRole(resolvedRoles) || String(scopedUser.role || "").trim().toLowerCase();
     if (hqRoles.has(role)) {
       const hqScope: HierarchyScope = {
         level: "hq",
@@ -366,13 +413,16 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
         branchId: null,
         regionId: null,
       };
-      cacheScope(user.sub, role, hqScope);
+      cacheScope(scopedUser.sub, roleKey, hqScope);
       return hqScope;
     }
 
     if (singleBranchRoles.has(role)) {
-      const userRow = await prisma.users.findUnique({
-        where: { id: Number(user.sub) },
+      const userRow = await prisma.users.findFirst({
+        where: {
+          id: Number(scopedUser.sub),
+          tenant_id: tenantId,
+        },
         select: {
           id: true,
           role: true,
@@ -382,8 +432,11 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
       });
 
       const branch = userRow?.branch_id
-        ? await prisma.branches.findUnique({
-          where: { id: Number(userRow.branch_id) },
+        ? await prisma.branches.findFirst({
+          where: {
+            id: Number(userRow.branch_id),
+            tenant_id: tenantId,
+          },
           select: {
             id: true,
             name: true,
@@ -408,13 +461,20 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
         regionId: Number(branch.region_id || userRow.primary_region_id || 0) || null,
         branchName: branch.name || null,
       };
-      cacheScope(user.sub, role, scope);
+      cacheScope(scopedUser.sub, roleKey, scope);
       return scope;
     }
 
     if (branchAssignmentRoles.has(role)) {
       const assignedRows = await prisma.area_manager_branch_assignments.findMany({
-        where: { user_id: Number(user.sub) },
+        where: {
+          user_id: Number(scopedUser.sub),
+          branch: {
+            is: {
+              tenant_id: tenantId,
+            },
+          },
+        },
         select: { branch_id: true },
         orderBy: { branch_id: "asc" },
       });
@@ -423,7 +483,10 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
         .filter((id: any) => Number.isInteger(id) && id > 0);
       const assignedBranches = assignedBranchIds.length > 0
         ? await prisma.branches.findMany({
-          where: { id: { in: assignedBranchIds } },
+          where: {
+            id: { in: assignedBranchIds },
+            tenant_id: tenantId,
+          },
           select: { id: true, name: true, region_id: true, is_active: true },
           orderBy: { id: "asc" },
         })
@@ -460,7 +523,7 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
           regionId: regionIds.length === 1 ? Number(regionIds[0]) : null,
           branchName: activeBranchRows.length === 1 ? String(activeBranchRows[0].name || "") || null : null,
         };
-      cacheScope(user.sub, role, scope);
+      cacheScope(scopedUser.sub, roleKey, scope);
       return scope;
     }
 
@@ -471,7 +534,7 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
       branchId: null,
       regionId: null,
     };
-    cacheScope(user.sub, role, defaultScope);
+    cacheScope(scopedUser.sub, roleKey, defaultScope);
     return defaultScope;
   }
 
@@ -480,22 +543,24 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
    * @param {string} branchColumnRef
    * @returns {{ sql: string, params: unknown[] }}
    */
-  function buildScopeCondition(scope: HierarchyScope | null | undefined, branchColumnRef: string): { sql: string; params: unknown[] } {
-    if (!scope) {
+  function buildScopeCondition(scope: unknown, branchColumnRef: string): { sql: string; params: unknown[] } {
+    const resolvedScope = scope && typeof scope === "object" ? scope as HierarchyScope : null;
+
+    if (!resolvedScope) {
       return {
         sql: "",
         params: [],
       };
     }
 
-    if (scope.level === "hq") {
+    if (resolvedScope.level === "hq") {
       return {
         sql: "",
         params: [],
       };
     }
 
-    const scopeBranchIds = normalizeIds(scope.branchIds);
+    const scopeBranchIds = normalizeIds(resolvedScope.branchIds);
     if (scopeBranchIds.length === 0) {
       return {
         sql: "1 = 0",
@@ -532,7 +597,7 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
       queryParams,
       branchColumnRef,
     }: {
-      scope: HierarchyScope | null | undefined;
+      scope: unknown;
       whereClauses: string[];
       queryParams: unknown[];
       branchColumnRef: string;
@@ -550,15 +615,17 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
    * @param {unknown} branchId
    * @returns {boolean}
    */
-  function isBranchInScope(scope: HierarchyScope | null | undefined, branchId: unknown): boolean {
-    if (!scope || scope.level === "hq") {
+  function isBranchInScope(scope: unknown, branchId: unknown): boolean {
+    const resolvedScope = scope && typeof scope === "object" ? scope as HierarchyScope : null;
+
+    if (!resolvedScope || resolvedScope.level === "hq") {
       return true;
     }
     const parsedBranchId = Number(branchId);
     if (!Number.isInteger(parsedBranchId) || parsedBranchId <= 0) {
       return false;
     }
-    return normalizeIds(scope.branchIds).includes(parsedBranchId);
+    return normalizeIds(resolvedScope.branchIds).includes(parsedBranchId);
   }
 
   /**
@@ -566,12 +633,13 @@ function createHierarchyService({ get, all, executeTransaction }: HierarchyServi
    * @param {unknown[]} branchIds
    * @returns {number[]}
    */
-  function projectBranchIdsToScope(scope: HierarchyScope | null | undefined, branchIds: unknown[]): number[] {
+  function projectBranchIdsToScope(scope: unknown, branchIds: unknown[]): number[] {
     const normalizedIds = normalizeIds(branchIds);
-    if (!scope || scope.level === "hq") {
+    const resolvedScope = scope && typeof scope === "object" ? scope as HierarchyScope : null;
+    if (!resolvedScope || resolvedScope.level === "hq") {
       return normalizedIds;
     }
-    const scopeSet = new Set(normalizeIds(scope.branchIds));
+    const scopeSet = new Set(normalizeIds(resolvedScope.branchIds));
     return normalizedIds.filter((id) => scopeSet.has(id));
   }
 

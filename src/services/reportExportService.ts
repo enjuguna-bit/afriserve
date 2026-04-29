@@ -35,7 +35,7 @@ function buildCsv(
     csvRow(headers, quoteAllFields),
     ...rows.map((row) => csvRow(headers.map((header) => row[header]), quoteAllFields)),
   ];
-  return lines.join("\n");
+  return lines.join("\r\n");
 }
 
 function isTabularObject(value: unknown): boolean {
@@ -106,6 +106,7 @@ function buildTabularExport({
       body: createSimpleXlsxWorkbook({
         headers: normalizedHeaders,
         rows: normalizedRows,
+        title,
       }),
     };
   }

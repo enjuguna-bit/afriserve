@@ -1,9 +1,8 @@
 import type { QueryClient } from '@tanstack/react-query'
-import { getClientById, getClientOnboardingStatus, listAssignableOfficers, listClients } from './clientService'
+import { getClientById, getClientOnboardingStatus, listClients } from './clientService'
 import { getLoanSchedule, getLoanStatement, listLoans } from './loanService'
 import { queryKeys } from './queryKeys'
 import { queryPolicies } from './queryPolicies'
-import { getReportFilterOptions } from './reportService'
 import { listLoanProducts } from './riskService'
 
 export function prefetchClientWorkspace(queryClient: QueryClient, clientId: number) {
@@ -65,11 +64,6 @@ export function prefetchWorkspaceWarmup(queryClient: QueryClient) {
       staleTime: queryPolicies.list.staleTime,
     }),
     queryClient.prefetchQuery({
-      queryKey: queryKeys.clients.assignableOfficers(),
-      queryFn: listAssignableOfficers,
-      staleTime: queryPolicies.list.staleTime,
-    }),
-    queryClient.prefetchQuery({
       queryKey: queryKeys.clients.list(initialClientListQuery),
       queryFn: () => listClients(initialClientListQuery),
       staleTime: queryPolicies.list.staleTime,
@@ -78,11 +72,6 @@ export function prefetchWorkspaceWarmup(queryClient: QueryClient) {
       queryKey: queryKeys.loans.list(initialLoanListQuery),
       queryFn: () => listLoans(initialLoanListQuery),
       staleTime: queryPolicies.list.staleTime,
-    }),
-    queryClient.prefetchQuery({
-      queryKey: ['reports', 'filter-options', 'loan_officer'],
-      queryFn: () => getReportFilterOptions({ agentRole: 'loan_officer' }),
-      staleTime: queryPolicies.report.staleTime,
     }),
   ]).then(() => undefined)
 }

@@ -47,6 +47,20 @@ export async function approveLoan(
     }
   }
 
+  const workflow = await getLoanWorkflowSnapshot({ get: deps.get, loanId });
+  if (!workflow) throw new LoanNotFoundError();
+  if (workflow.approval_blockers.length > 0) {
+    const blockersMentionKyc = workflow.approval_blockers.some((blocker) => /kyc/i.test(String(blocker || "")));
+    throw new LoanStateConflictError(
+      blockersMentionKyc
+        ? "Cannot approve loan: application is not ready for approval because client KYC is not verified"
+        : "Cannot approve loan: application is not ready for approval",
+      {
+      blockers: workflow.approval_blockers, action: "approve",
+      },
+    );
+  }
+
   if (requireVerifiedClientKycForLoanApproval) {
     const client = await prisma.clients.findUnique({
       where: { id: Number(loan.client_id || 0) },
@@ -60,14 +74,6 @@ export async function approveLoan(
         { kycStatus, action: "approve" },
       );
     }
-  }
-
-  const workflow = await getLoanWorkflowSnapshot({ get: deps.get, loanId });
-  if (!workflow) throw new LoanNotFoundError();
-  if (workflow.approval_blockers.length > 0) {
-    throw new LoanStateConflictError("Cannot approve loan: application is not ready for approval", {
-      blockers: workflow.approval_blockers, action: "approve",
-    });
   }
 
   await prisma.loans.update({

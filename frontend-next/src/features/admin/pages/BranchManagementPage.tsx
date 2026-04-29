@@ -5,6 +5,7 @@ import { queryPolicies } from '../../../services/queryPolicies'
 import { createBranch, deactivateBranch, getHierarchyPerformance, listBranches, listRegions, updateBranch } from '../../../services/branchService'
 import { useUpdateUserProfile, useUsers } from '../hooks/useAdmin'
 import { useToastStore } from '../../../store/toastStore'
+import { formatDisplayText } from '../../../utils/displayFormatting'
 import styles from './BranchManagementPage.module.css'
 
 type BranchFormState = {
@@ -126,7 +127,7 @@ export function BranchManagementPage() {
   const regionsWithBranches = useMemo(() => {
     const regionMap = new Map<number, { id: number; name: string; branches: typeof branches }>()
     regions.forEach((region) => {
-      regionMap.set(Number(region.id), { id: Number(region.id), name: region.name, branches: [] })
+      regionMap.set(Number(region.id), { id: Number(region.id), name: formatDisplayText(region.name, `Region ${region.id}`), branches: [] })
     })
     branches.forEach((branch) => {
       const regionId = Number(branch.region_id || 0)
@@ -266,7 +267,7 @@ export function BranchManagementPage() {
                             onChange={(event) => setEditForm((prev) => ({ ...prev, name: event.target.value }))}
                           />
                         ) : (
-                          branch.name
+                          formatDisplayText(branch.name, `Branch #${branch.id}`)
                         )}
                       </td>
                       <td>
@@ -276,7 +277,7 @@ export function BranchManagementPage() {
                             onChange={(event) => setEditForm((prev) => ({ ...prev, branchCode: event.target.value }))}
                           />
                         ) : (
-                          branch.code || '-'
+                          formatDisplayText(branch.code)
                         )}
                       </td>
                       <td>{loanCountsByBranch.get(branch.id) ?? 0}</td>
@@ -306,10 +307,10 @@ export function BranchManagementPage() {
                                 { userId: managerId, payload: { branchId: branch.id } },
                                 {
                                   onSuccess: () => {
-                                    pushToast({ type: 'success', message: `Manager assigned to ${branch.name}.` })
+                                    pushToast({ type: 'success', message: `Manager assigned to ${formatDisplayText(branch.name, `Branch #${branch.id}`)}.` })
                                   },
                                   onError: () => {
-                                    pushToast({ type: 'error', message: `Failed to assign manager to ${branch.name}.` })
+                                    pushToast({ type: 'error', message: `Failed to assign manager to ${formatDisplayText(branch.name, `Branch #${branch.id}`)}.` })
                                   },
                                 },
                               )
@@ -318,7 +319,7 @@ export function BranchManagementPage() {
                             Assign
                           </button>
                         </div>
-                        <div className={styles.subtle}>{assignedManager ? `Current: ${assignedManager.full_name}` : 'No manager assigned'}</div>
+                        <div className={styles.subtle}>{assignedManager ? `Current: ${formatDisplayText(assignedManager.full_name)}` : 'No manager assigned'}</div>
                       </td>
                       <td>
                         <div className={styles.actions}>
@@ -347,10 +348,10 @@ export function BranchManagementPage() {
                                 onClick={() => {
                                   deactivateBranchMutation.mutate(branch.id, {
                                     onSuccess: () => {
-                                      pushToast({ type: 'success', message: `${branch.name} deactivated.` })
+                                      pushToast({ type: 'success', message: `${formatDisplayText(branch.name, `Branch #${branch.id}`)} deactivated.` })
                                     },
                                     onError: () => {
-                                      pushToast({ type: 'error', message: `Failed to deactivate ${branch.name}.` })
+                                      pushToast({ type: 'error', message: `Failed to deactivate ${formatDisplayText(branch.name, `Branch #${branch.id}`)}.` })
                                     },
                                   })
                                 }}

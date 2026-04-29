@@ -1,4 +1,5 @@
 import { Redis } from "ioredis";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 import type { AuthUserRow } from "../types/auth.js";
 
 type CacheStrategy = "redis" | "memory";
@@ -19,13 +20,19 @@ const configuredTtlSeconds = Number(process.env.AUTH_SESSION_CACHE_TTL_SECONDS);
 const cacheTtlSeconds = Number.isFinite(configuredTtlSeconds) && configuredTtlSeconds > 0
   ? Math.floor(configuredTtlSeconds)
   : 60;
+const configuredRevalidateSeconds = Number(process.env.AUTH_SESSION_CACHE_REVALIDATE_AFTER_SECONDS);
+const revalidateAfterSeconds = Number.isFinite(configuredRevalidateSeconds) && configuredRevalidateSeconds > 0
+  ? Math.floor(configuredRevalidateSeconds)
+  : Math.min(15, cacheTtlSeconds);
 
 const memoryStore = new Map<string, MemoryValue>();
+const MAX_MEMORY_STORE_ENTRIES = 2000; // evict oldest when over limit
 let redisClientPromise: Promise<Redis | null> | null = null;
 let redisWarningLogged = false;
 
 function buildCacheKey(userId: number): string {
-  return `auth:session:user:${userId}`;
+  const tenantId = getCurrentTenantId();
+  return `auth:session:user:${tenantId}:${userId}`;
 }
 
 function toCachePayload(user: Record<string, any>): AuthUserRow {
@@ -46,6 +53,7 @@ function toCachePayload(user: Record<string, any>): AuthUserRow {
     token_version: user.token_version == null ? null : Number(user.token_version),
     branch_id: user.branch_id == null ? null : Number(user.branch_id),
     primary_region_id: user.primary_region_id == null ? null : Number(user.primary_region_id),
+    cached_at_ms: Number(user.cached_at_ms || Date.now()),
   };
 }
 
@@ -70,7 +78,8 @@ async function resolveRedisClient(): Promise<Redis | null> {
       } catch (error) {
         if (!redisWarningLogged) {
           redisWarningLogged = true;
-          console.warn("auth.session_cache.redis_unavailable", error);
+          // Write to stderr so the structured log aggregator picks it up
+        process.stderr.write(JSON.stringify({ level: "warn", message: "auth.session_cache.redis_unavailable", error: error instanceof Error ? error.message : String(error) }) + "\n");
         }
         return null;
       }
@@ -138,6 +147,11 @@ async function cacheAuthSessionUser(user: Record<string, any> | null | undefined
     }
   }
 
+  // Evict the oldest entry when at capacity
+  if (memoryStore.size >= MAX_MEMORY_STORE_ENTRIES) {
+    const oldestKey = memoryStore.keys().next().value;
+    if (oldestKey) memoryStore.delete(oldestKey);
+  }
   memoryStore.set(key, {
     value: payload,
     expiresAt: Date.now() + (Math.max(1, cacheTtlSeconds) * 1000),
@@ -164,11 +178,17 @@ async function invalidateCachedAuthSessionUser(userId: number): Promise<void> {
   }
 }
 
-function getAuthSessionCacheStatus(): { strategy: CacheStrategy; redisUrlConfigured: boolean; ttlSeconds: number } {
+function getAuthSessionCacheStatus(): {
+  strategy: CacheStrategy;
+  redisUrlConfigured: boolean;
+  ttlSeconds: number;
+  revalidateAfterSeconds: number;
+} {
   return {
     strategy: shouldUseRedis() ? "redis" : "memory",
     redisUrlConfigured: shouldUseRedis(),
     ttlSeconds: cacheTtlSeconds,
+    revalidateAfterSeconds,
   };
 }
 

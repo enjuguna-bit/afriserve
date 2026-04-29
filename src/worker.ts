@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveDefaultSqliteDbPath } from "./utils/projectPaths.js";
 import { getConfiguredDbClient } from "./utils/env.js";
+import { initializeTracing } from "./observability/tracing.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -47,6 +48,10 @@ function normalizeDatabaseEnvironment(): void {
 }
 
 normalizeDatabaseEnvironment();
+
+await initializeTracing({
+  serviceName: "afriserve-queue-worker",
+});
 
 const { startQueueWorker } = await import("./runtime/startQueueWorker.js");
 startQueueWorker();

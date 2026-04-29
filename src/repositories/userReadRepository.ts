@@ -1,4 +1,5 @@
 import { createSqlWhereBuilder } from "../utils/sqlBuilder.js";
+import { getCurrentTenantId } from "../utils/tenantStore.js";
 import { mapUserRolesByUserId } from "../services/userRoleService.js";
 import type { HierarchyScope } from "../types/dataLayer.js";
 
@@ -61,6 +62,40 @@ function buildIdFilter(columnRef: string, values: number[]): ScopeCondition {
   };
 }
 
+function buildUserVisibilityPrioritySql(userColumnRef: string): string {
+  return `
+    COALESCE((
+      SELECT MIN(
+        CASE LOWER(user_visibility_roles.role)
+          WHEN 'operations_manager' THEN 1
+          WHEN 'loan_officer' THEN 1
+          WHEN 'cashier' THEN 1
+          WHEN 'area_manager' THEN 2
+          WHEN 'investor' THEN 2
+          WHEN 'partner' THEN 2
+          WHEN 'admin' THEN 3
+          WHEN 'ceo' THEN 3
+          WHEN 'finance' THEN 3
+          WHEN 'it' THEN 3
+          ELSE 99
+        END
+      )
+      FROM (
+        SELECT ur.role AS role
+        FROM user_roles ur
+        WHERE ur.user_id = ${userColumnRef}.id
+        UNION ALL
+        SELECT ${userColumnRef}.role AS role
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM user_roles ur_fallback
+          WHERE ur_fallback.user_id = ${userColumnRef}.id
+        )
+      ) user_visibility_roles
+    ), 99)
+  `.trim();
+}
+
 function buildUserVisibilityScopeCondition(scope: HierarchyScope | null | undefined, userColumnRef: string): ScopeCondition {
   if (!scope || scope.level === "hq") {
     return { sql: "", params: [] };
@@ -71,11 +106,23 @@ function buildUserVisibilityScopeCondition(scope: HierarchyScope | null | undefi
     return { sql: "1 = 0", params: [] };
   }
 
+  const visibilityPrioritySql = buildUserVisibilityPrioritySql(userColumnRef);
   const directBranchCondition = buildIdFilter(`${userColumnRef}.branch_id`, scopeBranchIds);
   const assignmentBranchCondition = buildIdFilter("amb_scope.branch_id", scopeBranchIds);
 
   return {
-    sql: `(${directBranchCondition.sql} OR EXISTS (SELECT 1 FROM area_manager_branch_assignments amb_scope WHERE amb_scope.user_id = ${userColumnRef}.id AND ${assignmentBranchCondition.sql}))`,
+    sql: `(
+      (${visibilityPrioritySql} = 1 AND ${directBranchCondition.sql})
+      OR (
+        ${visibilityPrioritySql} = 2
+        AND EXISTS (
+          SELECT 1
+          FROM area_manager_branch_assignments amb_scope
+          WHERE amb_scope.user_id = ${userColumnRef}.id
+            AND ${assignmentBranchCondition.sql}
+        )
+      )
+    )`,
     params: [...directBranchCondition.params, ...assignmentBranchCondition.params],
   };
 }
@@ -86,6 +133,7 @@ function createUserReadRepository(deps: UserReadRepositoryDeps) {
 
   async function listUsers(filters: ListUsersFilters) {
     const where = createSqlWhereBuilder();
+    where.addEquals("u.tenant_id", getCurrentTenantId());
     where.addCondition(buildUserVisibilityScopeCondition(filters.scope, "u"));
 
     if (filters.role) {
@@ -122,7 +170,7 @@ function createUserReadRepository(deps: UserReadRepositoryDeps) {
           u.id, u.full_name, u.email, u.role, u.is_active, u.deactivated_at, u.failed_login_attempts, u.locked_until, u.token_version,
           u.branch_id, u.primary_region_id, u.created_at, b.name AS branch_name, r.name AS region_name
         FROM users u
-        LEFT JOIN branches b ON b.id = u.branch_id
+        LEFT JOIN branches b ON b.id = u.branch_id AND b.tenant_id = u.tenant_id
         LEFT JOIN regions r ON r.id = COALESCE(u.primary_region_id, b.region_id)
         ${whereSql}
         ORDER BY ${filters.sortBy} ${sortOrder}, u.id DESC
@@ -182,7 +230,7 @@ function createUserReadRepository(deps: UserReadRepositoryDeps) {
       `
         SELECT COUNT(*) AS total
         FROM users u
-        LEFT JOIN branches b ON b.id = u.branch_id
+        LEFT JOIN branches b ON b.id = u.branch_id AND b.tenant_id = u.tenant_id
         ${whereSql}
       `,
       queryParams,
@@ -196,8 +244,12 @@ function createUserReadRepository(deps: UserReadRepositoryDeps) {
 
   async function listUserRoleCounts(scope: HierarchyScope | null): Promise<UserRoleCountRow[]> {
     const scopeCondition = buildUserVisibilityScopeCondition(scope, "u");
-    const whereSql = scopeCondition.sql ? `WHERE ${scopeCondition.sql}` : "";
-    const scopeParams = scopeCondition.params;
+    const tenantClause = "u.tenant_id = ?";
+    const tenantParams = [getCurrentTenantId()];
+    const whereSql = scopeCondition.sql
+      ? `WHERE ${tenantClause} AND ${scopeCondition.sql}`
+      : `WHERE ${tenantClause}`;
+    const scopeParams = [...tenantParams, ...scopeCondition.params];
     let rows: Array<Record<string, any>> = [];
     try {
       rows = await all(
@@ -248,7 +300,10 @@ function createUserReadRepository(deps: UserReadRepositoryDeps) {
 
   async function getUserSummaryTotals(scope: HierarchyScope | null): Promise<UserSummaryTotals> {
     const scopeCondition = buildUserVisibilityScopeCondition(scope, "u");
-    const whereSql = scopeCondition.sql ? `WHERE ${scopeCondition.sql}` : "";
+    const tenantClause = "u.tenant_id = ?";
+    const whereSql = scopeCondition.sql
+      ? `WHERE ${tenantClause} AND ${scopeCondition.sql}`
+      : `WHERE ${tenantClause}`;
     const totals = await get(
       `
         SELECT
@@ -259,7 +314,7 @@ function createUserReadRepository(deps: UserReadRepositoryDeps) {
         FROM users u
         ${whereSql}
       `,
-      scopeCondition.params,
+      [getCurrentTenantId(), ...scopeCondition.params],
     );
 
     return {

@@ -2,7 +2,7 @@ import * as postgresConnection from "./postgresConnection.js";
 import * as sqliteConnection from "./sqliteConnection.js";
 import { prisma } from "./prismaClient.js";
 import { getConfiguredDbClient } from "../utils/env.js";
-import type { DbRunResult, DbTransactionContext } from "../types/dataLayer.js";
+import type { DbRunResult, DbTransactionContext, DbTransactionOptions } from "../types/dataLayer.js";
 
 type DbConnectionModule = {
   dbClient: string;
@@ -21,7 +21,10 @@ type DbConnectionModule = {
   all: (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
   readGet: (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
   readAll: (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
-  executeTransaction: (work: (ctx: DbTransactionContext) => Promise<unknown> | unknown) => Promise<unknown>;
+  executeTransaction: <T = unknown>(
+    work: (ctx: DbTransactionContext) => Promise<T> | T,
+    options?: DbTransactionOptions,
+  ) => Promise<T>;
   getDatabaseInfo: () => { client: string; path: string; isInMemory: boolean };
   closeDb: () => Promise<void> | void;
 };

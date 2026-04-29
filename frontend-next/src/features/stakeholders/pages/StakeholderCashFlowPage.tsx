@@ -1,9 +1,12 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { getCashFlowReport, getGlCashFlowReport, downloadReport } from '../../../services/reportService'
+import { downloadReport } from '../../../services/reportService'
 import { listCapitalTransactions } from '../../../services/capitalService'
+import { useCashFlowStatusReport, useGlCashFlowReport } from '../../reports/hooks/useReports'
+import { queryKeys } from '../../../services/queryKeys'
 import { downloadBlob } from '../../../utils/fileDownload'
+import { formatDisplayDate } from '../../../utils/dateFormatting'
 import { useToastStore } from '../../../store/toastStore'
 import { feedback } from '../../../utils/feedback'
 import { queryPolicies } from '../../../services/queryPolicies'
@@ -15,19 +18,9 @@ import {
   CHART_COLORS,
 } from '../../../components/charts'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-type CashFlowReport = {
-  total_inflow?: number
-  total_outflow?: number
-  net_cash_flow?: number
-  capital_deposits?: number
-  capital_withdrawals?: number
-  pending_withdrawals?: number
-  period?: string
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function fmt(value: number | undefined) {
   return Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -39,58 +32,46 @@ function barWidth(part: number, total: number): string {
 }
 
 function fmtDate(value: string | null | undefined) {
-  if (!value) return '—'
-  try {
-    return new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-  } catch { return value }
+  return formatDisplayDate(value, '-')
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// â”€â”€ Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function StakeholderCashFlowPage() {
   const pushToast = useToastStore((s) => s.pushToast)
   const [exporting, setExporting] = useState<string | null>(null)
 
-  const cashQuery = useQuery({
-    queryKey: ['stakeholder', 'cashflow'],
-    queryFn: () => getCashFlowReport(),
-    ...queryPolicies.report,
-  })
-
-  const glCashQuery = useQuery({
-    queryKey: ['stakeholder', 'gl-cashflow'],
-    queryFn: () => getGlCashFlowReport(),
-    ...queryPolicies.report,
-  })
+  const cashQuery = useCashFlowStatusReport({})
+  const glCashQuery = useGlCashFlowReport({})
 
   const capitalQuery = useQuery({
-    queryKey: ['stakeholder', 'capital-transactions-recent'],
+    queryKey: queryKeys.stakeholders.recentCapitalTransactions({ status: 'approved', limit: 10, offset: 0 }),
     queryFn: () => listCapitalTransactions({ status: 'approved', limit: 10, offset: 0 }),
     ...queryPolicies.report,
   })
 
   const pendingQuery = useQuery({
-    queryKey: ['stakeholder', 'capital-pending-withdrawals'],
+    queryKey: queryKeys.stakeholders.pendingCapitalWithdrawals({ type: 'withdrawal', status: 'pending', limit: 20, offset: 0 }),
     queryFn: () => listCapitalTransactions({ type: 'withdrawal', status: 'pending', limit: 20, offset: 0 }),
     ...queryPolicies.report,
   })
 
-  const data = (cashQuery.data || {}) as CashFlowReport
-  const inflow             = Number(data.total_inflow        || 0)
-  const outflow            = Number(data.total_outflow       || 0)
-  const net                = Number(data.net_cash_flow       || 0)
-  const capitalDeposits    = Number(data.capital_deposits    || 0)
-  const capitalWithdrawals = Number(data.capital_withdrawals || 0)
-  const pendingWithdrawals = Number(data.pending_withdrawals || 0)
+  const data = cashQuery.data
+  const inflow = Number(data?.total_inflow || 0)
+  const outflow = Number(data?.total_outflow || 0)
+  const net = Number(data?.net_cash_flow || 0)
+  const capitalDeposits = Number(data?.capital_deposits || 0)
+  const capitalWithdrawals = Number(data?.capital_withdrawals || 0)
+  const pendingWithdrawals = Number(data?.pending_withdrawals || 0)
   const isPositive = net >= 0
   const maxFlow = Math.max(inflow, outflow, 1)
 
-  const glData     = (glCashQuery.data || {}) as Record<string, unknown>
-  const capitalTxns = capitalQuery.data?.data  ?? []
-  const pendingTxns = pendingQuery.data?.data  ?? []
+  const glData: Record<string, unknown> = glCashQuery.data ?? {}
+  const capitalTxns = capitalQuery.data?.data ?? []
+  const pendingTxns = pendingQuery.data?.data ?? []
   const pendingTotal = pendingQuery.data?.paging?.total ?? 0
 
-  // ── Chart data ────────────────────────────────────────────────────────────
+  // â”€â”€ Chart data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Grouped bar: inflow vs outflow
   const flowBarData = [
     { label: 'Inflow',  value: inflow,  color: CHART_COLORS.emerald },
@@ -127,15 +108,15 @@ export function StakeholderCashFlowPage() {
   return (
     <div className={styles.page}>
 
-      {/* ── Page header ─────────────────────────────────────────────────── */}
+      {/* â”€â”€ Page header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className={styles.pageHeader}>
         <div>
-          <p className={styles.eyebrow}>Stakeholders · Cash Flow</p>
+          <p className={styles.eyebrow}>Stakeholders - Cash Flow</p>
           <h1 className={styles.pageTitle}>Cash flow status</h1>
           <p className={styles.pageSubtitle}>
             Cumulative fund movements synchronised with the general ledger, including
             approved capital deposits and withdrawals.
-            {data.period ? ` Period: ${data.period}.` : ' Lifetime continuous.'}
+            {data?.period ? ` Period: ${data.period}.` : ' Lifetime continuous.'}
           </p>
         </div>
         <div className={styles.headerActions}>
@@ -148,7 +129,7 @@ export function StakeholderCashFlowPage() {
             disabled={exporting !== null || isLoading}
             onClick={() => void handleExport('csv')}
           >
-            {exporting === 'cashflow-csv' ? 'Exporting…' : 'Export CSV'}
+            {exporting === 'cashflow-csv' ? 'Exporting...' : 'Export CSV'}
           </button>
           <button
             type="button"
@@ -156,7 +137,7 @@ export function StakeholderCashFlowPage() {
             disabled={exporting !== null || isLoading}
             onClick={() => void handleExport('xlsx')}
           >
-            {exporting === 'cashflow-xlsx' ? 'Exporting…' : 'Export XLSX'}
+            {exporting === 'cashflow-xlsx' ? 'Exporting...' : 'Export XLSX'}
           </button>
         </div>
       </div>
@@ -164,7 +145,7 @@ export function StakeholderCashFlowPage() {
       {isLoading && (
         <div className={styles.loadingState}>
           <div className={styles.spinner} />
-          <span>Loading cash flow data…</span>
+          <span>Loading cash flow data...</span>
         </div>
       )}
       {isError && (
@@ -176,25 +157,25 @@ export function StakeholderCashFlowPage() {
 
       {!isLoading && !isError && (
         <>
-          {/* ── Net position headline ────────────────────────────────────── */}
+          {/* â”€â”€ Net position headline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
           <div className={`${styles.headlineCard} ${isPositive ? styles.headlinePositive : styles.headlineNegative}`}>
             <div className={styles.headlineLabel}>Net cash position</div>
             <div className={styles.headlineValue}>
-              {isPositive ? '' : '−'}Ksh {fmt(Math.abs(net))}
+              {isPositive ? '' : '-'}Ksh {fmt(Math.abs(net))}
             </div>
             <div className={styles.headlineSub}>
               {isPositive
-                ? 'Positive — inflows exceed outflows'
-                : 'Negative — outflows exceed inflows'}
+                ? 'Positive - inflows exceed outflows'
+                : 'Negative - outflows exceed inflows'}
               {pendingWithdrawals > 0 && (
                 <span className={styles.headlineWarn}>
-                  {' '}· Ksh {fmt(pendingWithdrawals)} in pending withdrawals not yet applied
+                  {' '}| Ksh {fmt(pendingWithdrawals)} in pending withdrawals not yet applied
                 </span>
               )}
             </div>
           </div>
 
-          {/* ── 📊 Inflow vs Outflow bar chart ──────────────────────────── */}
+          {/* â”€â”€ ðŸ“Š Inflow vs Outflow bar chart â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
           <div className={styles.chartRow}>
             <ChartContainer
               title="Inflow vs Outflow vs Net"
@@ -232,12 +213,12 @@ export function StakeholderCashFlowPage() {
                 color: isPositive ? CHART_COLORS.emerald : CHART_COLORS.red,
                 fontWeight: 600,
               }}>
-                {isPositive ? '↑ Surplus position' : '↓ Deficit position'}
+                {isPositive ? 'Surplus position' : 'Deficit position'}
               </div>
             </div>
           </div>
 
-          {/* ── Operational flow cards ───────────────────────────────────── */}
+          {/* â”€â”€ Operational flow cards â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
           <div className={styles.flowGrid}>
             <div className={styles.flowCard}>
               <div className={styles.flowLabel}>Total inflow</div>
@@ -250,7 +231,7 @@ export function StakeholderCashFlowPage() {
 
             <div className={styles.flowCard}>
               <div className={styles.flowLabel}>Total outflow</div>
-              <div className={`${styles.flowValue} ${styles.flowValueNegative}`}>−Ksh {fmt(outflow)}</div>
+              <div className={`${styles.flowValue} ${styles.flowValueNegative}`}>-Ksh {fmt(outflow)}</div>
               <div className={styles.flowBarWrap}>
                 <div className={styles.flowBarFill} style={{ width: barWidth(outflow, maxFlow), background: '#ef4444' }} />
               </div>
@@ -258,13 +239,13 @@ export function StakeholderCashFlowPage() {
             </div>
           </div>
 
-          {/* ── Capital movements (deposits + withdrawals) ───────────────── */}
+          {/* â”€â”€ Capital movements (deposits + withdrawals) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
           {(capitalDeposits > 0 || capitalWithdrawals > 0 || pendingWithdrawals > 0) && (
             <div className={styles.panel}>
               <div className={styles.panelRow}>
                 <h2 className={styles.panelTitle}>Capital movements</h2>
                 <Link to="/stakeholders/capital" className={styles.panelLink}>
-                  View all capital transactions →
+                  View all capital transactions -&gt;
                 </Link>
               </div>
               <p className={styles.panelSubtitle}>
@@ -283,7 +264,7 @@ export function StakeholderCashFlowPage() {
                 <div className={styles.capitalCard}>
                   <div className={styles.capitalCardLabel}>Approved withdrawals</div>
                   <div className={`${styles.capitalCardValue} ${styles.textRed}`}>
-                    − Ksh {fmt(capitalWithdrawals)}
+                    - Ksh {fmt(capitalWithdrawals)}
                   </div>
                   <p className={styles.flowNote}>Capital returned to stakeholders, finance-approved</p>
                 </div>
@@ -292,16 +273,16 @@ export function StakeholderCashFlowPage() {
                   <div className={`${styles.capitalCardValue} ${pendingWithdrawals > 0 ? styles.textAmber : ''}`}>
                     {pendingWithdrawals > 0 ? `Ksh ${fmt(pendingWithdrawals)}` : 'None pending'}
                   </div>
-                  <p className={styles.flowNote}>Awaiting finance approval — not yet posted</p>
+                  <p className={styles.flowNote}>Awaiting finance approval - not yet posted</p>
                 </div>
               </div>
 
-              {/* 📊 Capital donut chart */}
+              {/* ðŸ“Š Capital donut chart */}
               {hasCapitalDonut && (
                 <div className={styles.chartRow} style={{ marginTop: 8 }}>
                   <ChartContainer
                     title="Capital allocation"
-                    subtitle="Deposits · Withdrawals · Pending"
+                    subtitle="Deposits - Withdrawals - Pending"
                     height={200}
                     style={{ flex: 1, minWidth: 220 }}
                   >
@@ -355,10 +336,10 @@ export function StakeholderCashFlowPage() {
                         <td>{tx.submitted_by_name ?? `User #${tx.submitted_by_user_id}`}</td>
                         <td>{tx.branch_name ?? 'Org-wide'}</td>
                         <td className={`${styles.tdRight} ${tx.transaction_type === 'deposit' ? styles.textGreen : styles.textRed}`}>
-                          {tx.transaction_type === 'withdrawal' ? '−' : '+'}
+                          {tx.transaction_type === 'withdrawal' ? '-' : '+'}
                           {tx.currency} {fmt(tx.amount)}
                         </td>
-                        <td className={styles.muted}>{tx.reference ?? '—'}</td>
+                        <td className={styles.muted}>{tx.reference ?? '-'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -367,7 +348,7 @@ export function StakeholderCashFlowPage() {
             </div>
           )}
 
-          {/* ── Pending withdrawals needing finance action ───────────────── */}
+          {/* â”€â”€ Pending withdrawals needing finance action â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
           {pendingTxns.length > 0 && (
             <div className={`${styles.panel} ${styles.pendingPanel}`}>
               <div className={styles.panelRow}>
@@ -376,7 +357,7 @@ export function StakeholderCashFlowPage() {
                   <span className={styles.pendingBadge}>{pendingTotal}</span>
                 </h2>
                 <Link to="/stakeholders/capital" className={styles.panelLink}>
-                  Review in capital transactions →
+                  Review in capital transactions -&gt;
                 </Link>
               </div>
               <p className={styles.panelSubtitle}>
@@ -409,9 +390,9 @@ export function StakeholderCashFlowPage() {
                         </td>
                         <td className={`${styles.tdRight} ${risky ? styles.textRed : styles.textGreen}`}>
                           Ksh {fmt(cashNet)}
-                          {risky && <span className={styles.riskFlag}> ⚠</span>}
+                          {risky && <span className={styles.riskFlag}> !</span>}
                         </td>
-                        <td className={styles.muted}>{tx.note ?? '—'}</td>
+                        <td className={styles.muted}>{tx.note ?? '-'}</td>
                       </tr>
                     )
                   })}
@@ -420,7 +401,7 @@ export function StakeholderCashFlowPage() {
             </div>
           )}
 
-          {/* ── Cash flow summary table ──────────────────────────────────── */}
+          {/* â”€â”€ Cash flow summary table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
           <div className={styles.panel}>
             <h2 className={styles.panelTitle}>Cash flow summary</h2>
             <table className={styles.table}>
@@ -435,25 +416,25 @@ export function StakeholderCashFlowPage() {
                 <tr>
                   <td>Operational inflow (repayments)</td>
                   <td className={`${styles.tdRight} ${styles.textGreen}`}>{fmt(inflow)}</td>
-                  <td className={styles.tdRight}>↑ Positive</td>
+                  <td className={styles.tdRight}>Positive</td>
                 </tr>
                 <tr>
                   <td>Operational outflow (disbursements)</td>
                   <td className={`${styles.tdRight} ${styles.textRed}`}>{fmt(outflow)}</td>
-                  <td className={styles.tdRight}>↓ Negative</td>
+                  <td className={styles.tdRight}>Negative</td>
                 </tr>
                 {capitalDeposits > 0 && (
                   <tr>
                     <td>Capital deposits (approved)</td>
                     <td className={`${styles.tdRight} ${styles.textGreen}`}>{fmt(capitalDeposits)}</td>
-                    <td className={styles.tdRight}>↑ Positive</td>
+                    <td className={styles.tdRight}>Positive</td>
                   </tr>
                 )}
                 {capitalWithdrawals > 0 && (
                   <tr>
                     <td>Capital withdrawals (approved)</td>
                     <td className={`${styles.tdRight} ${styles.textRed}`}>{fmt(capitalWithdrawals)}</td>
-                    <td className={styles.tdRight}>↓ Negative</td>
+                    <td className={styles.tdRight}>Negative</td>
                   </tr>
                 )}
               </tbody>
@@ -461,7 +442,7 @@ export function StakeholderCashFlowPage() {
                 <tr className={styles.totalsRow}>
                   <td><strong>Net cash flow</strong></td>
                   <td className={`${styles.tdRight} ${isPositive ? styles.textGreen : styles.textRed}`}>
-                    <strong>{isPositive ? '' : '−'}Ksh {fmt(Math.abs(net))}</strong>
+                    <strong>{isPositive ? '' : '-'}Ksh {fmt(Math.abs(net))}</strong>
                   </td>
                   <td className={styles.tdRight}>
                     <strong>{isPositive ? 'Surplus' : 'Deficit'}</strong>
@@ -471,12 +452,12 @@ export function StakeholderCashFlowPage() {
             </table>
           </div>
 
-          {/* ── GL reconciliation supplement ─────────────────────────────── */}
+          {/* â”€â”€ GL reconciliation supplement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
           {!glCashQuery.isLoading && Object.keys(glData).length > 0 && (
             <div className={styles.panel}>
               <h2 className={styles.panelTitle}>GL reconciliation</h2>
               <p className={styles.panelSubtitle}>
-                General ledger cash flow report — cross-reference against treasury position.
+                General ledger cash flow report - cross-reference against treasury position.
               </p>
               <div className={styles.glGrid}>
                 {Object.entries(glData)

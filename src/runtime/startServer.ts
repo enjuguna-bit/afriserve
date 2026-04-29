@@ -8,9 +8,10 @@ import { createSystemJobs } from "./systemJobs.js";
 function createRedisConnectivityCheck(redisUrl: string) {
   return async function checkRedisConnectivity() {
     const startedAtMs = Date.now();
+    let client: import("ioredis").Redis | null = null;
     try {
       const { Redis } = await import("ioredis");
-      const client = new Redis(redisUrl, {
+      client = new Redis(redisUrl, {
         lazyConnect: true,
         maxRetriesPerRequest: 1,
         connectTimeout: 3000,
@@ -19,11 +20,16 @@ function createRedisConnectivityCheck(redisUrl: string) {
       await client.ping();
       const durationMs = Date.now() - startedAtMs;
       await client.quit();
+      client = null;
       return { ok: true, durationMs, checkedAt: new Date().toISOString(), error: null };
     } catch (error: unknown) {
       const durationMs = Date.now() - startedAtMs;
       const errorMessage = error instanceof Error ? error.message : String(error);
       return { ok: false, durationMs, checkedAt: new Date().toISOString(), error: errorMessage };
+    } finally {
+      if (client) {
+        client.disconnect(false);
+      }
     }
   };
 }

@@ -1,4 +1,4 @@
-import { Suspense, lazy, type ReactElement } from 'react'
+﻿import { Suspense, lazy, type ReactElement } from 'react'
 import { Navigate, createBrowserRouter } from 'react-router-dom'
 import { RouteLoadingShell } from '../components/common/RouteLoadingShell'
 import { PageShell } from '../components/layout/PageShell'
@@ -68,7 +68,7 @@ export const appRouter = createBrowserRouter([
           { index: true, element: <Navigate to="/dashboard" replace /> },
           { path: 'dashboard', element: withSuspense(<DashboardPage />) },
 
-          // ── Clients ──────────────────────────────────────────────────────
+          // â”€â”€ Clients â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           { path: 'clients',         element: withSuspense(<ClientsPage />) },
           { path: 'clients/dormant', element: withSuspense(<DormantClientsPage />) },
           {
@@ -87,11 +87,16 @@ export const appRouter = createBrowserRouter([
           },
           { path: 'clients/:id', element: withSuspense(<ClientDetailPage />) },
 
-          // ── Loans ─────────────────────────────────────────────────────────
+          // â”€â”€ Loans â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           { path: 'loans',             element: withSuspense(<LoansPage />) },
           { path: 'loans/:id',         element: withSuspense(<LoanDetailPage />) },
           { path: 'loans/:id/repay',   element: withSuspense(<RepaymentPage />) },
-          { path: 'loans/products',    element: withSuspense(<LoanProductsPage />) },
+          {
+            element: <RequireRole allowedRoles={['admin', 'ceo', 'operations_manager', 'finance']} />,
+            children: [
+              { path: 'loans/products', element: withSuspense(<LoanProductsPage />) },
+            ],
+          },
           {
             element: <RequireRole allowedRoles={['admin', 'finance', 'operations_manager', 'area_manager']} />,
             children: [
@@ -99,24 +104,36 @@ export const appRouter = createBrowserRouter([
             ],
           },
 
-          // ── Operations ───────────────────────────────────────────────────
+          // â”€â”€ Operations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           { path: 'collections',       element: withSuspense(<CollectionsPage />) },
           { path: 'reports',           element: withSuspense(<ReportsPage />) },
           { path: 'search',            element: withSuspense(<SearchPage />) },
           { path: 'guarantors',        element: withSuspense(<GuarantorsPage />) },
           { path: 'collateral-assets', element: withSuspense(<CollateralAssetsPage />) },
           { path: 'mobile-money',      element: withSuspense(<MobileMoneyDashboardPage />) },
-          { path: 'accounting',        element: withSuspense(<AccountingDashboardPage />) },
+          {
+            element: <RequireRole allowedRoles={['admin', 'ceo', 'finance', 'operations_manager', 'area_manager']} />,
+            children: [
+              { path: 'accounting', element: withSuspense(<AccountingDashboardPage />) },
+            ],
+          },
 
-          // ── Profile & admin ──────────────────────────────────────────────
-          { path: 'profile',            element: withSuspense(<ProfileSettingsPage />) },
-          { path: 'admin',              element: withSuspense(<AdminPage />) },
-          { path: 'admin/users',        element: withSuspense(<UserManagementPage />) },
-          { path: 'admin/branches',     element: withSuspense(<BranchManagementPage />) },
-          { path: 'admin/audit-logs',   element: withSuspense(<AuditLogsPage />) },
-          { path: 'admin/hierarchy',    element: withSuspense(<HierarchyManagementPage />) },
+          // â”€â”€ Profile & admin â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+          { path: 'profile', element: withSuspense(<ProfileSettingsPage />) },
 
-          // ── Stakeholders ─────────────────────────────────────────────────
+          // Admin routes — restricted to admin/ceo/operations_manager
+          {
+            element: <RequireRole allowedRoles={['admin', 'ceo', 'operations_manager']} />,
+            children: [
+              { path: 'admin',            element: withSuspense(<AdminPage />) },
+              { path: 'admin/users',      element: withSuspense(<UserManagementPage />) },
+              { path: 'admin/branches',   element: withSuspense(<BranchManagementPage />) },
+              { path: 'admin/audit-logs', element: withSuspense(<AuditLogsPage />) },
+              { path: 'admin/hierarchy',  element: withSuspense(<HierarchyManagementPage />) },
+            ],
+          },
+
+          // â”€â”€ Stakeholders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           // Income and cashflow: read-only, no finance needed
           {
             path: 'stakeholders',

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { startServer, api, loginAsAdmin, approveLoan } from "./integration-helpers.js";
+import { startServer, api, loginAsAdmin, approveLoan, createHighRiskReviewerToken } from "./integration-helpers.js";
 test("collection actions support create, update lifecycle, and status filtering", async () => {
   const { baseUrl, stop } = await startServer();
 

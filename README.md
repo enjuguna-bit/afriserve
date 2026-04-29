@@ -318,10 +318,10 @@ Current scope is intentionally narrow for safe rollout: `src/utils/http.js`, `sr
 
 ## Default admin login
 
-> **Security warning (first boot):** when the `users` table is empty, the server seeds a default admin account (`admin@afriserve.local` / `Admin@123`). Change this password immediately after startup and before exposing the system on any shared or public network.
+> **Security warning (first boot):** seeded default-admin login is controlled by `SEED_DEFAULT_ADMIN_ON_EMPTY_DB`. It defaults to enabled outside production and disabled in production. If you enable it in production, set `DEFAULT_ADMIN_PASSWORD` to a non-default secret before startup.
 
-- Email: `admin@afriserve.local`
-- Password: `Admin@123`
+- Email: `admin@afriserve.local` by default, or `DEFAULT_ADMIN_EMAIL` when provided
+- Password: `Admin@123` by default outside production, or `DEFAULT_ADMIN_PASSWORD` when provided
 
 ## API Endpoints
 

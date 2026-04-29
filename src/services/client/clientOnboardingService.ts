@@ -1,15 +1,21 @@
 import { Client } from "../../domain/client/entities/Client.js";
+import { normalizeKenyanPhone } from "../../utils/helpers.js";
 import { ClientId } from "../../domain/client/value-objects/ClientId.js";
 import { KycStatus } from "../../domain/client/value-objects/KycStatus.js";
 import { PhoneNumber } from "../../domain/client/value-objects/PhoneNumber.js";
 import { NationalId } from "../../domain/client/value-objects/NationalId.js";
+import type { AuthSessionUser } from "../../types/auth.js";
+import type { HierarchyServiceLike } from "../../types/serviceContracts.js";
+import { getCurrentTenantId } from "../../utils/tenantStore.js";
 import {
   deriveOnboardingStatus,
   deriveOnboardingNextStep,
   hasDuplicateNationalId,
+  MIN_REQUIRED_COLLATERALS,
+  MIN_REQUIRED_GUARANTORS,
 } from "./clientValidation.js";
 
-type UserLike = Record<string, any>;
+type UserLike = AuthSessionUser & Record<string, unknown>;
 type DbRow = Record<string, any>;
 type DbGetLike = (sql: string, params?: unknown[]) => Promise<DbRow | null | undefined>;
 type DbAllLike = (sql: string, params?: unknown[]) => Promise<DbRow[]>;
@@ -21,11 +27,12 @@ export function createClientOnboardingService(deps: {
   all: DbAllLike;
   run: DbRunLike;
   executeTransaction: (callback: TxCallback) => Promise<unknown>;
-  hierarchyService: any;
+  hierarchyService: HierarchyServiceLike;
   clientRepository: any;
   writeAuditLog: any;
   invalidateReportCaches: any;
   resolveClientScopeClient: (clientId: number, user: UserLike) => Promise<{ status: number; body?: any; scope?: any; client?: any }>;
+  loadClientDetail: (clientId: number) => Promise<DbRow | null | undefined>;
   refreshLinkedLoanAssessmentsForGuarantor: (guarantorId: number) => Promise<void>;
   refreshLinkedLoanAssessmentsForCollateral: (collateralAssetId: number) => Promise<void>;
   hasOwn: (payload: Record<string, unknown> | null | undefined, key: string) => boolean;
@@ -39,54 +46,120 @@ export function createClientOnboardingService(deps: {
     writeAuditLog,
     invalidateReportCaches,
     resolveClientScopeClient,
+    loadClientDetail,
     refreshLinkedLoanAssessmentsForGuarantor,
     refreshLinkedLoanAssessmentsForCollateral,
     hasOwn,
   } = deps;
 
   async function loadClientOnboardingProgress(clientId: number) {
-    const [guarantorCountRow, collateralCountRow, clientRow] = await Promise.all([
-      get("SELECT COUNT(*) AS total FROM guarantors WHERE client_id = ? AND COALESCE(is_active, 1) = 1", [clientId]),
-      get("SELECT COUNT(*) AS total FROM collateral_assets WHERE client_id = ? AND LOWER(COALESCE(status, 'active')) IN ('active', 'released')", [clientId]),
+    const tenantId = getCurrentTenantId();
+    const [guarantorCountRow, guarantorDocumentCountRow, collateralCountRow, collateralDocumentCountRow, clientRow] = await Promise.all([
+      get(
+        "SELECT COUNT(*) AS total FROM guarantors WHERE client_id = ? AND tenant_id = ? AND COALESCE(is_active, 1) = 1",
+        [clientId, tenantId],
+      ),
+      get(
+        `
+          SELECT COUNT(*) AS total
+          FROM guarantors
+          WHERE client_id = ?
+            AND tenant_id = ?
+            AND COALESCE(is_active, 1) = 1
+            AND TRIM(COALESCE(id_document_url, '')) != ''
+        `,
+        [clientId, tenantId],
+      ),
+      get(
+        "SELECT COUNT(*) AS total FROM collateral_assets WHERE client_id = ? AND tenant_id = ? AND LOWER(COALESCE(status, 'active')) IN ('active', 'released')",
+        [clientId, tenantId],
+      ),
+      get(
+        `
+          SELECT COUNT(*) AS total
+          FROM collateral_assets
+          WHERE client_id = ?
+            AND tenant_id = ?
+            AND LOWER(COALESCE(status, 'active')) IN ('active', 'released')
+            AND TRIM(COALESCE(document_url, '')) != ''
+        `,
+        [clientId, tenantId],
+      ),
       get(
         `
           SELECT
             id,
+            photo_url,
             kyc_status,
             onboarding_status,
             fee_payment_status,
-            fees_paid_at
+            fees_paid_at,
+            latitude,
+            longitude,
+            location_accuracy_meters,
+            location_captured_at
           FROM clients
-          WHERE id = ?
+          WHERE id = ? AND tenant_id = ?
         `,
-        [clientId],
+        [clientId, tenantId],
       ),
     ]);
 
     const guarantorCount = Number(guarantorCountRow?.total || 0);
+    const guarantorDocumentCount = Number(guarantorDocumentCountRow?.total || 0);
     const collateralCount = Number(collateralCountRow?.total || 0);
+    const collateralDocumentCount = Number(collateralDocumentCountRow?.total || 0);
+    const hasProfilePhoto = Boolean(String(clientRow?.photo_url || "").trim());
+    const hasPinnedLocation = clientRow?.latitude != null
+      && clientRow?.longitude != null
+      && String(clientRow.latitude).trim() !== ""
+      && String(clientRow.longitude).trim() !== ""
+      && Number.isFinite(Number(clientRow.latitude))
+      && Number.isFinite(Number(clientRow.longitude));
+    const guarantorDocumentsComplete =
+      guarantorCount >= MIN_REQUIRED_GUARANTORS && guarantorDocumentCount >= MIN_REQUIRED_GUARANTORS;
+    const collateralDocumentsComplete =
+      collateralCount >= MIN_REQUIRED_COLLATERALS && collateralDocumentCount >= MIN_REQUIRED_COLLATERALS;
     const feesPaid = String(clientRow?.fee_payment_status || "unpaid").toLowerCase() === "paid";
     const kycStatus = String(clientRow?.kyc_status || "pending").toLowerCase();
     const nextStatus = deriveOnboardingStatus({
+      hasProfilePhoto,
+      hasPinnedLocation,
       kycStatus,
-      hasGuarantor: guarantorCount > 0,
-      hasCollateral: collateralCount > 0,
+      hasGuarantor: guarantorCount >= MIN_REQUIRED_GUARANTORS,
+      guarantorDocumentsComplete,
+      hasCollateral: collateralCount >= MIN_REQUIRED_COLLATERALS,
+      collateralDocumentsComplete,
       feesPaid,
     });
     const nextStep = deriveOnboardingNextStep({
+      hasProfilePhoto,
+      hasPinnedLocation,
       kycStatus,
-      hasGuarantor: guarantorCount > 0,
-      hasCollateral: collateralCount > 0,
+      hasGuarantor: guarantorCount >= MIN_REQUIRED_GUARANTORS,
+      guarantorDocumentsComplete,
+      hasCollateral: collateralCount >= MIN_REQUIRED_COLLATERALS,
+      collateralDocumentsComplete,
       feesPaid,
     });
 
     return {
+      hasProfilePhoto,
+      hasPinnedLocation,
       guarantorCount,
+      guarantorDocumentCount,
+      guarantorDocumentsComplete,
       collateralCount,
+      collateralDocumentCount,
+      collateralDocumentsComplete,
       feesPaid,
       kycStatus,
       feePaymentStatus: String(clientRow?.fee_payment_status || "unpaid").toLowerCase(),
       feesPaidAt: clientRow?.fees_paid_at || null,
+      locationAccuracyMeters: clientRow?.location_accuracy_meters == null
+        ? null
+        : Number(clientRow.location_accuracy_meters),
+      locationCapturedAt: clientRow?.location_captured_at || null,
       currentOnboardingStatus: String(clientRow?.onboarding_status || "registered").toLowerCase(),
       nextStatus,
       nextStep,
@@ -94,6 +167,7 @@ export function createClientOnboardingService(deps: {
   }
 
   async function syncClientOnboardingStatus(clientId: number) {
+    const tenantId = getCurrentTenantId();
     const progress = await loadClientOnboardingProgress(clientId);
     if (progress.currentOnboardingStatus !== progress.nextStatus) {
       const updatedAt = new Date().toISOString();
@@ -101,15 +175,16 @@ export function createClientOnboardingService(deps: {
         `
           UPDATE clients
           SET onboarding_status = ?, updated_at = ?
-          WHERE id = ?
+          WHERE id = ? AND tenant_id = ?
         `,
-        [progress.nextStatus, updatedAt, clientId],
+        [progress.nextStatus, updatedAt, clientId, tenantId],
       );
     }
     return progress;
   }
 
   async function createClient(payload: Record<string, any>, user: UserLike, ipAddress: string) {
+    const tenantId = getCurrentTenantId();
     if (await hasDuplicateNationalId(get, payload.nationalId || null)) {
       return { status: 409, body: { message: "A client with this national ID already exists" } };
     }
@@ -157,9 +232,9 @@ export function createClientOnboardingService(deps: {
         `
           SELECT id, role, is_active, branch_id
           FROM users
-          WHERE id = ?
+          WHERE id = ? AND tenant_id = ?
         `,
-        [selectedOfficerId],
+        [selectedOfficerId, tenantId],
       );
       if (!selectedOfficer) {
         return { status: 400, body: { message: "Selected loan officer was not found" } };
@@ -193,9 +268,10 @@ export function createClientOnboardingService(deps: {
       newId = (await executeTransaction(async (tx: any) => {
         const dup = await tx.get(
           `SELECT id FROM clients
-           WHERE national_id IS NOT NULL
+           WHERE tenant_id = ?
+             AND national_id IS NOT NULL
              AND LOWER(REPLACE(REPLACE(TRIM(national_id), ' ', ''), '-', '')) = ?`,
-          [normalizedNationalId],
+          [tenantId, normalizedNationalId],
         );
         if (dup?.id) {
           throw Object.assign(new Error("duplicate_national_id"), { _isDuplicate: true });
@@ -205,15 +281,18 @@ export function createClientOnboardingService(deps: {
         const insert = await tx.run(
           `
             INSERT INTO clients (
+              tenant_id,
               full_name, phone, national_id, branch_id, created_by_user_id,
               kra_pin, photo_url, id_document_url,
               next_of_kin_name, next_of_kin_phone, next_of_kin_relation,
               business_type, business_years, business_location, residential_address,
+              latitude, longitude, location_accuracy_meters, location_captured_at,
               officer_id, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `,
           [
+            tenantId,
             payload.fullName,
             normalizedPhone,
             normalizedNationalId,
@@ -223,12 +302,16 @@ export function createClientOnboardingService(deps: {
             payload.photoUrl || null,
             payload.idDocumentUrl || null,
             payload.nextOfKinName || null,
-            payload.nextOfKinPhone || null,
+            payload.nextOfKinPhone ? normalizeKenyanPhone(payload.nextOfKinPhone) : null,
             payload.nextOfKinRelation || null,
             payload.businessType || null,
             payload.businessYears || null,
             payload.businessLocation || null,
             payload.residentialAddress || null,
+            payload.latitude ?? null,
+            payload.longitude ?? null,
+            payload.locationAccuracyMeters ?? null,
+            payload.locationCapturedAt || null,
             selectedOfficerId,
             createdAt,
             createdAt,
@@ -264,10 +347,15 @@ export function createClientOnboardingService(deps: {
       businessYears: payload.businessYears ?? null,
       businessLocation: payload.businessLocation || null,
       residentialAddress: payload.residentialAddress || null,
+      latitude: payload.latitude ?? null,
+      longitude: payload.longitude ?? null,
+      locationAccuracyMeters: payload.locationAccuracyMeters ?? null,
+      locationCapturedAt: payload.locationCapturedAt ? new Date(String(payload.locationCapturedAt)) : null,
     });
     _clientAggregate.clearEvents();
 
-    const client = await get("SELECT * FROM clients WHERE id = ?", [newId]);
+    const client = await loadClientDetail(newId)
+      ?? await get("SELECT * FROM clients WHERE id = ? AND tenant_id = ?", [newId, tenantId]);
 
     await writeAuditLog({
       userId: user.sub,
@@ -295,7 +383,8 @@ export function createClientOnboardingService(deps: {
 
     const previousStatus = domainClient.kycStatus.value;
     if (previousStatus === payload.status) {
-      const unchangedClient = await get("SELECT * FROM clients WHERE id = ?", [clientId]);
+      const unchangedClient = await loadClientDetail(clientId)
+        ?? await get("SELECT * FROM clients WHERE id = ? AND tenant_id = ?", [clientId, getCurrentTenantId()]);
       return { status: 200, body: { message: "Client KYC status is unchanged", client: unchangedClient } };
     }
 
@@ -305,7 +394,8 @@ export function createClientOnboardingService(deps: {
     domainClient.clearEvents();
 
     await syncClientOnboardingStatus(clientId);
-    const updatedClient = await get("SELECT * FROM clients WHERE id = ?", [clientId]);
+    const updatedClient = await loadClientDetail(clientId)
+      ?? await get("SELECT * FROM clients WHERE id = ? AND tenant_id = ?", [clientId, getCurrentTenantId()]);
     await writeAuditLog({
       userId: user.sub,
       action: "client.kyc_status.updated",
@@ -324,6 +414,7 @@ export function createClientOnboardingService(deps: {
   }
 
   async function addClientGuarantor(clientId: number, payload: Record<string, any>, user: UserLike, ipAddress: string) {
+    const tenantId = getCurrentTenantId();
     const resolved = await resolveClientScopeClient(clientId, user);
     if (resolved.status !== 200) {
       return { status: resolved.status, body: resolved.body };
@@ -334,9 +425,10 @@ export function createClientOnboardingService(deps: {
         `
           SELECT id
           FROM guarantors
-          WHERE LOWER(TRIM(COALESCE(national_id, ''))) = LOWER(TRIM(?))
+          WHERE tenant_id = ?
+            AND LOWER(TRIM(COALESCE(national_id, ''))) = LOWER(TRIM(?))
         `,
-        [payload.nationalId],
+        [tenantId, payload.nationalId],
       );
       if (existingGuarantor) {
         return { status: 409, body: { message: "A guarantor with this national ID already exists" } };
@@ -347,6 +439,7 @@ export function createClientOnboardingService(deps: {
     const insertResult = await run(
       `
         INSERT INTO guarantors (
+          tenant_id,
           full_name,
           phone,
           national_id,
@@ -355,14 +448,16 @@ export function createClientOnboardingService(deps: {
           employer_name,
           monthly_income,
           guarantee_amount,
+          id_document_url,
           client_id,
           branch_id,
           created_by_user_id,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
+        tenantId,
         payload.fullName,
         payload.phone || null,
         payload.nationalId || null,
@@ -371,6 +466,7 @@ export function createClientOnboardingService(deps: {
         payload.employerName || null,
         payload.monthlyIncome || 0,
         payload.guaranteeAmount,
+        payload.idDocumentUrl || null,
         clientId,
         resolved.client.branch_id || null,
         user.sub,
@@ -379,7 +475,7 @@ export function createClientOnboardingService(deps: {
       ],
     );
 
-    const guarantor = await get("SELECT * FROM guarantors WHERE id = ?", [insertResult.lastID]);
+    const guarantor = await get("SELECT * FROM guarantors WHERE id = ? AND tenant_id = ?", [insertResult.lastID, tenantId]);
     const onboarding = await syncClientOnboardingStatus(clientId);
 
     await writeAuditLog({
@@ -412,6 +508,7 @@ export function createClientOnboardingService(deps: {
     user: UserLike,
     ipAddress: string,
   ) {
+    const tenantId = getCurrentTenantId();
     const resolved = await resolveClientScopeClient(clientId, user);
     if (resolved.status !== 200) {
       return { status: resolved.status, body: resolved.body };
@@ -421,9 +518,9 @@ export function createClientOnboardingService(deps: {
       `
         SELECT *
         FROM guarantors
-        WHERE id = ? AND client_id = ?
+        WHERE id = ? AND client_id = ? AND tenant_id = ?
       `,
-      [guarantorId, clientId],
+      [guarantorId, clientId, tenantId],
     );
     if (!guarantor) {
       return { status: 404, body: { message: "Guarantor not found" } };
@@ -445,7 +542,7 @@ export function createClientOnboardingService(deps: {
       const currentPhone = guarantor.phone || null;
       if (nextPhone !== currentPhone) {
         setClauses.push("phone = ?");
-        queryParams.push(nextPhone);
+        queryParams.push(nextPhone ? normalizeKenyanPhone(nextPhone) : null);
         changedFields.phone = nextPhone;
       }
     }
@@ -460,9 +557,10 @@ export function createClientOnboardingService(deps: {
               SELECT id
               FROM guarantors
               WHERE id != ?
+                AND tenant_id = ?
                 AND LOWER(TRIM(COALESCE(national_id, ''))) = LOWER(TRIM(?))
             `,
-            [guarantorId, nextNationalId],
+            [guarantorId, tenantId, nextNationalId],
           );
           if (existingGuarantor) {
             return { status: 409, body: { message: "A guarantor with this national ID already exists" } };
@@ -525,6 +623,16 @@ export function createClientOnboardingService(deps: {
       }
     }
 
+    if (hasOwn(payload, "idDocumentUrl")) {
+      const nextIdDocumentUrl = payload.idDocumentUrl || null;
+      const currentIdDocumentUrl = guarantor.id_document_url || null;
+      if (nextIdDocumentUrl !== currentIdDocumentUrl) {
+        setClauses.push("id_document_url = ?");
+        queryParams.push(nextIdDocumentUrl);
+        changedFields.idDocumentUrl = nextIdDocumentUrl;
+      }
+    }
+
     if (setClauses.length === 0) {
       const onboarding = await syncClientOnboardingStatus(clientId);
       return {
@@ -541,12 +649,12 @@ export function createClientOnboardingService(deps: {
       `
         UPDATE guarantors
         SET ${setClauses.join(", ")}, updated_at = ?
-        WHERE id = ? AND client_id = ?
+        WHERE id = ? AND client_id = ? AND tenant_id = ?
       `,
-      [...queryParams, updatedAt, guarantorId, clientId],
+      [...queryParams, updatedAt, guarantorId, clientId, tenantId],
     );
 
-    const updatedGuarantor = await get("SELECT * FROM guarantors WHERE id = ?", [guarantorId]);
+    const updatedGuarantor = await get("SELECT * FROM guarantors WHERE id = ? AND tenant_id = ?", [guarantorId, tenantId]);
     const onboarding = await syncClientOnboardingStatus(clientId);
     await refreshLinkedLoanAssessmentsForGuarantor(guarantorId);
 
@@ -575,6 +683,7 @@ export function createClientOnboardingService(deps: {
   }
 
   async function addClientCollateral(clientId: number, payload: Record<string, any>, user: UserLike, ipAddress: string) {
+    const tenantId = getCurrentTenantId();
     const resolved = await resolveClientScopeClient(clientId, user);
     if (resolved.status !== 200) {
       return { status: resolved.status, body: resolved.body };
@@ -585,9 +694,10 @@ export function createClientOnboardingService(deps: {
         `
           SELECT id
           FROM collateral_assets
-          WHERE LOWER(TRIM(COALESCE(registration_number, ''))) = LOWER(TRIM(?))
+          WHERE tenant_id = ?
+            AND LOWER(TRIM(COALESCE(registration_number, ''))) = LOWER(TRIM(?))
         `,
-        [payload.registrationNumber],
+        [tenantId, payload.registrationNumber],
       );
       if (existingByRegistration) {
         return { status: 409, body: { message: "A collateral asset with this registration number already exists" } };
@@ -598,9 +708,10 @@ export function createClientOnboardingService(deps: {
         `
           SELECT id
           FROM collateral_assets
-          WHERE LOWER(TRIM(COALESCE(logbook_number, ''))) = LOWER(TRIM(?))
+          WHERE tenant_id = ?
+            AND LOWER(TRIM(COALESCE(logbook_number, ''))) = LOWER(TRIM(?))
         `,
-        [payload.logbookNumber],
+        [tenantId, payload.logbookNumber],
       );
       if (existingByLogbook) {
         return { status: 409, body: { message: "A collateral asset with this logbook number already exists" } };
@@ -611,9 +722,10 @@ export function createClientOnboardingService(deps: {
         `
           SELECT id
           FROM collateral_assets
-          WHERE LOWER(TRIM(COALESCE(title_number, ''))) = LOWER(TRIM(?))
+          WHERE tenant_id = ?
+            AND LOWER(TRIM(COALESCE(title_number, ''))) = LOWER(TRIM(?))
         `,
-        [payload.titleNumber],
+        [tenantId, payload.titleNumber],
       );
       if (existingByTitle) {
         return { status: 409, body: { message: "A collateral asset with this title number already exists" } };
@@ -624,6 +736,7 @@ export function createClientOnboardingService(deps: {
     const insertResult = await run(
       `
         INSERT INTO collateral_assets (
+          tenant_id,
           asset_type,
           description,
           estimated_value,
@@ -635,15 +748,17 @@ export function createClientOnboardingService(deps: {
           title_number,
           location_details,
           valuation_date,
+          document_url,
           status,
           client_id,
           branch_id,
           created_by_user_id,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
       `,
       [
+        tenantId,
         payload.assetType,
         payload.description,
         payload.estimatedValue,
@@ -655,6 +770,7 @@ export function createClientOnboardingService(deps: {
         payload.titleNumber || null,
         payload.locationDetails || null,
         payload.valuationDate || null,
+        payload.documentUrl || null,
         clientId,
         resolved.client.branch_id || null,
         user.sub,
@@ -663,7 +779,10 @@ export function createClientOnboardingService(deps: {
       ],
     );
 
-    const collateralAsset = await get("SELECT * FROM collateral_assets WHERE id = ?", [insertResult.lastID]);
+    const collateralAsset = await get(
+      "SELECT * FROM collateral_assets WHERE id = ? AND tenant_id = ?",
+      [insertResult.lastID, tenantId],
+    );
     const onboarding = await syncClientOnboardingStatus(clientId);
 
     await writeAuditLog({
@@ -697,6 +816,7 @@ export function createClientOnboardingService(deps: {
     user: UserLike,
     ipAddress: string,
   ) {
+    const tenantId = getCurrentTenantId();
     const resolved = await resolveClientScopeClient(clientId, user);
     if (resolved.status !== 200) {
       return { status: resolved.status, body: resolved.body };
@@ -706,9 +826,9 @@ export function createClientOnboardingService(deps: {
       `
         SELECT *
         FROM collateral_assets
-        WHERE id = ? AND client_id = ?
+        WHERE id = ? AND client_id = ? AND tenant_id = ?
       `,
-      [collateralId, clientId],
+      [collateralId, clientId, tenantId],
     );
     if (!collateral) {
       return { status: 404, body: { message: "Collateral asset not found" } };
@@ -777,9 +897,10 @@ export function createClientOnboardingService(deps: {
               SELECT id
               FROM collateral_assets
               WHERE id != ?
+                AND tenant_id = ?
                 AND LOWER(TRIM(COALESCE(registration_number, ''))) = LOWER(TRIM(?))
             `,
-            [collateralId, nextRegistrationNumber],
+            [collateralId, tenantId, nextRegistrationNumber],
           );
           if (existingByRegistration) {
             return { status: 409, body: { message: "A collateral asset with this registration number already exists" } };
@@ -802,9 +923,10 @@ export function createClientOnboardingService(deps: {
               SELECT id
               FROM collateral_assets
               WHERE id != ?
+                AND tenant_id = ?
                 AND LOWER(TRIM(COALESCE(logbook_number, ''))) = LOWER(TRIM(?))
             `,
-            [collateralId, nextLogbookNumber],
+            [collateralId, tenantId, nextLogbookNumber],
           );
           if (existingByLogbook) {
             return { status: 409, body: { message: "A collateral asset with this logbook number already exists" } };
@@ -827,9 +949,10 @@ export function createClientOnboardingService(deps: {
               SELECT id
               FROM collateral_assets
               WHERE id != ?
+                AND tenant_id = ?
                 AND LOWER(TRIM(COALESCE(title_number, ''))) = LOWER(TRIM(?))
             `,
-            [collateralId, nextTitleNumber],
+            [collateralId, tenantId, nextTitleNumber],
           );
           if (existingByTitle) {
             return { status: 409, body: { message: "A collateral asset with this title number already exists" } };
@@ -862,6 +985,16 @@ export function createClientOnboardingService(deps: {
       }
     }
 
+    if (hasOwn(payload, "documentUrl")) {
+      const nextDocumentUrl = payload.documentUrl || null;
+      const currentDocumentUrl = collateral.document_url || null;
+      if (nextDocumentUrl !== currentDocumentUrl) {
+        setClauses.push("document_url = ?");
+        queryParams.push(nextDocumentUrl);
+        changedFields.documentUrl = nextDocumentUrl;
+      }
+    }
+
     if (setClauses.length === 0) {
       const onboarding = await syncClientOnboardingStatus(clientId);
       return {
@@ -878,12 +1011,15 @@ export function createClientOnboardingService(deps: {
       `
         UPDATE collateral_assets
         SET ${setClauses.join(", ")}, updated_at = ?
-        WHERE id = ? AND client_id = ?
+        WHERE id = ? AND client_id = ? AND tenant_id = ?
       `,
-      [...queryParams, updatedAt, collateralId, clientId],
+      [...queryParams, updatedAt, collateralId, clientId, tenantId],
     );
 
-    const updatedCollateral = await get("SELECT * FROM collateral_assets WHERE id = ?", [collateralId]);
+    const updatedCollateral = await get(
+      "SELECT * FROM collateral_assets WHERE id = ? AND tenant_id = ?",
+      [collateralId, tenantId],
+    );
     const onboarding = await syncClientOnboardingStatus(clientId);
     await refreshLinkedLoanAssessmentsForCollateral(collateralId);
 
@@ -912,6 +1048,7 @@ export function createClientOnboardingService(deps: {
   }
 
   async function recordClientFeePayment(clientId: number, payload: Record<string, any>, user: UserLike, ipAddress: string) {
+    const tenantId = getCurrentTenantId();
     const resolved = await resolveClientScopeClient(clientId, user);
     if (resolved.status !== 200) {
       return { status: resolved.status, body: resolved.body };
@@ -932,13 +1069,14 @@ export function createClientOnboardingService(deps: {
       domainClientForFee.clearEvents();
     } else {
       await run(
-        `UPDATE clients SET fee_payment_status = 'paid', fees_paid_at = ?, updated_at = ? WHERE id = ?`,
-        [paidAtIso, updatedAt, clientId],
+        `UPDATE clients SET fee_payment_status = 'paid', fees_paid_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`,
+        [paidAtIso, updatedAt, clientId, tenantId],
       );
     }
 
     const onboarding = await syncClientOnboardingStatus(clientId);
-    const updatedClient = await get("SELECT * FROM clients WHERE id = ?", [clientId]);
+    const updatedClient = await loadClientDetail(clientId)
+      ?? await get("SELECT * FROM clients WHERE id = ? AND tenant_id = ?", [clientId, tenantId]);
 
     await writeAuditLog({
       userId: user.sub,
@@ -976,8 +1114,12 @@ export function createClientOnboardingService(deps: {
     const complete = onboarding.nextStatus === "complete";
     const readyForLoanApplication = complete;
     const checklist = {
-      guarantorAdded: onboarding.guarantorCount > 0,
-      collateralAdded: onboarding.collateralCount > 0,
+      profilePhotoAdded: onboarding.hasProfilePhoto,
+      locationCaptured: onboarding.hasPinnedLocation,
+      guarantorAdded: onboarding.guarantorCount >= MIN_REQUIRED_GUARANTORS,
+      guarantorDocumentsComplete: onboarding.guarantorDocumentsComplete,
+      collateralAdded: onboarding.collateralCount >= MIN_REQUIRED_COLLATERALS,
+      collateralDocumentsComplete: onboarding.collateralDocumentsComplete,
       feesPaid: onboarding.feesPaid,
       complete,
     };
@@ -993,7 +1135,14 @@ export function createClientOnboardingService(deps: {
         checklist,
         counts: {
           guarantors: onboarding.guarantorCount,
+          guarantorDocuments: onboarding.guarantorDocumentCount,
           collaterals: onboarding.collateralCount,
+          collateralDocuments: onboarding.collateralDocumentCount,
+        },
+        location: {
+          captured: onboarding.hasPinnedLocation,
+          accuracyMeters: onboarding.locationAccuracyMeters,
+          capturedAt: onboarding.locationCapturedAt,
         },
         nextStep: onboarding.nextStep,
       },

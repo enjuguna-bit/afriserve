@@ -189,9 +189,23 @@
   box-shadow: 0 6px 22px rgba(0, 220, 150, 0.28);
 }
 
-.generateButton:hover {
+.generateButton:hover:not(:disabled) {
   filter: brightness(1.07);
   transform: translateY(-1px);
+}
+
+.generateButton:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+  background: linear-gradient(135deg, var(--accent-strong), var(--accent));
+  animation: reportGenerating 1.4s ease-in-out infinite;
+}
+
+@keyframes reportGenerating {
+  0%, 100% { opacity: 0.65; }
+  50%       { opacity: 0.85; }
 }
 
 /* ── Result card ─────────────────────────────────────────────────────────── */
@@ -251,6 +265,10 @@
 }
 
 .exportGroup button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.exportGroup button[aria-busy="true"] {
+  animation: reportGenerating 0.9s ease-in-out infinite;
+}
 
 /* ── Metric cards ────────────────────────────────────────────────────────── */
 .metricGrid {

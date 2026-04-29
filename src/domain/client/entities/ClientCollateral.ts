@@ -1,7 +1,7 @@
 /** Collateral asset entity - belongs to a Client aggregate. */
 export type CollateralAssetType = "chattel" | "vehicle" | "land" | "equipment" | "machinery" | "inventory" | "livestock" | "savings";
 export type CollateralOwnershipType = "client" | "guarantor" | "third_party";
-export type CollateralStatus = "active" | "released";
+export type CollateralStatus = "active" | "released" | "liquidated";
 
 export interface ClientCollateralProps {
   id: number | null;

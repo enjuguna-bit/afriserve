@@ -31,6 +31,7 @@ export function ClientForm({ mode, initialValues, isSubmitting, apiError, onSubm
       businessLocation: initialValues?.businessLocation ?? '',
       residentialAddress: initialValues?.residentialAddress ?? '',
       isActive: initialValues?.isActive ?? true,
+      piiOverrideReason: initialValues?.piiOverrideReason ?? '',
     },
   })
 
@@ -115,6 +116,21 @@ export function ClientForm({ mode, initialValues, isSubmitting, apiError, onSubm
           </div>
         )}
       </div>
+
+      {mode === 'edit' ? (
+        <div className={styles.row}>
+          <label className={styles.field}>
+            Admin correction reason
+            <textarea
+              className={styles.input}
+              rows={3}
+              {...register('piiOverrideReason')}
+            />
+            {errors.piiOverrideReason ? <span className={styles.error}>{errors.piiOverrideReason.message}</span> : null}
+            <span className={styles.meta}>Required when changing phone or National ID.</span>
+          </label>
+        </div>
+      ) : null}
 
       {apiError ? <p className={styles.error}>{apiError}</p> : null}
       <button type="submit" disabled={isSubmitting}>

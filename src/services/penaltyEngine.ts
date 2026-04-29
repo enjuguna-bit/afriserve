@@ -26,6 +26,7 @@ type PenaltyResult = {
   scannedInstallments: number;
   chargedInstallments: number;
   chargedAmount: number;
+  failedInstallments: number;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -87,7 +88,7 @@ function createPenaltyEngine(options: PenaltyEngineOptions) {
         LEFT JOIN loan_products p ON p.id = l.product_id
         WHERE i.status = 'overdue'
           AND i.id > ?
-          AND l.status IN ('active', 'restructured')
+          AND l.status IN ('active', 'restructured', 'overdue')
           AND (COALESCE(i.amount_due, 0) - COALESCE(i.amount_paid, 0)) > 0
           AND (
             COALESCE(i.penalty_rate_daily, p.penalty_rate_daily, 0) > 0
@@ -131,6 +132,7 @@ function createPenaltyEngine(options: PenaltyEngineOptions) {
             COALESCE(i.penalty_cap_percent_of_outstanding, p.penalty_cap_percent_of_outstanding) AS penalty_cap_percent_of_outstanding,
             COALESCE(l.principal, 0) AS loan_principal,
             COALESCE(l.balance, 0) AS loan_balance,
+            COALESCE(l.tenant_id, 'default') AS tenant_id,
             l.client_id,
             l.branch_id
           FROM loan_installments i
@@ -138,7 +140,7 @@ function createPenaltyEngine(options: PenaltyEngineOptions) {
           LEFT JOIN loan_products p ON p.id = l.product_id
           WHERE i.id = ?
             AND i.status = 'overdue'
-            AND l.status IN ('active', 'restructured')
+            AND l.status IN ('active', 'restructured', 'overdue')
           LIMIT 1
         `,
         [installmentId],
@@ -246,17 +248,19 @@ function createPenaltyEngine(options: PenaltyEngineOptions) {
       const chargeAmountNumber = chargeAmount.toNumber();
 
       const nowIso = now.toISOString();
+      // FIX: amount_due is contractual and must NEVER be mutated by penalty accrual.
+      // Penalties are tracked exclusively in penalty_amount_accrued and cleared by
+      // allocatePenaltyFirst() in repaymentService when a repayment is processed.
       const updateInstallment = await tx.run(
         `
           UPDATE loan_installments
           SET
-            amount_due = ROUND(amount_due + ?, 2),
             penalty_amount_accrued = ROUND(COALESCE(penalty_amount_accrued, 0) + ?, 2),
             penalty_last_applied_at = ?
           WHERE id = ?
             AND status = 'overdue'
         `,
-        [chargeAmountNumber, chargeAmountNumber, nowIso, installmentId],
+        [chargeAmountNumber, nowIso, installmentId],
       );
 
       if (!Number(updateInstallment?.changes || 0)) {
@@ -270,7 +274,7 @@ function createPenaltyEngine(options: PenaltyEngineOptions) {
             expected_total = ROUND(expected_total + ?, 2),
             balance = ROUND(balance + ?, 2)
           WHERE id = ?
-            AND status IN ('active', 'restructured')
+            AND status IN ('active', 'restructured', 'overdue')
         `,
         [chargeAmountNumber, chargeAmountNumber, Number(installment.loan_id)],
       );
@@ -278,6 +282,7 @@ function createPenaltyEngine(options: PenaltyEngineOptions) {
       const txResult = await tx.run(
         `
           INSERT INTO transactions (
+            tenant_id,
             loan_id,
             client_id,
             branch_id,
@@ -286,9 +291,10 @@ function createPenaltyEngine(options: PenaltyEngineOptions) {
             occurred_at,
             note
           )
-          VALUES (?, ?, ?, 'penalty_charge', ?, ?, ?)
+          VALUES (?, ?, ?, ?, 'penalty_charge', ?, ?, ?)
         `,
         [
+          String(installment.tenant_id || "").trim() || "default",
           Number(installment.loan_id),
           installment.client_id ?? null,
           installment.branch_id ?? null,
@@ -338,6 +344,7 @@ function createPenaltyEngine(options: PenaltyEngineOptions) {
   }
 
   async function applyPenalties(): Promise<PenaltyResult> {
+    const startedAtMs = Date.now();
     const batchSize = 500;
     let lastInstallmentId = 0;
     const accountAvailability = await resolveActiveAccountAvailability();
@@ -353,12 +360,15 @@ function createPenaltyEngine(options: PenaltyEngineOptions) {
         scannedInstallments: 0,
         chargedInstallments: 0,
         chargedAmount: 0,
+        failedInstallments: 0,
       };
     }
 
     let chargedInstallments = 0;
     let chargedAmount = new Decimal(0);
     let scannedInstallments = 0;
+    let failedInstallments = 0;
+    let lastFailureMessage: string | null = null;
 
     while (true) {
       const batch = await getPenaltyCandidatesBatch(batchSize, lastInstallmentId);
@@ -375,6 +385,8 @@ function createPenaltyEngine(options: PenaltyEngineOptions) {
             chargedAmount = chargedAmount.plus(penaltyAmount).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
           }
         } catch (error) {
+          failedInstallments += 1;
+          lastFailureMessage = error instanceof Error ? error.message : String(error);
           if (logger && typeof logger.error === "function") {
             logger.error("penalty_engine.installment_failed", {
               installmentId: candidate.installmentId,
@@ -404,10 +416,21 @@ function createPenaltyEngine(options: PenaltyEngineOptions) {
       scannedInstallments,
       chargedInstallments,
       chargedAmount: chargedAmount.toNumber(),
+      failedInstallments,
     };
+
+    if (failedInstallments > 0 && logger && typeof logger.warn === "function") {
+      logger.warn("penalty_engine.completed_with_failures", {
+        ...summary,
+        lastError: lastFailureMessage,
+      });
+    }
 
     if (metrics && typeof metrics.observeBackgroundTask === "function") {
       metrics.observeBackgroundTask("installment_penalty_apply", {
+        success: failedInstallments === 0,
+        durationMs: Date.now() - startedAtMs,
+        ...(lastFailureMessage ? { errorMessage: lastFailureMessage } : {}),
         scannedInstallments: summary.scannedInstallments,
         chargedInstallments: summary.chargedInstallments,
         chargedAmount: summary.chargedAmount,

@@ -150,6 +150,7 @@ function registerFinancialReports(app: RouteRegistrar, context: Record<string, a
             "total_repaid",
             "total_interest_income",
             "total_fee_income",
+            "total_penalty_income",
             "total_write_off_expense",
             "net_operating_income",
             "net_cash_movement",
@@ -295,7 +296,7 @@ function registerFinancialReports(app: RouteRegistrar, context: Record<string, a
           summary: {
             write_off_count: Number(summary?.write_off_count || 0),
             total_write_off_expense: Number(summary?.total_write_off_expense || 0),
-            total_outstanding_at_write_off: Number(summary?.total_write_off_expense || 0),
+            total_net_loss: Number(summary?.total_write_off_expense || 0),
           },
           writeOffs: writeOffs.map(
             (row: Record<string, any>) => ({
@@ -331,8 +332,7 @@ function registerFinancialReports(app: RouteRegistrar, context: Record<string, a
         const branchFilter = parseId(req.query.branchId);
         const whereBuilder = createSqlWhereBuilder();
         if (dateTo) {
-            whereBuilder.addClause("j.posted_at <= ?");
-            whereBuilder.getParams().push(dateTo);
+          whereBuilder.addClause("j.posted_at <= ?", [dateTo]);
         }
         
         if (!applyScopeAndBranchFilter({
@@ -473,7 +473,7 @@ function registerFinancialReports(app: RouteRegistrar, context: Record<string, a
         const branchFilter = parseId(req.query.branchId);
         const whereBuilder = createSqlWhereBuilder();
         whereBuilder.addDateRange("j.posted_at", dateFrom, dateTo);
-        
+
         if (!applyScopeAndBranchFilter({
           whereBuilder,
           scope,
@@ -484,6 +484,10 @@ function registerFinancialReports(app: RouteRegistrar, context: Record<string, a
         })) {
           return;
         }
+
+        // Narrow to CASH-account entries only — added after scope filter so the
+        // builder already has tenant + branch conditions anchored.
+        whereBuilder.addClause("a.code = 'CASH'");
 
         const whereSql = whereBuilder.buildWhere();
         const queryParams = whereBuilder.getParams();
@@ -502,23 +506,23 @@ function registerFinancialReports(app: RouteRegistrar, context: Record<string, a
              const flows = await get(
               `
                 SELECT
-                  ROUND(COALESCE(SUM(CASE 
-                    WHEN j.reference_type = 'loan_disbursement' AND a.code = 'CASH' AND e.side = 'credit' THEN e.amount
+                  ROUND(COALESCE(SUM(CASE
+                    WHEN j.reference_type = 'loan_disbursement' AND e.side = 'credit' THEN e.amount
                     ELSE 0 END), 0), 2) AS outflows_disbursements,
-                  ROUND(COALESCE(SUM(CASE 
-                    WHEN j.reference_type = 'loan_repayment' AND a.code = 'CASH' AND e.side = 'debit' THEN e.amount
+                  ROUND(COALESCE(SUM(CASE
+                    WHEN j.reference_type = 'loan_repayment' AND e.side = 'debit' THEN e.amount
                     ELSE 0 END), 0), 2) AS inflows_repayments,
-                  ROUND(COALESCE(SUM(CASE 
-                    WHEN j.reference_type = 'suspense_unallocated_receipt' AND a.code = 'CASH' AND e.side = 'debit' THEN e.amount
+                  ROUND(COALESCE(SUM(CASE
+                    WHEN j.reference_type = 'suspense_unallocated_receipt' AND e.side = 'debit' THEN e.amount
                     ELSE 0 END), 0), 2) AS inflows_suspense,
-                  ROUND(COALESCE(SUM(CASE 
-                    WHEN j.reference_type = 'reversal' AND a.code = 'CASH' AND e.side = 'debit' THEN e.amount
-                    WHEN j.reference_type = 'reversal' AND a.code = 'CASH' AND e.side = 'credit' THEN -e.amount
+                  ROUND(COALESCE(SUM(CASE
+                    WHEN j.reference_type = 'reversal' AND e.side = 'debit' THEN e.amount
+                    WHEN j.reference_type = 'reversal' AND e.side = 'credit' THEN -e.amount
                     ELSE 0 END), 0), 2) AS net_reversals
                 FROM gl_entries e
                 INNER JOIN gl_accounts a ON a.id = e.account_id
                 INNER JOIN gl_journals j ON j.id = e.journal_id
-                ${whereSql} AND a.code = 'CASH'
+                ${whereSql}
               `,
               queryParams,
             );

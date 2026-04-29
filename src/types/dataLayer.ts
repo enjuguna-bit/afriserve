@@ -8,6 +8,13 @@ export interface DbRunResult {
 
 export type DbTransactionWork<T = unknown> = (ctx: DbTransactionContext) => Promise<T> | T;
 
+export type DbTransactionIsolationLevel = "read committed" | "repeatable read" | "serializable";
+
+export interface DbTransactionOptions {
+  isolationLevel?: DbTransactionIsolationLevel;
+  busyTimeoutMs?: number;
+}
+
 export interface DbTransactionContext {
   run: (sql: string, params?: unknown[]) => Promise<DbRunResult>;
   get: (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
@@ -26,7 +33,7 @@ export interface HierarchyScope {
 export interface HierarchyServiceOptions {
   get: (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
   all: (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
-  executeTransaction: (callback: (ctx: DbTransactionContext) => any) => Promise<any>;
+  executeTransaction: (callback: (ctx: DbTransactionContext) => any, options?: DbTransactionOptions) => Promise<any>;
 }
 
 export interface HierarchyEventServiceOptions {
@@ -52,7 +59,7 @@ export interface MigrationContext {
   run: (sql: string, params?: unknown[]) => Promise<DbRunResult>;
   get: (sql: string, params?: unknown[]) => Promise<Record<string, any> | null | undefined>;
   all: (sql: string, params?: unknown[]) => Promise<Array<Record<string, any>>>;
-  executeTransaction: (callback: (ctx: DbTransactionContext) => any) => Promise<any>;
+  executeTransaction: (callback: (ctx: DbTransactionContext) => any, options?: DbTransactionOptions) => Promise<any>;
   db: unknown;
 }
 

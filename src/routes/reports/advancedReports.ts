@@ -287,7 +287,7 @@ function registerAdvancedReports(app: RouteRegistrar, context: Record<string, an
 
   // ── 5. Capital adequacy snapshot ─────────────────────────────────────────
   // Provides the portfolio-side inputs for capital adequacy calculations:
-  // PAR30 / PAR90 ratios, write-off rate, provision pool, gross outstanding.
+  // PAR 30 / 60 / 90 plus NPL ratios, write-off rate, provision pool, gross outstanding.
 
   app.get(
     "/api/reports/capital-adequacy",
@@ -313,8 +313,8 @@ function registerAdvancedReports(app: RouteRegistrar, context: Record<string, an
             "as_of",
             "total_loans", "total_principal_disbursed", "gross_outstanding",
             "provision_pool", "written_off_principal", "written_off_net_loss",
-            "par30_balance", "par90_balance",
-            "par30_ratio", "par90_ratio", "write_off_rate",
+            "par30_balance", "par60_balance", "par90_balance", "npl_balance",
+            "par30_ratio", "par60_ratio", "par90_ratio", "npl_ratio", "write_off_rate",
           ];
           sendTabularExport(res, {
             format,

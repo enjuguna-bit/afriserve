@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type {
   GlAccount,
   GlAccountStatementPayload,
@@ -10,7 +11,7 @@ import type {
 } from '../../../types/gl'
 import styles from '../styles/Accounting.module.css'
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ——— Helpers ——————————————————————————————————————————————————————————————————
 
 function fmt(value: number | undefined | null) {
   return Number(value || 0).toLocaleString(undefined, {
@@ -30,6 +31,20 @@ function fmtDate(value: string | null | undefined) {
   } catch {
     return value
   }
+}
+
+function fmtDelta(value: number | undefined | null) {
+  const amount = Number(value || 0)
+  if (!Number.isFinite(amount) || amount === 0) return fmt(0)
+  return `${amount > 0 ? '+' : '-'}${fmt(Math.abs(amount))}`
+}
+
+function fmtReferenceType(value: string | null | undefined) {
+  const raw = String(value || '').trim()
+  if (!raw) return 'Unclassified'
+  return raw
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
 function statusBadge(status: string) {
@@ -55,7 +70,7 @@ function batchSummaryText(run: GlBatchRun): string {
   return parts.length ? parts.join(' · ') : 'Complete'
 }
 
-// ─── Props ────────────────────────────────────────────────────────────────────
+// ——— Props ————————————————————————————————————————————————————————————————————
 
 export type AccountingTabKey = 'trial-balance' | 'batch' | 'fx' | 'coa' | 'suspense' | 'ledger'
 
@@ -116,7 +131,7 @@ type LedgerPanelProps = {
   statementLoading: boolean
 }
 
-// ─── Batch Close Panel ────────────────────────────────────────────────────────
+// ——— Batch Close Panel ————————————————————————————————————————————————————————
 
 export function BatchPanel({
   batchDate,
@@ -278,7 +293,7 @@ export function BatchPanel({
   )
 }
 
-// ─── FX Rates Panel ───────────────────────────────────────────────────────────
+// ——— FX Rates Panel ———————————————————————————————————————————————————————————
 
 export function FxPanel({
   fxBase, fxQuote, fxRate,
@@ -348,7 +363,7 @@ export function FxPanel({
   )
 }
 
-// ─── CoA Versions Panel ───────────────────────────────────────────────────────
+// ——— CoA Versions Panel ———————————————————————————————————————————————————————
 
 export function CoaPanel({
   coaCode, coaName,
@@ -499,7 +514,7 @@ export function CoaPanel({
   )
 }
 
-// ─── Suspense Workflow Panel ──────────────────────────────────────────────────
+// ——— Suspense Workflow Panel ——————————————————————————————————————————————————
 
 export function SuspensePanel({
   suspenseAmount, suspenseCurrency, suspenseAccountCode,
@@ -659,15 +674,19 @@ export function SuspensePanel({
   )
 }
 
-// ─── Account Ledger Panel ─────────────────────────────────────────────────────
+// ——— Account Ledger Panel —————————————————————————————————————————————————————
 
 export function LedgerPanel({
   accounts, selectedAccountId, onSelectAccount,
   statement, statementLoading,
 }: LedgerPanelProps) {
+  const [ledgerView, setLedgerView] = useState<'grouped' | 'detailed'>('grouped')
   const summary = statement?.summary
+  const dailyGroups = statement?.daily_groups || []
   const entries = statement?.entries || []
   const account = statement?.account
+  const hasGroupedView = dailyGroups.length > 0
+  const activeLedgerView = hasGroupedView ? ledgerView : 'detailed'
 
   return (
     <>
@@ -727,13 +746,86 @@ export function LedgerPanel({
                 <div className={styles.kpiValue}>{summary?.entry_count ?? entries.length}</div>
               </div>
             </div>
+            <p className={styles.muted}>
+              Grouped view condenses {entries.length} raw entries into {summary?.group_count ?? dailyGroups.length}{' '}
+              daily activity lines. Switch to detailed view whenever you need journal-level traceability.
+            </p>
           </div>
 
-          {/* Journal entries */}
+          {/* Ledger activity */}
           <div className={styles.panel}>
-            <h2 className={styles.panelTitle}>Journal entries</h2>
+            <div className={styles.panelRow}>
+              <div>
+                <h2 className={styles.panelTitle}>
+                  {activeLedgerView === 'grouped' ? 'Daily activity summary' : 'Journal entries'}
+                </h2>
+                <p className={styles.muted}>
+                  {activeLedgerView === 'grouped'
+                    ? 'Same-day disbursements, collections, and other activity are rolled up by type for a shorter ledger.'
+                    : 'Detailed view keeps every posted journal entry visible for reconciliation and audit.'}
+                </p>
+              </div>
+              <div className={styles.segmentedControl} role="tablist" aria-label="Ledger view mode">
+                <button
+                  type="button"
+                  className={`${styles.segmentButton} ${activeLedgerView === 'grouped' ? styles.segmentButtonActive : ''}`}
+                  aria-pressed={activeLedgerView === 'grouped'}
+                  disabled={!hasGroupedView}
+                  onClick={() => setLedgerView('grouped')}
+                >
+                  Grouped daily
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.segmentButton} ${activeLedgerView === 'detailed' ? styles.segmentButtonActive : ''}`}
+                  aria-pressed={activeLedgerView === 'detailed'}
+                  onClick={() => setLedgerView('detailed')}
+                >
+                  Detailed entries
+                </button>
+              </div>
+            </div>
             {entries.length === 0 ? (
               <p className={styles.muted}>No entries in the selected period.</p>
+            ) : activeLedgerView === 'grouped' ? (
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Activity</th>
+                      <th>Scope</th>
+                      <th className={styles.tdRight}>Journals</th>
+                      <th className={styles.tdRight}>Entries</th>
+                      <th className={styles.tdRight}>Debits</th>
+                      <th className={styles.tdRight}>Credits</th>
+                      <th className={styles.tdRight}>Net movement</th>
+                      <th className={styles.tdRight}>Closing balance</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dailyGroups.map((group) => (
+                      <tr key={`${group.business_date || 'unknown'}-${group.reference_type || 'unclassified'}`}>
+                        <td>{fmtDate(group.business_date)}</td>
+                        <td>
+                          <div className={styles.groupTitle}>{fmtReferenceType(group.reference_type)}</div>
+                        </td>
+                        <td className={styles.muted}>{group.branch_label || 'All scoped branches'}</td>
+                        <td className={`${styles.tdRight} ${styles.mono}`}>{group.journal_count}</td>
+                        <td className={`${styles.tdRight} ${styles.mono}`}>{group.entry_count}</td>
+                        <td className={`${styles.tdRight} ${styles.mono}`}>
+                          {group.total_debits ? fmt(group.total_debits) : '—'}
+                        </td>
+                        <td className={`${styles.tdRight} ${styles.mono}`}>
+                          {group.total_credits ? fmt(group.total_credits) : '—'}
+                        </td>
+                        <td className={`${styles.tdRight} ${styles.mono}`}>{fmtDelta(group.net_effect)}</td>
+                        <td className={`${styles.tdRight} ${styles.mono}`}>{fmt(group.closing_balance)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             ) : (
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
